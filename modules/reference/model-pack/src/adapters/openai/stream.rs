@@ -1,0 +1,186 @@
+use serde_json::{Value, json};
+
+use super::response::from_openai_response;
+use crate::model_standard::ModelStreamEvent;
+
+/// Трансляция одного SSE event'а от OpenAI Responses API в наши
+/// `ModelStreamEvent`. Вариантов много; всё что не распознали —
+/// игнорируем (возвращаем пустой вектор), это безопасно потому что
+/// финальный `Response` приходит на `response.completed`.
+pub(super) fn translate_sse_event(event_type: &str, data: &str) -> Vec<ModelStreamEvent> {
+    // [DONE] sentinel у OpenAI не используется в Responses API, но на
+    // всякий случай — безопасный фаст-path.
+    if data == "[DONE]" {
+        return Vec::new();
+    }
+    let Ok(parsed) = serde_json::from_str::<Value>(data) else {
+        return Vec::new();
+    };
+    match event_type {
+        "response.output_text.delta" => {
+            if let Some(delta) = parsed.get("delta").and_then(Value::as_str) {
+                return vec![ModelStreamEvent::TextDelta {
+                    text: delta.to_owned(),
+                }];
+            }
+            Vec::new()
+        }
+        "response.reasoning_summary_text.delta" | "response.reasoning_summary.delta" => {
+            if let Some(delta) = parsed.get("delta").and_then(Value::as_str) {
+                return vec![ModelStreamEvent::ReasoningSummaryDelta {
+                    text: delta.to_owned(),
+                }];
+            }
+            Vec::new()
+        }
+        "response.function_call_arguments.delta" => {
+            let call_id = parsed
+                .get("item_id")
+                .and_then(Value::as_str)
+                .unwrap_or("")
+                .to_owned();
+            let args_delta = parsed
+                .get("delta")
+                .and_then(Value::as_str)
+                .unwrap_or("")
+                .to_owned();
+            if call_id.is_empty() || args_delta.is_empty() {
+                return Vec::new();
+            }
+            vec![ModelStreamEvent::ToolCallDelta {
+                call_id,
+                name: None,
+                args_delta,
+            }]
+        }
+        "response.custom_tool_call_input.delta" => {
+            let call_id = parsed
+                .get("item_id")
+                .or_else(|| parsed.get("call_id"))
+                .and_then(Value::as_str)
+                .unwrap_or("")
+                .to_owned();
+            let args_delta = parsed
+                .get("delta")
+                .and_then(Value::as_str)
+                .unwrap_or("")
+                .to_owned();
+            if call_id.is_empty() || args_delta.is_empty() {
+                return Vec::new();
+            }
+            vec![ModelStreamEvent::ToolCallDelta {
+                call_id,
+                name: None,
+                args_delta,
+            }]
+        }
+        "response.completed" => {
+            // В payload-е объект полного `response`, парсим через
+            // существующий `from_openai_response`. Если парсинг упал —
+            // эмитим Error, чтобы drain-loop не ждал вечно.
+            let response_value = parsed.get("response").cloned().unwrap_or(parsed);
+            match from_openai_response(response_value) {
+                Ok(response) => vec![ModelStreamEvent::Response { response }],
+                Err(error) => vec![ModelStreamEvent::Error {
+                    message: format!("failed to parse final response: {error}"),
+                }],
+            }
+        }
+        "response.incomplete" => {
+            let response = parsed.get("response").unwrap_or(&parsed);
+            let reason = response
+                .get("incomplete_details")
+                .and_then(|details| details.get("reason"))
+                .and_then(Value::as_str)
+                .unwrap_or("unknown");
+            vec![ModelStreamEvent::Error {
+                message: format!("Incomplete response returned, reason: {reason}"),
+            }]
+        }
+        "response.error" | "error" => {
+            let message = parsed
+                .get("error")
+                .and_then(|e| e.get("message"))
+                .and_then(Value::as_str)
+                .map(str::to_owned)
+                .or_else(|| {
+                    parsed
+                        .get("message")
+                        .and_then(Value::as_str)
+                        .map(str::to_owned)
+                })
+                .unwrap_or_else(|| "unknown openai error".to_owned());
+            vec![ModelStreamEvent::Error { message }]
+        }
+        "response.failed" => {
+            let response = parsed.get("response").unwrap_or(&parsed);
+            let message = response
+                .get("error")
+                .and_then(|error| error.get("message"))
+                .and_then(Value::as_str)
+                .or_else(|| response.get("error").and_then(Value::as_str))
+                .unwrap_or("openai response failed")
+                .to_owned();
+            vec![ModelStreamEvent::Error { message }]
+        }
+        _ => Vec::new(),
+    }
+}
+
+/// Строит финальный Response из события response.completed. Пустой или
+/// неполный `output` дополняется завершёнными output item-ами, затем уже
+/// полученными text deltas. Provider-specific repair остаётся в adapter-е,
+/// поэтому generic ModelService получает полный canonical Response.
+pub(super) fn finalize_completed_event(
+    data: &str,
+    fallback_items: &[Value],
+    streamed_text: &str,
+) -> Vec<ModelStreamEvent> {
+    let Ok(parsed) = serde_json::from_str::<Value>(data) else {
+        return Vec::new();
+    };
+    let mut response_value = parsed.get("response").cloned().unwrap_or(parsed);
+    let mut output = response_value
+        .get("output")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    if output.is_empty() {
+        output.extend_from_slice(fallback_items);
+    }
+    if !streamed_text.is_empty() && !has_emittable_text_or_tool_call(&output) {
+        output.push(json!({
+            "type": "message",
+            "role": "assistant",
+            "content": [{ "type": "output_text", "text": streamed_text }]
+        }));
+    }
+    response_value["output"] = Value::Array(output);
+    match from_openai_response(response_value) {
+        Ok(response) => vec![ModelStreamEvent::Response { response }],
+        Err(error) => vec![ModelStreamEvent::Error {
+            message: format!("failed to parse final response: {error}"),
+        }],
+    }
+}
+
+fn has_emittable_text_or_tool_call(items: &[Value]) -> bool {
+    items
+        .iter()
+        .any(|item| match item.get("type").and_then(Value::as_str) {
+            Some("function_call" | "custom_tool_call") => true,
+            Some("message") => item
+                .get("content")
+                .and_then(Value::as_array)
+                .into_iter()
+                .flatten()
+                .any(|content| {
+                    content.get("type").and_then(Value::as_str) == Some("output_text")
+                        && content
+                            .get("text")
+                            .and_then(Value::as_str)
+                            .is_some_and(|text| !text.trim().is_empty())
+                }),
+            _ => false,
+        })
+}
