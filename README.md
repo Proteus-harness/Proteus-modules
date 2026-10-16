@@ -1,0 +1,55 @@
+# Proteus Modules
+
+Реализации публичных контрактов [Proteus harness](https://github.com/Qweasd123tg/Proteus-harness).
+Исходники сгруппированы по основному слоту:
+
+| Каталог | Реализации |
+|---|---|
+| `model/` | Провайдеры моделей и авторизация |
+| `workflow/` | Алгоритмы выполнения задач |
+| `context/` | Построение контекста |
+| `policy/` | Разрешения и подтверждения |
+| `hook/` | Обработка истории, отбор инструментов, DCP |
+| `tool/` | Файлы, shell, git, patch, plan, skills, Rust LSP |
+| `context_provider/` | Поиск и память; некоторые также экспортируют tool |
+| `components/` | Исполняемые сборки с несколькими exports |
+| `research/` | Эксперименты вне основного Cargo workspace |
+
+Размещение не выбирает реализацию в профиле и не даёт ей дополнительных прав.
+Модуль с несколькими exports хранится один раз по основной ответственности;
+каждый export имеет права своего контракта. Текущее устройство reference
+executable описано в [reference.md](docs/reference.md).
+
+## Сборка И Проверка
+
+Нужны Rust, Git, Python 3; DCP дополнительно требует Node.js 22+ и npm.
+Контракты и test harness подключены по фиксированному Git commit в Cargo.toml;
+соседний checkout harness для обычной сборки не требуется.
+
+```bash
+cargo build --locked -p proteus-reference-module
+python3 scripts/test.py full
+python3 scripts/test.py -p rg-search --lib
+```
+
+Runner получает путь к harness из Cargo metadata: интеграционные тесты читают
+его fixtures и профили из той же ревизии, против которой собраны зависимости.
+Полный gate включает Node-тесты DCP. Никакие модели с платным API не вызываются.
+`research/tool-output-artifacts` собирается отдельным `--manifest-path`.
+
+Основной исполняемый файл — `target/debug/proteus-reference-module`.
+Он использует тот же process protocol, что и любой внешний модуль. Модули
+не зависят от приложения и его расширений. Конфигурация slots и примеры:
+[документация harness](https://github.com/Qweasd123tg/Proteus-harness/blob/main/docs/architecture/modules.md).
+
+## DCP И Происхождение
+
+[hook/dcp](hook/dcp/README.md) — отдельный Node executable с hook/tool exports;
+он не линкуется в Rust reference-module. Прочие реализации собираются как
+ordinary Rust libraries внутри этого executable, без отдельного native ABI.
+Код DCP и его upstream имеют лицензию AGPL-3.0-or-later; сведения и notices
+сохранены в его каталоге. Лицензии остальных заимствованных частей находятся
+рядом с исходниками.
+
+История implementations перенесена из `Proteus-agent` (ныне Proteus-harness),
+авторы и коммиты сохранены. После выделения исходники размещены по слотам.

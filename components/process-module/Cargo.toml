@@ -1,0 +1,43 @@
+[package]
+name = "proteus-reference-module"
+version = "0.0.0-dev"
+edition = "2024"
+publish = false
+
+[[bin]]
+name = "proteus-reference-module"
+path = "src/main.rs"
+
+[dependencies]
+anyhow = "1"
+proteus-contracts = { workspace = true }
+proteus-module-protocol = { workspace = true }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+codex-patch = { path = "../../tool/codex-patch" }
+codex-context-preparation = { path = "../../hook/codex-context-preparation", default-features = false }
+tool-selection-hook = { path = "../../hook/tool-selection-hook", default-features = false }
+coding-workflow = { path = "../../workflow/coding-workflow", default-features = false }
+context-pack = { path = "../../context/context-pack", default-features = false }
+direct-patch = { path = "../../tool/direct-patch", default-features = false }
+file-tools = { path = "../../tool/file-tools", default-features = false }
+git-tools = { path = "../../tool/git-tools", default-features = false }
+memory-pack = { path = "../../context_provider/memory-pack", default-features = false }
+plan-tool = { path = "../../tool/plan-tool", default-features = false }
+policy-pack = { path = "../../policy/policy-pack", default-features = false }
+rg-search = { path = "../../context_provider/rg-search", default-features = false }
+rust-lsp = { path = "../../tool/rust-lsp", default-features = false }
+shell-tool = { path = "../../tool/shell-tool", default-features = false }
+skill-pack = { path = "../../tool/skill-pack", default-features = false }
+sqlite-memory = { path = "../../context_provider/sqlite-memory", default-features = false }
+model-pack = { path = "../../model/model-pack" }
+
+hook-pack = { path = "../../hook/hook-pack" }
+
+[dev-dependencies]
+async-trait = "0.1"
+proteus-core = { workspace = true }
+proteus-process-host = { workspace = true }
+tempfile = "3"
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "sync", "time"] }

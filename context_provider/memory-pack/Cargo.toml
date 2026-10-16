@@ -1,0 +1,14 @@
+[package]
+name = "memory-pack"
+version = "0.0.0-dev"
+edition = "2024"
+publish = false
+
+[dependencies]
+proteus-contracts = { workspace = true }
+anyhow = "1"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+[dev-dependencies]
+tempfile = "3"

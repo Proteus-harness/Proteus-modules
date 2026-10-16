@@ -1,0 +1,15 @@
+[package]
+name = "shell-tool"
+version = "0.0.0-dev"
+edition = "2024"
+publish = false
+
+[dependencies]
+proteus-contracts = { workspace = true }
+anyhow = "1"
+libc = "0.2"
+portable-pty = "0.9"
+serde_json = "1"
+tempfile = "3"
+
+[dev-dependencies]

@@ -1,0 +1,33 @@
+[workspace]
+resolver = "2"
+exclude = ["research/tool-output-artifacts"]
+members = [
+    "model/model-pack",
+    "workflow/coding-workflow",
+    "context/context-pack",
+    "policy/policy-pack",
+    "hook/hook-pack",
+    "hook/codex-context-preparation",
+    "hook/tool-selection-hook",
+    "tool/file-tools",
+    "tool/git-tools",
+    "tool/shell-tool",
+    "tool/plan-tool",
+    "tool/direct-patch",
+    "tool/codex-patch",
+    "tool/rust-lsp",
+    "tool/skill-pack",
+    "context_provider/rg-search",
+    "context_provider/memory-pack",
+    "context_provider/sqlite-memory",
+    "components/process-module",
+]
+
+[workspace.dependencies]
+proteus-contracts = { git = "https://github.com/Qweasd123tg/Proteus-harness.git", rev = "d9fe8c75f502d8086aaa28cfd4e46bade00db2ad" }
+proteus-module-protocol = { git = "https://github.com/Qweasd123tg/Proteus-harness.git", rev = "d9fe8c75f502d8086aaa28cfd4e46bade00db2ad" }
+proteus-process-host = { git = "https://github.com/Qweasd123tg/Proteus-harness.git", rev = "d9fe8c75f502d8086aaa28cfd4e46bade00db2ad" }
+proteus-core = { git = "https://github.com/Qweasd123tg/Proteus-harness.git", rev = "d9fe8c75f502d8086aaa28cfd4e46bade00db2ad" }
+
+[profile.dev]
+debug = "line-tables-only"

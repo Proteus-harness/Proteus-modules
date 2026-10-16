@@ -1,0 +1,8 @@
+/target
+**/node_modules/
+**/dist/
+__pycache__/
+*.pyc
+.env
+secrets.json
+.cargo/config.local.toml
