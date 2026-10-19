@@ -79,6 +79,7 @@ pub fn run() -> Result<()> {
         protocol_version: PROCESS_COMPONENT_PROTOCOL_VERSION.to_owned(),
         component_id: binding.component_id.clone(),
         exports: exports.values().map(ModuleExport::manifest).collect(),
+        metadata: Default::default(),
     };
     let transport = Arc::new(ModuleTransport::new(initialize_wire_id.generation));
     transport.write(&rpc_success(
@@ -388,9 +389,23 @@ fn validate_initialize(binding: &ProcessComponentInitialize) -> Result<()> {
                 export.module_id
             );
         }
-        if export.host_features != authority.host_features {
+        let mut features = BTreeSet::new();
+        for feature in &export.host_features {
+            if feature.trim().is_empty() || !features.insert(feature.as_str()) {
+                bail!(
+                    "empty or duplicate host feature for {}/{}",
+                    export.slot,
+                    export.module_id
+                );
+            }
+        }
+        if authority
+            .required_features
+            .iter()
+            .any(|feature| !features.contains(feature))
+        {
             bail!(
-                "host feature mismatch for {}/{}",
+                "host omitted a required feature for {}/{}",
                 export.slot,
                 export.module_id
             );

@@ -24,10 +24,10 @@ members = [
 ]
 
 [workspace.dependencies]
-proteus-contracts = { git = "https://github.com/Qweasd123tg/Proteus-harness.git", rev = "d9fe8c75f502d8086aaa28cfd4e46bade00db2ad" }
-proteus-module-protocol = { git = "https://github.com/Qweasd123tg/Proteus-harness.git", rev = "d9fe8c75f502d8086aaa28cfd4e46bade00db2ad" }
-proteus-process-host = { git = "https://github.com/Qweasd123tg/Proteus-harness.git", rev = "d9fe8c75f502d8086aaa28cfd4e46bade00db2ad" }
-proteus-core = { git = "https://github.com/Qweasd123tg/Proteus-harness.git", rev = "d9fe8c75f502d8086aaa28cfd4e46bade00db2ad" }
+proteus-contracts = { git = "https://github.com/Qweasd123tg/Proteus-harness.git", rev = "03ad2ae9dcc907390c001c308e3304c7370b5f56" }
+proteus-module-protocol = { git = "https://github.com/Qweasd123tg/Proteus-harness.git", rev = "03ad2ae9dcc907390c001c308e3304c7370b5f56" }
+proteus-process-host = { git = "https://github.com/Qweasd123tg/Proteus-harness.git", rev = "03ad2ae9dcc907390c001c308e3304c7370b5f56" }
+proteus-core = { git = "https://github.com/Qweasd123tg/Proteus-harness.git", rev = "03ad2ae9dcc907390c001c308e3304c7370b5f56" }
 
 [profile.dev]
 debug = "line-tables-only"

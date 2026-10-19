@@ -13,3 +13,9 @@ Reference-модуль использует тот же публичный proce
 модуль, проходит тот же conformance gate и не получает исключений по имени или
 расположению исходников. Crates в этом каталоге — только implementation detail
 этого executable, а не особый способ загрузки модулей.
+
+Model exports подтверждают только предложенные `model.catalog.v1` и
+`model.quota.v1`. Неизвестные optional host features пропускаются; отсутствие
+feature не мешает обязательным describe/stream. Корневой handshake принимает
+описательные `_meta` с авторскими ключами `namespace/name`; данные не меняют
+slot authority.

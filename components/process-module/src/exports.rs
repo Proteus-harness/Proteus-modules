@@ -46,7 +46,20 @@ impl ModuleExport {
             module_id: self.binding.module_id.clone(),
             contract_version: self.binding.contract_version.clone(),
             composition: authority.composition,
-            module_features: Vec::new(),
+            module_features: self
+                .binding
+                .host_features
+                .iter()
+                .filter(|feature| {
+                    self.binding.slot == "model"
+                        && matches!(
+                            feature.as_str(),
+                            proteus_contracts::contracts::MODEL_CATALOG_FEATURE
+                                | proteus_contracts::contracts::MODEL_QUOTA_FEATURE
+                        )
+                })
+                .cloned()
+                .collect(),
             config_schema: crate::config_schema::describe(
                 &self.binding.slot,
                 &self.binding.module_id,

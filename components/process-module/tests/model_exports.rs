@@ -2,6 +2,44 @@ use proteus_core::core::{AppConfig, ModuleCatalog};
 use serde_json::json;
 
 #[test]
+fn optional_model_features_are_intersected_with_the_offer_without_rejecting_future_features() {
+    use std::io::{BufRead, BufReader, Write};
+    use std::process::{Command, Stdio};
+    for (offered, expected) in [
+        (json!([]), json!([])),
+        (
+            json!(["model.catalog.v1", "org.example/future.v1"]),
+            json!(["model.catalog.v1"]),
+        ),
+        (json!(["model.quota.v1"]), json!(["model.quota.v1"])),
+    ] {
+        let mut child = Command::new(env!("CARGO_BIN_EXE_proteus-reference-module"))
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .spawn()
+            .unwrap();
+        let mut input = child.stdin.take().unwrap();
+        writeln!(input, "{}", json!({"jsonrpc":"2.0","id":"h:1:0","method":"initialize", "params":{
+            "protocol_version":"v3","component_id":"probe", "_meta":{"org.example/build":{"future":true}},
+            "exports":[{"slot":"model","module_id":"fake","contract_version":"v12","composition":"select_one",
+                "module_config":{"implementation":"fake"},"host_features":offered}]
+        }})).unwrap();
+        let mut line = String::new();
+        BufReader::new(child.stdout.take().unwrap())
+            .read_line(&mut line)
+            .unwrap();
+        drop(input);
+        child.kill().ok();
+        child.wait().unwrap();
+        let response: serde_json::Value = serde_json::from_str(&line).unwrap();
+        assert_eq!(
+            response["result"]["exports"][0]["module_features"], expected,
+            "{response}"
+        );
+    }
+}
+
+#[test]
 fn one_reference_worker_supports_independent_model_exports_using_the_same_implementation() {
     let cwd = tempfile::tempdir().unwrap();
     let config: AppConfig = serde_json::from_value(json!({

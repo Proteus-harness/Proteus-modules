@@ -7,9 +7,9 @@ import { configSchema } from "./schema.mjs";
 
 globalThis.console = new Console({ stdout: process.stderr, stderr: process.stderr });
 const send = (frame) => process.stdout.write(`${JSON.stringify({ jsonrpc: "2.0", ...frame })}\n`);
-const object = (value, keys, label) => {
+const object = (value, keys, label, optional = []) => {
   if (!value || typeof value !== "object" || Array.isArray(value) ||
-    Object.keys(value).some((key) => !keys.includes(key)) || keys.some((key) => !(key in value))) throw new Error(`invalid ${label}`);
+    Object.keys(value).some((key) => !keys.includes(key) && !optional.includes(key)) || keys.some((key) => !(key in value))) throw new Error(`invalid ${label}`);
   return value;
 };
 const active = new Map();
@@ -27,8 +27,10 @@ const wireId = (id, direction, zero = false) => {
 };
 
 async function initialize(frame) {
-  object(frame.params, ["protocol_version", "component_id", "exports"], "initialize");
+  object(frame.params, ["protocol_version", "component_id", "exports"], "initialize", ["_meta"]);
   const input = frame.params;
+  if ("_meta" in input && (!input._meta || typeof input._meta !== "object" || Array.isArray(input._meta) ||
+    Object.keys(input._meta).some((key) => !/^[^/\s]+\/[^\s]+$/.test(key)))) throw new Error("invalid _meta");
   generation = /^h:(0|[1-9]\d*):0$/.exec(frame.id)?.[1];
   if (generation === undefined || input.protocol_version !== "v3" || typeof input.component_id !== "string" || !input.component_id.trim()) throw new Error("invalid initialization");
   wireId(frame.id, "h", true);
@@ -41,7 +43,8 @@ async function initialize(frame) {
     const expected = binding.slot === "hook" ? "hook.dcp" : binding.slot === "tool" ? "dcp.tools" : null;
     const version = "v6";
     if (!expected || binding.module_id !== expected || binding.contract_version !== version || binding.composition !== "ordered_many" ||
-      !Array.isArray(binding.host_features) || binding.host_features.length || exports.has(binding.slot)) throw new Error("unsupported DCP export");
+      !Array.isArray(binding.host_features) || binding.host_features.some((feature) => typeof feature !== "string" || !feature.trim()) ||
+      new Set(binding.host_features).size !== binding.host_features.length || exports.has(binding.slot)) throw new Error("unsupported DCP export");
     const settings = configuration(binding.module_config);
     const normalized = JSON.stringify(settings);
     if (canonical !== undefined && canonical !== normalized) throw new Error("DCP hook/tool settings must be identical");

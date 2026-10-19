@@ -24,11 +24,11 @@ test("wire v3 multiplexes current hook/tool exports and cancellation tolerates a
   });
   const write = (frame) => child.stdin.write(JSON.stringify({ jsonrpc: "2.0", ...frame }) + "\n");
   const send = (id, method, params) => new Promise((resolve) => { waiters.set(id, resolve); write({ id, method, params }); });
-  const binding = (slot, module_id) => ({ slot, module_id, contract_version: "v6", composition: "ordered_many", module_config: { state_dir: directory }, host_features: [] });
+  const binding = (slot, module_id) => ({ slot, module_id, contract_version: "v6", composition: "ordered_many", module_config: { state_dir: directory }, host_features: ["org.example/future.v1"] });
   const envelope = (id, slot, module_id, params) => ({ export: { slot, module_id }, lineage: { root_invocation_id: id, parent_invocation_id: null, depth: 0 }, params });
   const list = (id) => send(id, "list", envelope(id, "tool", "dcp.tools", null));
   t.after(async () => { child.stdin.end(); await closed; lines.close(); await rm(directory, { recursive: true }); });
-  const initialized = await send("h:7:0", "initialize", { protocol_version: "v3", component_id: "dcp", exports: [binding("hook", "hook.dcp"), binding("tool", "dcp.tools")] });
+  const initialized = await send("h:7:0", "initialize", { protocol_version: "v3", component_id: "dcp", _meta: { "org.example/build": { future: true } }, exports: [binding("hook", "hook.dcp"), binding("tool", "dcp.tools")] });
   assert.equal(initialized.result.exports.length, 2, errors);
    const tools = (await list("h:7:1")).result.result;
    assert.equal(tools[0].spec.name, "compress");
