@@ -12,7 +12,7 @@ npm run build
 PROTEUS_TEST_HARNESS_ROOT=/path/to/Proteus-harness npm test
 ```
 
-Пример профиля: [proteus.dcp.example.toml](https://github.com/Qweasd123tg/Proteus-harness/blob/main/examples/configs/proteus.dcp.example.toml).
+Пример профиля: [proteus.dcp.example.toml](https://github.com/Proteus-harness/Proteus-harness/blob/main/examples/configs/proteus.dcp.example.toml).
 Замените путь к `dist/worker.js` абсолютным путём вашей сборки. При переносе
 модуля сохраняйте `dist`, `package.json`, lock и `node_modules` либо выполните
 `npm ci` на целевой машине: tokenizer загружает собственный WASM из зависимостей.

@@ -13,5 +13,5 @@
 
 Process contract для такой обработки результатов пока не определён.
 Интеграция требует отдельного решения по
-[slot governance](https://github.com/Qweasd123tg/Proteus-harness/blob/main/docs/architecture/slot-governance.md).
+[slot governance](https://github.com/Proteus-harness/Proteus-harness/blob/main/docs/architecture/slot-governance.md).
 Наличие прототипа не назначает добавление нового slot следующей задачей.

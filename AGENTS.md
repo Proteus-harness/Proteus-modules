@@ -2,7 +2,7 @@
 
 Этот репозиторий содержит реализации, а не Core и не UI. Читайте README.md,
 Cargo.toml и документацию соответствующего модуля. Публичные contracts и
-process adapters принадлежат [Proteus-harness](https://github.com/Qweasd123tg/Proteus-harness).
+process adapters принадлежат [Proteus-harness](https://github.com/Proteus-harness/Proteus-harness).
 Документация — на русском языке.
 
 ## Границы
