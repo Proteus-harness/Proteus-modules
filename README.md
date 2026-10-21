@@ -1,6 +1,6 @@
 # Proteus Modules
 
-Реализации публичных контрактов [Proteus harness](https://github.com/Proteus-harness/Proteus-harness).
+Реализации публичных контрактов [Proteus-core](https://github.com/Proteus-harness/Proteus-core).
 Исходники сгруппированы по основному слоту:
 
 | Каталог | Реализации |
@@ -40,7 +40,7 @@ Runner получает путь к harness из Cargo metadata: интегра�
 Основной исполняемый файл — `target/debug/proteus-reference-module`.
 Он использует тот же process protocol, что и любой внешний модуль. Модули
 не зависят от приложения и его расширений. Конфигурация slots и примеры:
-[документация harness](https://github.com/Proteus-harness/Proteus-harness/blob/main/docs/architecture/modules.md).
+[документация harness](https://github.com/Proteus-harness/Proteus-core/blob/main/docs/architecture/modules.md).
 
 ## DCP И Происхождение
 
@@ -51,5 +51,5 @@ ordinary Rust libraries внутри этого executable, без отдель�
 сохранены в его каталоге. Лицензии остальных заимствованных частей находятся
 рядом с исходниками.
 
-История implementations перенесена из `Proteus-agent` (ныне Proteus-harness),
+История implementations перенесена из `Proteus-agent` (ныне Proteus-core),
 авторы и коммиты сохранены. После выделения исходники размещены по слотам.

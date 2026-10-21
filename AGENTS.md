@@ -2,7 +2,7 @@
 
 Этот репозиторий содержит реализации, а не Core и не UI. Читайте README.md,
 Cargo.toml и документацию соответствующего модуля. Публичные contracts и
-process adapters принадлежат [Proteus-harness](https://github.com/Proteus-harness/Proteus-harness).
+process adapters принадлежат [Proteus-core](https://github.com/Proteus-harness/Proteus-core).
 Документация — на русском языке.
 
 ## Границы
@@ -34,5 +34,5 @@ Runner задаёт PROTEUS_TEST_HARNESS_ROOT из закреплённого Ca
 
 При изменении публичной границы обновите harness и его module_swap gate.
 После завершённой правки приложения/backend пересоберите portable в соседнем
-Proteus-desktop (`../../GPUI/Client` при общей раскладке):
+Proteus-desktop (`../Proteus-desktop` при общей раскладке):
 `python3 scripts/portable.py --fast`. Сохраняйте target и инкрементальные caches.
