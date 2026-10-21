@@ -16,7 +16,11 @@ PROTEUS_TEST_HARNESS_ROOT=/path/to/Proteus-core npm test
 Замените путь к `dist/worker.js` абсолютным путём вашей сборки. При переносе
 модуля сохраняйте `dist`, `package.json`, lock и `node_modules` либо выполните
 `npm ci` на целевой машине: tokenizer загружает собственный WASM из зависимостей.
-Автоустановки в `install.sh` и portable-приложении нет.
+`install.sh` Core не устанавливает DCP автоматически. Portable-приложение
+Proteus-desktop собирает DCP в отдельной staging-папке и включает его исходники,
+`dist` и production dependencies в `share/modules/dcp`; launcher
+`bin/proteus-dcp` использует этот набор после переноса. На целевой машине нужен
+Node.js 22+.
 
 Добавьте `hook.dcp` в явную цепочку `modules.hooks` и `compress`, `dcp` в
 `tools.enabled`, сохранив остальные нужные инструменты. Настройки
