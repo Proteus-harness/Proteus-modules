@@ -3,7 +3,6 @@ mod dispatch;
 mod exports;
 mod hosts;
 mod registry;
-mod transport;
 
 fn main() {
     if let Err(error) = run() {
@@ -14,6 +13,10 @@ fn main() {
 
 fn run() -> anyhow::Result<()> {
     let args = std::env::args_os().collect::<Vec<_>>();
+    if args.len() == 2 && args[1] == "--version" {
+        println!("proteus-reference-module {}", env!("CARGO_PKG_VERSION"));
+        return Ok(());
+    }
     if args.len() == 1 {
         return dispatch::run();
     }

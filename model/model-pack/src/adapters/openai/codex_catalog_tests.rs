@@ -41,7 +41,15 @@ async fn catalog_fetches_all_models_and_per_model_efforts_with_oauth_and_shared_
     assert_eq!(requests.len(), 1);
     assert_eq!(
         requests[0].target,
-        "GET /models?client_version=0.0.0 HTTP/1.1"
+        concat!(
+            "GET /models?client_version=",
+            env!("CARGO_PKG_VERSION_MAJOR"),
+            ".",
+            env!("CARGO_PKG_VERSION_MINOR"),
+            ".",
+            env!("CARGO_PKG_VERSION_PATCH"),
+            " HTTP/1.1"
+        )
     );
     assert_eq!(
         requests[0].headers["authorization"],

@@ -306,3 +306,13 @@ fn decode<T: serde::de::DeserializeOwned>(value: Value) -> Result<T> {
 fn encode<T: serde::Serialize>(value: T) -> Result<Value> {
     serde_json::to_value(value).map_err(Into::into)
 }
+
+impl proteus_module_sdk::Export for ModuleExport {
+    fn manifest(&self) -> ProcessComponentExportManifest {
+        ModuleExport::manifest(self)
+    }
+
+    fn invoke(&self, method: &str, params: Value, host: &HostBridge) -> Result<Value> {
+        self.dispatch(method, params, host)
+    }
+}

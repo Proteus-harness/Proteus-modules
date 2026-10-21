@@ -123,7 +123,15 @@ async fn subscription_catalog_crosses_real_worker_and_updates_app_selection() {
             assert!(request.starts_with(if quota_request {
                 "get /wham/usage http/1.1"
             } else {
-                "get /models?client_version=0.0.0 http/1.1"
+                concat!(
+                    "get /models?client_version=",
+                    env!("CARGO_PKG_VERSION_MAJOR"),
+                    ".",
+                    env!("CARGO_PKG_VERSION_MINOR"),
+                    ".",
+                    env!("CARGO_PKG_VERSION_PATCH"),
+                    " http/1.1"
+                )
             }));
             assert!(request.contains("authorization: bearer catalog-access"));
             assert!(request.contains("chatgpt-account-id: catalog-account"));

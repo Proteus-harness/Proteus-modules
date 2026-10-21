@@ -1,6 +1,6 @@
 [package]
 name = "proteus-reference-module"
-version = "0.0.0-dev"
+version = "0.1.0-alpha.2"
 edition = "2024"
 publish = false
 
@@ -12,6 +12,7 @@ path = "src/main.rs"
 anyhow = "1"
 proteus-contracts = { workspace = true }
 proteus-module-protocol = { workspace = true }
+proteus-module-sdk = { workspace = true }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 
