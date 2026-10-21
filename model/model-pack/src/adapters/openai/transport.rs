@@ -52,6 +52,13 @@ impl OpenAiResponsesClient {
                 .context("openai_codex quota_url must be a string")?,
             None => super::codex_quota::DEFAULT_QUOTA_URL,
         })?;
+        if let Some(version) = config.get("client_version") {
+            super::codex_catalog::validate_client_version(
+                version
+                    .as_str()
+                    .context("openai_codex client_version must be a string")?,
+            )?;
+        }
         let mut client = Self::from_provider_config(config)?;
         let mut http = reqwest::Client::builder().redirect(reqwest::redirect::Policy::none());
         if client.secret_config.get("http1_only") == Some(&json!(true)) {

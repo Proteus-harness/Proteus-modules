@@ -59,6 +59,17 @@ pub fn config_schema(config: &Value) -> ModuleConfigSchema {
         );
         fields.push(
             Field::new(
+                "client_version",
+                "Версия клиента для каталога",
+                "Версия Codex, с которой запрашивается список моделей. Новые модели \
+                 видны только клиентам новее определённой версии.",
+                Kind::text(),
+            )
+            .with_default(super::codex_auth::CODEX_CLIENT_VERSION)
+            .advanced(),
+        );
+        fields.push(
+            Field::new(
                 "oauth_issuer",
                 "Сервер авторизации",
                 "Без явного значения используется стандартный сервер авторизации.",

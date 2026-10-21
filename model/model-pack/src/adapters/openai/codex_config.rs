@@ -23,6 +23,7 @@ pub(super) fn validate(config: &Value) -> Result<()> {
                 "oauth_issuer",
                 "base_url",
                 "quota_url",
+                "client_version",
                 "stream",
                 "stream_error_fallback",
                 "http1_only",

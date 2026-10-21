@@ -55,8 +55,12 @@ Client id соответствует OAuth-приложению Codex, как в
 - API credentials, non-stream error fallback и `prompt_cache_retention` в
   subscription config отклоняются. При 429 нет повторов, переключения на API
   или другую модель. Общие Responses error/canonical semantics сохраняются.
-- Каталог запрашивается отдельным `GET /models?client_version=<semver Proteus>`
-  с теми же OAuth headers и однократным refresh после 401. Все remote entries
+- Каталог запрашивается отдельным `GET /models?client_version=<версия Codex>`
+  с теми же OAuth headers и однократным refresh после 401. Сервер показывает
+  модель только клиентам не ниже её минимальной версии, поэтому отправляется
+  версия upstream Codex (константа `CODEX_CLIENT_VERSION`), а не версия
+  Proteus; ключ `client_version` в config провайдера переопределяет её без
+  пересборки. Все remote entries
   сохраняются, `visibility` становится `hidden`, порядок задаёт `priority`.
   Из catalog не импортируются base instructions, tools или capabilities.
   В отличие от полного Codex ModelsManager здесь только memory cache на

@@ -1,4 +1,5 @@
 use super::*;
+use crate::adapters::codex_auth::CODEX_CLIENT_VERSION;
 use crate::adapters::test_http;
 
 fn remote_model(id: &str, priority: i64, hidden: bool, efforts: &[&str]) -> Value {
@@ -41,15 +42,7 @@ async fn catalog_fetches_all_models_and_per_model_efforts_with_oauth_and_shared_
     assert_eq!(requests.len(), 1);
     assert_eq!(
         requests[0].target,
-        concat!(
-            "GET /models?client_version=",
-            env!("CARGO_PKG_VERSION_MAJOR"),
-            ".",
-            env!("CARGO_PKG_VERSION_MINOR"),
-            ".",
-            env!("CARGO_PKG_VERSION_PATCH"),
-            " HTTP/1.1"
-        )
+        format!("GET /models?client_version={CODEX_CLIENT_VERSION} HTTP/1.1")
     );
     assert_eq!(
         requests[0].headers["authorization"],
@@ -122,4 +115,34 @@ async fn catalog_rejects_invalid_metadata_and_api_adapter_does_not_read_oauth() 
             .contains("default effort")
     );
     server.await.unwrap();
+}
+
+#[tokio::test]
+async fn catalog_client_version_comes_from_config() {
+    let root = tempfile::tempdir().unwrap();
+    let auth_file = super::codex_tests::auth_file(root.path());
+    let (url, server) = test_http::server(vec![(
+        200,
+        "application/json",
+        json!({"models": []}).to_string(),
+    )])
+    .await;
+    let client = OpenAiResponsesClient::from_codex_config(
+        json!({"auth_file": auth_file, "base_url": url, "client_version": "0.170.2"}),
+    )
+    .unwrap();
+    client.catalog().await.unwrap().unwrap();
+    let requests = server.await.unwrap();
+    assert_eq!(
+        requests[0].target,
+        "GET /models?client_version=0.170.2 HTTP/1.1"
+    );
+    for bad in [json!("1.2"), json!("0.1.0-alpha"), json!(170)] {
+        assert!(
+            OpenAiResponsesClient::from_codex_config(
+                json!({"auth_file": auth_file, "client_version": bad})
+            )
+            .is_err()
+        );
+    }
 }

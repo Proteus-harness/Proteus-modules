@@ -5,11 +5,26 @@ use std::time::{Duration, Instant};
 use anyhow::{Context, Result, bail};
 use proteus_contracts::contracts::{ModelCatalog, ModelCatalogEntry};
 use serde::Deserialize;
+use serde_json::Value;
 
 use super::OpenAiResponsesClient;
+use crate::adapters::codex_auth::CODEX_CLIENT_VERSION;
 
 pub(super) type CatalogCache = tokio::sync::Mutex<Option<(Instant, ModelCatalog)>>;
 const CACHE_TTL: Duration = Duration::from_secs(300);
+
+/// Accepts a plain `MAJOR.MINOR.PATCH` version, as upstream sends it.
+pub(super) fn validate_client_version(version: &str) -> Result<()> {
+    let parts: Vec<&str> = version.split('.').collect();
+    if parts.len() != 3
+        || parts
+            .iter()
+            .any(|part| part.is_empty() || !part.bytes().all(|byte| byte.is_ascii_digit()))
+    {
+        bail!("openai_codex client_version must look like 0.163.0");
+    }
+    Ok(())
+}
 
 #[derive(Deserialize)]
 struct ModelsResponse {
@@ -33,6 +48,13 @@ struct RemoteEffort {
 }
 
 impl OpenAiResponsesClient {
+    fn catalog_client_version(&self) -> &str {
+        self.secret_config
+            .get("client_version")
+            .and_then(Value::as_str)
+            .unwrap_or(CODEX_CLIENT_VERSION)
+    }
+
     pub(super) async fn codex_catalog(&self) -> Result<Option<ModelCatalog>> {
         let Some(auth) = &self.codex_auth else {
             return Ok(None);
@@ -45,8 +67,7 @@ impl OpenAiResponsesClient {
         }
         let catalog = tokio::time::timeout(Duration::from_secs(30), async {
             let mut access = auth.access(None).await?;
-            // Like upstream, send a semantic client version to the catalog endpoint.
-            let version = env!("CARGO_PKG_VERSION").split('-').next().unwrap();
+            let version = self.catalog_client_version();
             for attempt in 0..2 {
                 let response = self
                     .http
