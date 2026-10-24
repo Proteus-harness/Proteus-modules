@@ -58,5 +58,12 @@ ordinary Rust libraries внутри этого executable, без отдель�
 сохранены в его каталоге. Лицензии остальных заимствованных частей находятся
 рядом с исходниками.
 
+[hook/claude-command-hooks](hook/claude-command-hooks/README.md) — отдельный
+Node entry для явно выбранного `strict_subset` Claude command hooks
+(PreToolUse/Stop). Он использует закреплённый публичный hook-process SDK Core,
+сохраняет scripts и command strings, предоставляет инспекцию без исполнения
+и не входит в Rust reference executable. Это ограниченный путь переноса,
+не полная совместимость с чужим harness; его Node gate описан отдельно.
+
 История implementations перенесена из `Proteus-agent` (ныне Proteus-core),
 авторы и коммиты сохранены. После выделения исходники размещены по слотам.

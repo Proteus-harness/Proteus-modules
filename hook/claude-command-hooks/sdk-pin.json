@@ -1,0 +1,12 @@
+{
+  "repository": "https://github.com/Proteus-harness/Proteus-core",
+  "revision": "bee0e409e746e2df9db32748d4f8ea02201bd4af",
+  "directory": "examples/modules/hook-process",
+  "sha256": {
+    "worker.mjs": "f7dd6ad7cc49823f97974f3e2c5ffbd9b3228927e5940224f49ced5639ba2dd4",
+    "hooks.mjs": "1a0347377f8b05b3a7a00804453150ede421eb5b45b8485a093d8d64067b2a0e",
+    "ports.mjs": "cba7d129152f3a15ce3e1d96cdc6645407e4262d1b12b872fcc8081d69a69bff",
+    "command.mjs": "b1448479b537280bd2f9bae060bbe7c2328e144945cd140f0a31a2857639eee9",
+    "validation.mjs": "14dd7139012f84140edff1804c2d5325d0b0c0168471c7a3d9e221b141e4149c"
+  }
+}
