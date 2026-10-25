@@ -25,7 +25,8 @@ executable описано в [reference.md](docs/reference.md).
 
 ## Сборка И Проверка
 
-Нужны Rust, Git, Python 3; DCP дополнительно требует Node.js 22+ и npm.
+Нужны Rust, Git, Python 3; Node gates DCP и Claude command hooks дополнительно
+требуют Node.js 22.18+ и npm.
 Контракты и test harness подключены по фиксированному Git commit в Cargo.toml;
 соседний checkout harness для обычной сборки не требуется.
 
@@ -37,7 +38,11 @@ python3 scripts/test.py -p rg-search --lib
 
 Runner получает путь к harness из Cargo metadata: интеграционные тесты читают
 его fixtures и профили из той же ревизии, против которой собраны зависимости.
-Полный gate включает Node-тесты DCP. Никакие модели с платным API не вызываются.
+Полный gate и scope `-p proteus-reference-module` включают Node-тесты DCP и
+Claude command hooks. Для последних runner задаёт `PROTEUS_HOOK_SDK_ROOT`
+из той же закреплённой зависимости Core, поэтому SDK integration tests
+не пропускаются из-за отсутствия переменной окружения. Никакие модели
+с платным API не вызываются.
 `research/tool-output-artifacts` собирается отдельным `--manifest-path`.
 
 GitHub Actions запускает этот gate только вручную. Обычные push и PR не
@@ -63,7 +68,8 @@ Node entry для явно выбранного `strict_subset` Claude command h
 (PreToolUse/Stop). Он использует закреплённый публичный hook-process SDK Core,
 сохраняет scripts и command strings, предоставляет инспекцию без исполнения
 и не входит в Rust reference executable. Это ограниченный путь переноса,
-не полная совместимость с чужим harness; его Node gate описан отдельно.
+не полная совместимость с чужим harness. Node-тесты входят в общий gate;
+отдельный запуск описан в README адаптера.
 
 История implementations перенесена из `Proteus-agent` (ныне Proteus-core),
 авторы и коммиты сохранены. После выделения исходники размещены по слотам.

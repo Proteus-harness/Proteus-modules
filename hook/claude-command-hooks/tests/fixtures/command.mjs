@@ -27,6 +27,9 @@ switch (mode) {
     } }));
     break;
   case "stop": console.log(JSON.stringify({ decision: "block", reason: JSON.stringify(input) })); break;
+  case "stop-once":
+    console.log(JSON.stringify(input.stop_hook_active ? {} : { decision: "block", reason: "Check the candidate once more" }));
+    break;
   case "raw": console.log(value); break;
   case "marker": await writeFile(value, "executed"); break;
   case "sleep": await new Promise((resolve) => setTimeout(resolve, Number(value))); break;

@@ -112,11 +112,12 @@ Arg mapping — только взаимно-однозначное переим�
 ## Подключить После Проверки И Явного Выбора
 
 SDK — **явная внешняя зависимость**, не встроенный новый process runtime.
-Нужен checkout Proteus-core на
+Проверенная исходная ревизия Proteus-core —
 [`bee0e409e746e2df9db32748d4f8ea02201bd4af`](https://github.com/Proteus-harness/Proteus-core/tree/bee0e409e746e2df9db32748d4f8ea02201bd4af/examples/modules/hook-process),
-том же commit, который закреплён в корневом Cargo.toml Modules. Public entry API
-описан в его README. `sdk-pin.json` фиксирует SHA-256 пяти runtime-файлов;
-инициализация проверяет их до импорта helper API. Это проверка совместимости,
+из которой взяты runtime-файлы SDK. Public entry API описан в его README.
+`sdk-pin.json` фиксирует SHA-256 пяти runtime-файлов; инициализация проверяет их
+до импорта helper API. Подходит любой checkout с теми же файлами: совпадение
+Git HEAD с исходной ревизией не требуется. Это проверка совместимости,
 не замена доверию к исполняемому коду/профилю. SDK не скачивается автоматически.
 
 Ниже фрагмент для профиля без других hooks. Если `[modules]` уже существует,
@@ -166,6 +167,34 @@ regexp input <=256 и вычисление <=25 ms. Export/parent deadline мо�
 SDK завершает POSIX process group, включая потомков, и дожидается cleanup.
 Это lifecycle cleanup, не защита от враждебного script, покинувшего группу.
 
+## Переносимая Поставка
+
+Portable Proteus включает SDK, адаптер, исходники, документацию, pin/provenance
+и MIT-лицензии. Для запуска нужен системный Node.js **22.18+**. Пути ниже
+указаны относительно корня переносимой папки:
+
+| Назначение | Путь |
+|---|---|
+| Общий worker любых JS hook entries | `bin/proteus-hook-worker` |
+| Инспектор без исполнения hooks | `bin/proteus-claude-hooks-inspect` |
+| `entry` адаптера | `share/modules/claude-command-hooks/src/entry.mjs` |
+| `sdk_root` | `share/modules/hook-process` |
+
+В профиле укажите абсолютный путь `command` к `bin/proteus-hook-worker`
+(без `args` с путём worker), абсолютные `entry`, `sdk_root` и собственный
+`config_path`. Относительные пути component разрешаются из рабочего проекта,
+а не корня portable; после перемещения папки обновите абсолютные пути профиля.
+Launchers сами находят поставляемые файлы после перемещения, независимо от cwd.
+Инспектор принимает путь к явно подготовленному JSON настроек:
+
+```bash
+/absolute/Proteus/bin/proteus-claude-hooks-inspect /work/adapter-settings.json
+```
+
+Поставка не создаёт конфигурацию сторонних hooks, не включает export в профиль
+и не разрешает исполнение автоматически. `allow_execution=true` и выбранный
+trusted profile по-прежнему задаются владельцем явно.
+
 ## Реальный Перенос И Происхождение
 
 В [examples/validate-bash.hooks.json](examples/validate-bash.hooks.json) находится
@@ -188,8 +217,23 @@ PROTEUS_HOOK_SDK_ROOT=/opt/Proteus-core/examples/modules/hook-process \
   node --test hook/claude-command-hooks/tests/*.test.mjs
 ```
 
-Без SDK остаются parser/matcher проверки; integration tests явно пропускаются.
-Для полного Node gate задайте pinned SDK. Tests используют только собственные
+Без SDK при отдельном Node-запуске остаются parser/matcher проверки;
+integration tests явно пропускаются. Для полного отдельного Node gate задайте
+SDK с runtime-файлами, соответствующими `sdk-pin.json`.
+
+Из корня Modules `python3 scripts/test.py full` и
+`python3 scripts/test.py -p proteus-reference-module` запускают эти Node-тесты
+вместе с DCP и Rust gate. Runner получает SDK из закреплённого Cargo dependency
+Core и задаёт `PROTEUS_HOOK_SDK_ROOT`, поэтому integration tests выполняются
+без ручной настройки пути. Отсутствующий или несовместимый SDK завершает gate
+ошибкой.
+
+Tests используют только собственные
 безопасные fixtures; проверяют JSON/mapping, veto/allow, Stop, ошибки,
 timeout/cancel, отсутствие команд при инспекции/инициализации и реальный
-worker protocol. Это не Rust `scripts/test.py full` и не portable build.
+worker protocol. Node-тесты сами по себе не проверяют Rust host или portable build.
+`components/process-module/tests/claude_command_hooks.rs` дополнительно запускает
+этот worker через настоящий Rust host: veto и ошибки не дают файлового эффекта,
+`updatedInput` проходит обычное подтверждение, а Stop продолжает тот же turn
+и завершает его с сохранённым `TurnSettled::Success`. Данные и команды синтетические;
+настоящие сторонние hooks этими проверками не исполняются.
