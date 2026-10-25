@@ -95,6 +95,7 @@ fn reference_model_requires_explicit_implementation_in_opaque_module_config() {
 async fn subscription_catalog_crosses_real_worker_and_updates_app_selection() {
     use proteus_core::app_server::AgentAppServer;
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    const CLIENT_VERSION: &str = "0.170.2";
     let cwd = tempfile::tempdir().unwrap();
     let auth_file = cwd.path().join("chatgpt.json");
     std::fs::write(
@@ -120,19 +121,12 @@ async fn subscription_catalog_crosses_real_worker_and_updates_app_selection() {
                 }
             }
             let request = String::from_utf8(bytes).unwrap().to_lowercase();
-            assert!(request.starts_with(if quota_request {
-                "get /wham/usage http/1.1"
+            let expected = if quota_request {
+                "get /wham/usage http/1.1".to_owned()
             } else {
-                concat!(
-                    "get /models?client_version=",
-                    env!("CARGO_PKG_VERSION_MAJOR"),
-                    ".",
-                    env!("CARGO_PKG_VERSION_MINOR"),
-                    ".",
-                    env!("CARGO_PKG_VERSION_PATCH"),
-                    " http/1.1"
-                )
-            }));
+                format!("get /models?client_version={CLIENT_VERSION} http/1.1")
+            };
+            assert!(request.starts_with(&expected));
             assert!(request.contains("authorization: bearer catalog-access"));
             assert!(request.contains("chatgpt-account-id: catalog-account"));
             let body = if quota_request {
@@ -151,7 +145,7 @@ async fn subscription_catalog_crosses_real_worker_and_updates_app_selection() {
     let config: AppConfig = serde_json::from_value(json!({
         "active_provider": "subscription", "providers": {"subscription": {"provider": "arbitrary-export", "model": "discovered-a"}},
         "components": {"models": {"command": env!("CARGO_BIN_EXE_proteus-reference-module"), "exports": {"model": {"arbitrary-export": {}}}}},
-        "module_config": {"model": {"arbitrary-export": {"implementation": "openai_codex", "auth_file": auth_file, "base_url": base_url, "quota_url": format!("{base_url}/wham/usage")}}}
+        "module_config": {"model": {"arbitrary-export": {"implementation": "openai_codex", "client_version": CLIENT_VERSION, "auth_file": auth_file, "base_url": base_url, "quota_url": format!("{base_url}/wham/usage")}}}
     })).unwrap();
     let server = AgentAppServer::launch(config, cwd.path().to_path_buf(), None)
         .await
