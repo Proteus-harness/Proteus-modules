@@ -2,9 +2,11 @@ mod config_schema;
 mod dispatch;
 mod exports;
 mod hosts;
+mod process_memory;
 mod registry;
 
 fn main() {
+    process_memory::initialize();
     if let Err(error) = run() {
         eprintln!("proteus-reference-module: {error:#}");
         std::process::exit(1);

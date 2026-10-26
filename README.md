@@ -50,6 +50,12 @@ GitHub Actions запускает этот gate только вручную. О�
 Proteus-desktop и использует закреплённую ревизию Modules.
 
 Основной исполняемый файл — `target/debug/proteus-reference-module`.
+
+На Linux/glibc reference executable до запуска workers ограничивает malloc
+двумя аренами, чтобы уменьшить удержание свободной памяти при множестве
+компонентов. Явные `MALLOC_ARENA_MAX` и `GLIBC_TUNABLES` с
+`glibc.malloc.arena_max` имеют приоритет; process-host environment policy
+при этом не меняется.
 Он использует тот же process protocol, что и любой внешний модуль. Модули
 не зависят от приложения и его расширений. Конфигурация slots и примеры:
 [документация harness](https://github.com/Proteus-harness/Proteus-core/blob/main/docs/architecture/modules.md).
