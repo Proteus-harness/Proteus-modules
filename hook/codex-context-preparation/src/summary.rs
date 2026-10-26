@@ -71,15 +71,24 @@ fn model_summary_request(
     // Preserve the pending model request's model, base instructions, reasoning,
     // cache, limits, sampling, metadata and client metadata. Local Codex builds
     // a default Prompt then replaces only its input and base instructions.
-    let mut request = input
+    let template = input
         .request
-        .clone()
+        .as_ref()
         .ok_or_else(|| compaction_error("Codex summary requires a model request template"))?;
-    request.messages = summary_history.to_vec();
+    // The summary replaces messages and excludes tools. Copy only the controls
+    // it actually inherits, rather than cloning and then discarding both large
+    // payloads from the pending request.
+    let mut request = CanonicalModelRequest::new(template.model.clone(), summary_history.to_vec())
+        .with_instructions(template.instructions.clone())
+        .with_sampling(template.sampling.clone())
+        .with_reasoning(template.reasoning.clone())
+        .with_limits(template.limits.clone())
+        .with_cache(template.cache.clone())
+        .with_client_metadata(template.client_metadata.clone())
+        .with_metadata(template.metadata.clone());
     request
         .messages
         .push(CanonicalMessage::text(MessageRole::User, COMPACTION_PROMPT));
-    request.tools.clear();
     request.tool_choice = ToolChoice::None;
     request.response_format = ResponseFormat::Text;
     request.limits.max_output_tokens = None;

@@ -29,7 +29,7 @@ impl HookModule for CodexPreparationHook {
                 mut input, output, ..
             } => {
                 // Every participant transforms the validated preceding candidate.
-                input.messages = output.messages.clone();
+                input.messages = output.messages;
                 if output.changed {
                     input.token_estimate = output.token_estimate;
                 }
