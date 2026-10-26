@@ -24,19 +24,13 @@ fn run_rg(query: SearchQuery) -> Result<Vec<ContextChunk>, String> {
     }
 
     let command = build_rg_command(&query);
-    let lines = match run_rg_limited(command, query, RG_TIMEOUT) {
-        Ok(lines) => lines,
+    match run_rg_limited(command, query, RG_TIMEOUT) {
+        Ok(chunks) => Ok(chunks),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-            return Err("ripgrep executable 'rg' was not found in PATH".to_owned());
+            Err("ripgrep executable 'rg' was not found in PATH".to_owned())
         }
-        Err(error) => return Err(format!("failed to run ripgrep: {error}")),
-    };
-
-    Ok(lines
-        .iter()
-        .map(String::as_str)
-        .filter_map(parse_rg_match)
-        .collect())
+        Err(error) => Err(format!("failed to run ripgrep: {error}")),
+    }
 }
 
 fn build_rg_command(query: &SearchQuery) -> Command {
@@ -140,7 +134,7 @@ fn run_rg_limited(
     mut command: Command,
     query: SearchQuery,
     timeout: Duration,
-) -> std::io::Result<Vec<String>> {
+) -> std::io::Result<Vec<ContextChunk>> {
     let max_results = query.max_results;
     if max_results == 0 {
         return Ok(Vec::new());
@@ -171,57 +165,33 @@ fn run_rg_limited(
         Ok::<_, std::io::Error>(captured)
     });
     std::thread::spawn(move || {
-        let reader = BufReader::new(stdout);
-        let mut lines = Vec::new();
-        for line in reader.lines() {
-            let line = match line {
-                Ok(line) => line,
-                Err(error) => {
-                    let _ = tx.send(Err(error));
-                    return;
-                }
-            };
-            if parse_rg_match(&line).is_some_and(|chunk| {
-                chunk
-                    .path
-                    .as_ref()
-                    .and_then(|path| path.to_str())
-                    .is_some_and(|path| query.matches_path(path))
-            }) {
-                lines.push(line);
-                if lines.len() >= max_results {
-                    let _ = tx.send(Ok((lines, true)));
-                    return;
-                }
-            }
-        }
-        let _ = tx.send(Ok((lines, false)));
+        let _ = tx.send(read_rg_matches(BufReader::new(stdout), &query));
     });
 
     let started = Instant::now();
-    let mut pending_lines = None;
+    let mut pending_chunks = None;
     let result = loop {
         match rx.try_recv() {
-            Ok(Ok((lines, true))) => match child.try_wait()? {
+            Ok(Ok((chunks, true))) => match child.try_wait()? {
                 Some(status) if !status.success() && status.code() != Some(1) => {
                     break Err(std::io::Error::other(format!("rg exited with {status}")));
                 }
-                Some(_) => break Ok(lines),
+                Some(_) => break Ok(chunks),
                 None => {
                     let _ = child.kill();
                     let _ = child.wait();
-                    break Ok(lines);
+                    break Ok(chunks);
                 }
             },
-            Ok(Ok((lines, false))) => {
-                pending_lines = Some(lines);
+            Ok(Ok((chunks, false))) => {
+                pending_chunks = Some(chunks);
             }
             Ok(Err(error)) => {
                 let _ = child.kill();
                 let _ = child.wait();
                 break Err(error);
             }
-            Err(TryRecvError::Disconnected) if pending_lines.is_none() => {
+            Err(TryRecvError::Disconnected) if pending_chunks.is_none() => {
                 let _ = child.kill();
                 let _ = child.wait();
                 break Err(std::io::Error::other("rg stdout reader stopped"));
@@ -230,10 +200,10 @@ fn run_rg_limited(
         }
 
         if let Some(status) = child.try_wait()?
-            && let Some(lines) = pending_lines.take()
+            && let Some(chunks) = pending_chunks.take()
         {
             if status.success() || status.code() == Some(1) {
-                break Ok(lines);
+                break Ok(chunks);
             }
             break Err(std::io::Error::other(format!("rg exited with {status}")));
         }
@@ -262,6 +232,34 @@ fn run_rg_limited(
     })
 }
 
+fn read_rg_matches(
+    reader: impl BufRead,
+    query: &SearchQuery,
+) -> std::io::Result<(Vec<ContextChunk>, bool)> {
+    let mut chunks = Vec::new();
+    if query.max_results == 0 {
+        return Ok((chunks, false));
+    }
+    for line in reader.lines() {
+        let line = line?;
+        let Some(chunk) = parse_rg_match(&line) else {
+            continue;
+        };
+        if chunk
+            .path
+            .as_ref()
+            .and_then(|path| path.to_str())
+            .is_some_and(|path| query.matches_path(path))
+        {
+            chunks.push(chunk);
+            if chunks.len() >= query.max_results {
+                return Ok((chunks, true));
+            }
+        }
+    }
+    Ok((chunks, false))
+}
+
 fn parse_rg_match(line: &str) -> Option<ContextChunk> {
     let event: Value = serde_json::from_str(line).ok()?;
     if event.get("type")?.as_str()? != "match" {
@@ -275,7 +273,7 @@ fn parse_rg_match(line: &str) -> Option<ContextChunk> {
         .get("text")?
         .as_str()?
         .trim_end_matches(['\n', '\r']);
-    let content = if line.chars().count() > 2000 {
+    let content = if line.chars().nth(2000).is_some() {
         "[Omitted long matching line]".to_owned()
     } else {
         line.to_owned()

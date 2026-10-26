@@ -329,3 +329,126 @@ fn temp_workspace() -> std::path::PathBuf {
     fs::create_dir_all(&dir).expect("create temp workspace");
     dir
 }
+
+fn synthetic_match(path: &str, content: &str, line: u64) -> String {
+    json!({
+        "type": "match",
+        "data": {"path": {"text": path}, "lines": {"text": content}, "line_number": line}
+    })
+    .to_string()
+}
+
+#[test]
+fn reader_filters_before_limit_preserves_order_and_unicode_boundary() {
+    let query =
+        SearchQuery::new("needle", PathBuf::from("."), 3).with_path_filters(["src/"], [".rs"]);
+    let exact = format!("{}\r\n", "界".repeat(2000));
+    let longer = format!("{}\n", "界".repeat(2001));
+    let mut input = [
+        "malformed JSON".to_owned(),
+        json!({"type": "begin"}).to_string(),
+        synthetic_match("docs/a.rs", "rejected prefix\n", 1),
+        synthetic_match("src/a.txt", "rejected suffix\n", 2),
+        synthetic_match("./src/first.rs", &exact, 3),
+        synthetic_match("src/second.rs", &longer, 4),
+        synthetic_match("src/third.rs", "needle final\n", 5),
+    ]
+    .join("\n")
+    .into_bytes();
+    // A read after the accepted limit would fail UTF-8 decoding.
+    input.extend_from_slice(&[b'\n', 0xff, b'\n']);
+    let (chunks, limited) = read_rg_matches(std::io::Cursor::new(input), &query).unwrap();
+    assert!(limited);
+    assert_eq!(chunks.len(), 3);
+    assert_eq!(chunks[0].path.as_deref(), Some(Path::new("src/first.rs")));
+    assert_eq!(chunks[0].content, "界".repeat(2000));
+    assert_eq!(chunks[0].metadata["line"], 3);
+    assert_eq!(chunks[1].content, "[Omitted long matching line]");
+    assert_eq!(chunks[1].metadata["line"], 4);
+    assert_eq!(chunks[2].content, "needle final");
+    assert_eq!(chunks[2].metadata["line"], 5);
+
+    let (chunks, limited) = read_rg_matches(
+        std::io::Cursor::new(synthetic_match("src/only.rs", "unterminated line", 1)),
+        &query,
+    )
+    .unwrap();
+    assert!(!limited);
+    assert_eq!(chunks[0].content, "unterminated line");
+    assert!(read_rg_matches(std::io::Cursor::new([0xff, b'\n']), &query).is_err());
+}
+
+/// Previous reader/output phases kept accepted JSON and decoded it a second time.
+fn double_parse_reference(input: &[u8], query: &SearchQuery) -> Vec<ContextChunk> {
+    let mut accepted = Vec::new();
+    for line in std::io::Cursor::new(input).lines() {
+        let line = line.unwrap();
+        if parse_rg_match(&line).is_some_and(|chunk| {
+            chunk
+                .path
+                .as_ref()
+                .and_then(|path| path.to_str())
+                .is_some_and(|path| query.matches_path(path))
+        }) {
+            accepted.push(line);
+            if accepted.len() >= query.max_results {
+                break;
+            }
+        }
+    }
+    accepted
+        .iter()
+        .filter_map(|line| parse_rg_match(line))
+        .collect()
+}
+
+#[test]
+#[ignore = "synthetic JSON parse phase benchmark; run explicitly with --ignored --nocapture"]
+fn benchmark_single_parse_matches_double_parse_reference() {
+    use std::hint::black_box;
+    let query =
+        SearchQuery::new("needle", PathBuf::from("."), 4096).with_path_filters(["src/"], [".rs"]);
+    let short = format!("needle{}\r\n", "界".repeat(1994));
+    let long = format!("needle{}\n", "界🙂".repeat(4096));
+    let mut input = Vec::new();
+    for index in 0..8192 {
+        let path = if index % 4 == 0 {
+            "docs/foreign.rs"
+        } else {
+            "./src/matched.rs"
+        };
+        let line = synthetic_match(path, if index % 2 == 0 { &long } else { &short }, index);
+        input.extend_from_slice(line.as_bytes());
+        input.push(b'\n');
+    }
+    let rounds = 3;
+    let started = Instant::now();
+    let reference = (0..rounds)
+        .map(|_| black_box(double_parse_reference(black_box(&input), &query)))
+        .last()
+        .unwrap();
+    let reference_time = started.elapsed();
+    let started = Instant::now();
+    let single = (0..rounds)
+        .map(|_| {
+            black_box(
+                read_rg_matches(std::io::Cursor::new(black_box(&input)), &query)
+                    .unwrap()
+                    .0,
+            )
+        })
+        .last()
+        .unwrap();
+    let single_time = started.elapsed();
+    assert_eq!(
+        serde_json::to_value(&reference).unwrap(),
+        serde_json::to_value(&single).unwrap()
+    );
+    eprintln!(
+        "rg JSON phases: bytes={} matches={} rounds={rounds} double_parse_ms={} single_parse_ms={}",
+        input.len(),
+        single.len(),
+        reference_time.as_millis(),
+        single_time.as_millis()
+    );
+}
