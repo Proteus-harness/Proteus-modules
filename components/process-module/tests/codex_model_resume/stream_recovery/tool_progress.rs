@@ -137,7 +137,7 @@ async fn check(ending: Ending) {
     assert!(format!("{error:#}").contains(ending.message()), "{error:#}");
     server.await.unwrap();
     let effect = root.path().join("workspace").join(EFFECT_FILE);
-    let completed_history = runtime.history().await;
+    let completed_history = runtime.history().await.unwrap();
     assert_eq!(
         std::fs::read_to_string(&effect).unwrap_or_else(|error| panic!(
             "missing completed tool effect: {error}; history: {completed_history:?}"
@@ -150,7 +150,7 @@ async fn check(ending: Ending) {
         .unwrap()
         .load_projection()
         .unwrap();
-    assert_eq!(projection.history, runtime.history().await);
+    assert_eq!(projection.history, runtime.history().await.unwrap());
     let failures = projection
         .records
         .iter()

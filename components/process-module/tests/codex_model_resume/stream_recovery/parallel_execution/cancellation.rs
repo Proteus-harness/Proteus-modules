@@ -70,7 +70,7 @@ async fn cancel_preserves_completed_tool_and_never_dispatches_queued_calls() {
         .unwrap()
         .load_projection()
         .unwrap();
-    assert_eq!(projection.history, runtime.history().await);
+    assert_eq!(projection.history, runtime.history().await.unwrap());
     assert_eq!(
         projection
             .records

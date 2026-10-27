@@ -139,7 +139,7 @@ async fn check(ending: Ending) {
         .unwrap()
         .load_projection()
         .unwrap();
-    assert_eq!(projection.history, runtime.history().await);
+    assert_eq!(projection.history, runtime.history().await.unwrap());
     if ending == Ending::Idle {
         let failures = projection
             .records

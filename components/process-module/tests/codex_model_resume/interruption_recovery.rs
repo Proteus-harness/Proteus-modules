@@ -238,7 +238,7 @@ async fn run_initial(root: &Path, config: AppConfig, config_path: &Path, mode: I
         .load_projection()
         .unwrap();
     assert_eq!(
-        runtime.history().await,
+        runtime.history().await.unwrap(),
         before.history,
         "warm and cold history disagree"
     );

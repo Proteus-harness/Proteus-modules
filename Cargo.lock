@@ -1914,7 +1914,7 @@ dependencies = [
 [[package]]
 name = "proteus-contracts"
 version = "0.1.0-alpha.2"
-source = "git+https://github.com/Proteus-harness/Proteus-core.git?rev=f3d01053dff6113c31afbd885ef1ab1a8d931d53#f3d01053dff6113c31afbd885ef1ab1a8d931d53"
+source = "git+https://github.com/Proteus-harness/Proteus-core.git?rev=1f533a13f20a93bf164f7c8a169553b0b219bb51#1f533a13f20a93bf164f7c8a169553b0b219bb51"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -1932,7 +1932,7 @@ dependencies = [
 [[package]]
 name = "proteus-core"
 version = "0.1.0-alpha.3"
-source = "git+https://github.com/Proteus-harness/Proteus-core.git?rev=f3d01053dff6113c31afbd885ef1ab1a8d931d53#f3d01053dff6113c31afbd885ef1ab1a8d931d53"
+source = "git+https://github.com/Proteus-harness/Proteus-core.git?rev=1f533a13f20a93bf164f7c8a169553b0b219bb51#1f533a13f20a93bf164f7c8a169553b0b219bb51"
 dependencies = [
  "agent-client-protocol",
  "anyhow",
@@ -1963,7 +1963,7 @@ dependencies = [
 [[package]]
 name = "proteus-module-protocol"
 version = "0.1.0-alpha.2"
-source = "git+https://github.com/Proteus-harness/Proteus-core.git?rev=f3d01053dff6113c31afbd885ef1ab1a8d931d53#f3d01053dff6113c31afbd885ef1ab1a8d931d53"
+source = "git+https://github.com/Proteus-harness/Proteus-core.git?rev=1f533a13f20a93bf164f7c8a169553b0b219bb51#1f533a13f20a93bf164f7c8a169553b0b219bb51"
 dependencies = [
  "anyhow",
  "clap",
@@ -1977,7 +1977,7 @@ dependencies = [
 [[package]]
 name = "proteus-module-sdk"
 version = "0.1.0-alpha.2"
-source = "git+https://github.com/Proteus-harness/Proteus-core.git?rev=f3d01053dff6113c31afbd885ef1ab1a8d931d53#f3d01053dff6113c31afbd885ef1ab1a8d931d53"
+source = "git+https://github.com/Proteus-harness/Proteus-core.git?rev=1f533a13f20a93bf164f7c8a169553b0b219bb51#1f533a13f20a93bf164f7c8a169553b0b219bb51"
 dependencies = [
  "anyhow",
  "proteus-contracts",
@@ -1989,7 +1989,7 @@ dependencies = [
 [[package]]
 name = "proteus-process-host"
 version = "0.1.0-alpha.2"
-source = "git+https://github.com/Proteus-harness/Proteus-core.git?rev=f3d01053dff6113c31afbd885ef1ab1a8d931d53#f3d01053dff6113c31afbd885ef1ab1a8d931d53"
+source = "git+https://github.com/Proteus-harness/Proteus-core.git?rev=1f533a13f20a93bf164f7c8a169553b0b219bb51#1f533a13f20a93bf164f7c8a169553b0b219bb51"
 dependencies = [
  "anyhow",
  "libc",

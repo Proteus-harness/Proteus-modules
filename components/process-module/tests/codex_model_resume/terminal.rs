@@ -211,7 +211,7 @@ async fn check(mode: Mode) {
         .unwrap()
         .load_projection()
         .unwrap();
-    assert_eq!(projection.history, runtime.history().await);
+    assert_eq!(projection.history, runtime.history().await.unwrap());
     let results = history_results(&projection.history);
     let expected_count = if matches!(mode, Mode::Pipes) { 3 } else { 2 };
     assert_eq!(results.len(), expected_count);

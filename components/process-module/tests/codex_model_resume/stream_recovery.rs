@@ -283,7 +283,7 @@ async fn accepted_sse_disconnect_retries_same_turn_without_repeating_tool_effect
         .unwrap()
         .load_projection()
         .unwrap();
-    assert_eq!(projection.history, runtime.history().await);
+    assert_eq!(projection.history, runtime.history().await.unwrap());
     assert_eq!(
         projection
             .records

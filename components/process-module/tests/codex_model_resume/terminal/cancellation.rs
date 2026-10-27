@@ -101,7 +101,7 @@ async fn cancel_long_poll_and_check_cold_history(tty: bool) {
         .unwrap()
         .load_projection()
         .unwrap();
-    assert_eq!(projection.history, runtime.history().await);
+    assert_eq!(projection.history, runtime.history().await.unwrap());
     assert!(
         history_results(&projection.history)
             .iter()

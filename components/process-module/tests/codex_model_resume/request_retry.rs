@@ -293,7 +293,7 @@ async fn check(mode: Mode) {
         .unwrap()
         .load_projection()
         .unwrap();
-    assert_eq!(projection.history, runtime.history().await);
+    assert_eq!(projection.history, runtime.history().await.unwrap());
     assert!(projection.unresolved_tool_calls.is_empty());
     if !matches!(mode, Mode::Cancel) {
         assert!(projection.interrupted_model_exchanges.is_empty());

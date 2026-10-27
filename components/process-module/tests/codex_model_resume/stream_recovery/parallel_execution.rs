@@ -285,7 +285,7 @@ async fn check(disconnect: bool, deny: bool, terminal_batch: bool) {
         .unwrap()
         .load_projection()
         .unwrap();
-    assert_eq!(projection.history, runtime.history().await);
+    assert_eq!(projection.history, runtime.history().await.unwrap());
     let result_order = projection
         .records
         .iter()

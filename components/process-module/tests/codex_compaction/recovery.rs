@@ -142,7 +142,7 @@ async fn check(failure: Failure, workflow: &str) {
         .unwrap()
         .load_projection()
         .unwrap();
-    assert_eq!(projection.history, runtime.history().await);
+    assert_eq!(projection.history, runtime.history().await.unwrap());
     assert!(projection.history.iter().any(|message| message.parts.iter().any(|part|
         matches!(&part.payload, ContentPart::ToolResult { result } if result.call_id == "call_read" && result.ok))));
     assert!(!projection.records.iter().any(|record| matches!(&record.entry,
