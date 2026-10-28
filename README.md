@@ -64,6 +64,10 @@ Proteus-desktop и использует закреплённую ревизию 
 внешние target/cache каталоги. Общий `proteus-reference-module` остался только
 для conformance/differential tests и не входит в обычную поставку.
 
+Авторизация ChatGPT выполняется через поставляемый пакет моделей:
+`proteus-model-pack-module auth openai_codex login`.
+Состояние локального входа: `proteus-model-pack-module auth openai_codex status`.
+
 На Linux/glibc каждый worker до запуска потоков ограничивает malloc
 двумя аренами, чтобы уменьшить удержание свободной памяти при множестве
 компонентов. Явные `MALLOC_ARENA_MAX` и `GLIBC_TUNABLES` с

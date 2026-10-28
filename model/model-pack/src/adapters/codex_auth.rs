@@ -18,7 +18,7 @@ pub(super) const CODEX_BASE_URL: &str = "https://chatgpt.com/backend-api/codex";
 pub(super) const CODEX_CLIENT_VERSION: &str = "0.163.0";
 const ISSUER: &str = "https://auth.openai.com";
 const CLIENT_ID: &str = "app_EMoamEEZ73f0CkXaXp7hrann";
-const LOGIN_HINT: &str = "proteus-reference-module auth openai_codex login";
+const LOGIN_HINT: &str = "proteus-model-pack-module auth openai_codex login";
 
 #[derive(Clone, Debug)]
 pub(super) struct CodexAuth {

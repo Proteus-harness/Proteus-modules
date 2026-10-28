@@ -12,8 +12,8 @@ use super::{
 
 #[derive(Parser)]
 #[command(
-    name = "proteus-reference-module auth openai_codex",
-    bin_name = "proteus-reference-module auth openai_codex",
+    name = "proteus-model-pack-module auth openai_codex",
+    bin_name = "proteus-model-pack-module auth openai_codex",
     about = "ChatGPT subscription authentication for Proteus"
 )]
 struct Cli {
