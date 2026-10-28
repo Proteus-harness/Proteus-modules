@@ -24,29 +24,30 @@ use crate::{
 mod tools;
 use tools::ToolCatalog;
 
-pub(crate) struct ModuleExport {
+pub struct ModuleExport {
     binding: ProcessComponentExportInitialize,
     modules: CollectedModules,
     tool_catalog: ToolCatalog,
+    config_schema: Option<proteus_contracts::domain::ModuleConfigSchema>,
 }
 
 impl ModuleExport {
-    pub(crate) fn load(binding: ProcessComponentExportInitialize) -> Result<Self> {
-        let modules = CollectedModules::load(
-            &binding.slot,
-            &binding.module_id,
-            binding.module_config.clone(),
-        )?;
+    pub fn new(
+        binding: ProcessComponentExportInitialize,
+        modules: CollectedModules,
+        config_schema: Option<proteus_contracts::domain::ModuleConfigSchema>,
+    ) -> Self {
         let tool_catalog = if binding.slot == "tool" {
             ToolCatalog::new(&modules.tools)
         } else {
             ToolCatalog::default()
         };
-        Ok(Self {
+        Self {
             binding,
             modules,
             tool_catalog,
-        })
+            config_schema,
+        }
     }
 
     pub(crate) fn manifest(&self) -> ProcessComponentExportManifest {
@@ -72,11 +73,7 @@ impl ModuleExport {
                 })
                 .cloned()
                 .collect(),
-            config_schema: crate::config_schema::describe(
-                &self.binding.slot,
-                &self.binding.module_id,
-                &self.binding.module_config,
-            ),
+            config_schema: self.config_schema.clone(),
         }
     }
 

@@ -31,6 +31,11 @@ def main(args):
     harness = Path(package["manifest_path"]).parents[2]
     env["PROTEUS_TEST_HARNESS_ROOT"] = str(harness)
     if full or "proteus-reference-module" in args:
+        subprocess.run([sys.executable, str(ROOT / "package.py"), "--profile", "dev",
+                        "--print-artifacts"], cwd=ROOT, env=env, stdout=subprocess.DEVNULL, check=True)
+        env["PROTEUS_TEST_MODULE_ARTIFACTS"] = str(ROOT / "dist/.artifacts/dev.json")
+        subprocess.run([sys.executable, "-m", "unittest", "discover", "-s", "tests",
+                        "-p", "test_*.py"], cwd=ROOT, env=env, check=True)
         env["PROTEUS_HOOK_SDK_ROOT"] = str(harness / "examples/modules/hook-process")
         hook_tests = sorted((ROOT / "hook/claude-command-hooks/tests").glob("*.test.mjs"))
         subprocess.run(["node", "--test", *map(str, hook_tests)], cwd=ROOT, env=env, check=True)

@@ -2,6 +2,25 @@
 resolver = "2"
 exclude = ["research/tool-output-artifacts"]
 members = [
+    "components/module-runtime",
+    "components/model-pack-module",
+    "components/coding-workflow-module",
+    "components/context-pack-module",
+    "components/policy-pack-module",
+    "components/hook-pack-module",
+    "components/codex-context-preparation-module",
+    "components/tool-selection-hook-module",
+    "components/file-tools-module",
+    "components/git-tools-module",
+    "components/shell-tool-module",
+    "components/plan-tool-module",
+    "components/direct-patch-module",
+    "components/codex-patch-module",
+    "components/rust-lsp-module",
+    "components/skill-pack-module",
+    "components/rg-search-module",
+    "components/memory-pack-module",
+    "components/sqlite-memory-module",
     "model/model-pack",
     "workflow/coding-workflow",
     "context/context-pack",
@@ -21,6 +40,27 @@ members = [
     "context_provider/memory-pack",
     "context_provider/sqlite-memory",
     "components/process-module",
+]
+
+default-members = [
+    "components/model-pack-module",
+    "components/coding-workflow-module",
+    "components/context-pack-module",
+    "components/policy-pack-module",
+    "components/hook-pack-module",
+    "components/codex-context-preparation-module",
+    "components/tool-selection-hook-module",
+    "components/file-tools-module",
+    "components/git-tools-module",
+    "components/shell-tool-module",
+    "components/plan-tool-module",
+    "components/direct-patch-module",
+    "components/codex-patch-module",
+    "components/rust-lsp-module",
+    "components/skill-pack-module",
+    "components/rg-search-module",
+    "components/memory-pack-module",
+    "components/sqlite-memory-module",
 ]
 
 [workspace.dependencies]

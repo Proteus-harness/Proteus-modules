@@ -1,0 +1,20 @@
+[package]
+name = "proteus-rust-lsp-module"
+version = "0.1.0-alpha.3"
+edition = "2024"
+license = "MIT"
+publish = false
+
+[package.metadata.proteus]
+id = "rust-lsp"
+implementation = "tool/rust-lsp"
+
+[[bin]]
+name = "proteus-rust-lsp-module"
+path = "src/main.rs"
+test = false
+bench = false
+
+[dependencies]
+proteus-module-runtime = { path = "../module-runtime" }
+rust-lsp = { path = "../../tool/rust-lsp", default-features = false }

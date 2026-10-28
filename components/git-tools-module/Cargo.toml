@@ -1,0 +1,20 @@
+[package]
+name = "proteus-git-tools-module"
+version = "0.1.0-alpha.3"
+edition = "2024"
+license = "MIT"
+publish = false
+
+[package.metadata.proteus]
+id = "git-tools"
+implementation = "tool/git-tools"
+
+[[bin]]
+name = "proteus-git-tools-module"
+path = "src/main.rs"
+test = false
+bench = false
+
+[dependencies]
+proteus-module-runtime = { path = "../module-runtime" }
+git-tools = { path = "../../tool/git-tools", default-features = false }

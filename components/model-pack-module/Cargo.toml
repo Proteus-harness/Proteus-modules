@@ -1,0 +1,20 @@
+[package]
+name = "proteus-model-pack-module"
+version = "0.1.0-alpha.3"
+edition = "2024"
+license = "MIT"
+publish = false
+
+[package.metadata.proteus]
+id = "model-pack"
+implementation = "model/model-pack"
+
+[[bin]]
+name = "proteus-model-pack-module"
+path = "src/main.rs"
+test = false
+bench = false
+
+[dependencies]
+proteus-module-runtime = { path = "../module-runtime" }
+model-pack = { path = "../../model/model-pack", default-features = false }

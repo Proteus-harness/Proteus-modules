@@ -1,0 +1,11 @@
+{
+  "policy": [
+    "allow_all",
+    "ask_write",
+    "codex_policy",
+    "opencode_policy"
+  ],
+  "tool": [
+    "policy_tools"
+  ]
+}

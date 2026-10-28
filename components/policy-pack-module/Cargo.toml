@@ -1,0 +1,20 @@
+[package]
+name = "proteus-policy-pack-module"
+version = "0.1.0-alpha.3"
+edition = "2024"
+license = "MIT"
+publish = false
+
+[package.metadata.proteus]
+id = "policy-pack"
+implementation = "policy/policy-pack"
+
+[[bin]]
+name = "proteus-policy-pack-module"
+path = "src/main.rs"
+test = false
+bench = false
+
+[dependencies]
+proteus-module-runtime = { path = "../module-runtime" }
+policy-pack = { path = "../../policy/policy-pack", default-features = false }

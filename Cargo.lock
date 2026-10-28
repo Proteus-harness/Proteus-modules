@@ -1912,6 +1912,38 @@ dependencies = [
 ]
 
 [[package]]
+name = "proteus-codex-context-preparation-module"
+version = "0.1.0-alpha.3"
+dependencies = [
+ "codex-context-preparation",
+ "proteus-module-runtime",
+]
+
+[[package]]
+name = "proteus-codex-patch-module"
+version = "0.1.0-alpha.3"
+dependencies = [
+ "codex-patch",
+ "proteus-module-runtime",
+]
+
+[[package]]
+name = "proteus-coding-workflow-module"
+version = "0.1.0-alpha.3"
+dependencies = [
+ "coding-workflow",
+ "proteus-module-runtime",
+]
+
+[[package]]
+name = "proteus-context-pack-module"
+version = "0.1.0-alpha.3"
+dependencies = [
+ "context-pack",
+ "proteus-module-runtime",
+]
+
+[[package]]
 name = "proteus-contracts"
 version = "0.1.0-alpha.2"
 source = "git+https://github.com/Proteus-harness/Proteus-core.git?rev=1f533a13f20a93bf164f7c8a169553b0b219bb51#1f533a13f20a93bf164f7c8a169553b0b219bb51"
@@ -1961,6 +1993,54 @@ dependencies = [
 ]
 
 [[package]]
+name = "proteus-direct-patch-module"
+version = "0.1.0-alpha.3"
+dependencies = [
+ "direct-patch",
+ "proteus-module-runtime",
+]
+
+[[package]]
+name = "proteus-file-tools-module"
+version = "0.1.0-alpha.3"
+dependencies = [
+ "file-tools",
+ "proteus-module-runtime",
+]
+
+[[package]]
+name = "proteus-git-tools-module"
+version = "0.1.0-alpha.3"
+dependencies = [
+ "git-tools",
+ "proteus-module-runtime",
+]
+
+[[package]]
+name = "proteus-hook-pack-module"
+version = "0.1.0-alpha.3"
+dependencies = [
+ "hook-pack",
+ "proteus-module-runtime",
+]
+
+[[package]]
+name = "proteus-memory-pack-module"
+version = "0.1.0-alpha.3"
+dependencies = [
+ "memory-pack",
+ "proteus-module-runtime",
+]
+
+[[package]]
+name = "proteus-model-pack-module"
+version = "0.1.0-alpha.3"
+dependencies = [
+ "model-pack",
+ "proteus-module-runtime",
+]
+
+[[package]]
 name = "proteus-module-protocol"
 version = "0.1.0-alpha.2"
 source = "git+https://github.com/Proteus-harness/Proteus-core.git?rev=1f533a13f20a93bf164f7c8a169553b0b219bb51#1f533a13f20a93bf164f7c8a169553b0b219bb51"
@@ -1975,6 +2055,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "proteus-module-runtime"
+version = "0.1.0-alpha.3"
+dependencies = [
+ "anyhow",
+ "proteus-contracts",
+ "proteus-module-protocol",
+ "proteus-module-sdk",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "proteus-module-sdk"
 version = "0.1.0-alpha.2"
 source = "git+https://github.com/Proteus-harness/Proteus-core.git?rev=1f533a13f20a93bf164f7c8a169553b0b219bb51#1f533a13f20a93bf164f7c8a169553b0b219bb51"
@@ -1984,6 +2076,22 @@ dependencies = [
  "proteus-module-protocol",
  "serde",
  "serde_json",
+]
+
+[[package]]
+name = "proteus-plan-tool-module"
+version = "0.1.0-alpha.3"
+dependencies = [
+ "plan-tool",
+ "proteus-module-runtime",
+]
+
+[[package]]
+name = "proteus-policy-pack-module"
+version = "0.1.0-alpha.3"
+dependencies = [
+ "policy-pack",
+ "proteus-module-runtime",
 ]
 
 [[package]]
@@ -2017,6 +2125,7 @@ dependencies = [
  "proteus-contracts",
  "proteus-core",
  "proteus-module-protocol",
+ "proteus-module-runtime",
  "proteus-module-sdk",
  "proteus-process-host",
  "rg-search",
@@ -2028,6 +2137,54 @@ dependencies = [
  "sqlite-memory",
  "tempfile",
  "tokio",
+ "tool-selection-hook",
+]
+
+[[package]]
+name = "proteus-rg-search-module"
+version = "0.1.0-alpha.3"
+dependencies = [
+ "proteus-module-runtime",
+ "rg-search",
+]
+
+[[package]]
+name = "proteus-rust-lsp-module"
+version = "0.1.0-alpha.3"
+dependencies = [
+ "proteus-module-runtime",
+ "rust-lsp",
+]
+
+[[package]]
+name = "proteus-shell-tool-module"
+version = "0.1.0-alpha.3"
+dependencies = [
+ "proteus-module-runtime",
+ "shell-tool",
+]
+
+[[package]]
+name = "proteus-skill-pack-module"
+version = "0.1.0-alpha.3"
+dependencies = [
+ "proteus-module-runtime",
+ "skill-pack",
+]
+
+[[package]]
+name = "proteus-sqlite-memory-module"
+version = "0.1.0-alpha.3"
+dependencies = [
+ "proteus-module-runtime",
+ "sqlite-memory",
+]
+
+[[package]]
+name = "proteus-tool-selection-hook-module"
+version = "0.1.0-alpha.3"
+dependencies = [
+ "proteus-module-runtime",
  "tool-selection-hook",
 ]
 

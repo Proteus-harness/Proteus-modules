@@ -20,8 +20,8 @@ alpha-выпусками не обещана; потребитель закре�
 
 Размещение не выбирает реализацию в профиле и не даёт ей дополнительных прав.
 Модуль с несколькими exports хранится один раз по основной ответственности;
-каждый export имеет права своего контракта. Текущее устройство reference
-executable описано в [reference.md](docs/reference.md).
+каждый export имеет права своего контракта. Самостоятельные процессы и общий
+тестовый fixture описаны в [reference.md](docs/reference.md).
 
 ## Сборка И Проверка
 
@@ -31,7 +31,9 @@ executable описано в [reference.md](docs/reference.md).
 соседний checkout harness для обычной сборки не требуется.
 
 ```bash
-cargo build --locked -p proteus-reference-module
+python3 package.py --package plan-tool
+python3 package.py --package plan-tool --install /path/to/Proteus
+cargo build --locked # только самостоятельные пакеты; без Core/Desktop
 python3 scripts/test.py full
 python3 scripts/test.py -p rg-search --lib
 ```
@@ -49,9 +51,20 @@ GitHub Actions запускает этот gate только вручную. О�
 запускают проверки. Общая релизная сборка запускается тегом `v*` в
 Proteus-desktop и использует закреплённую ревизию Modules.
 
-Основной исполняемый файл — `target/debug/proteus-reference-module`.
+Каждая из 18 групп реализаций имеет свой `components/<id>-module` и бинарник
+`proteus-<id>-module`. `package.py --package <id>` собирает только этот пакет
+и зависимости и создаёт `dist/<id>.zip`. `--install /path/to/Proteus` заменяет
+только его бинарник и metadata в существующей поставке; Core, Desktop и другие
+пакеты не собираются. Перезапустите backend после обновления: hot reload не
+добавлялся. Изменение общего SDK/runtime требует пересборки его потребителей.
 
-На Linux/glibc reference executable до запуска workers ограничивает malloc
+`package.py --bundle /path/to/runtime` готовит весь набор. `--no-build` использует
+пути последней успешной сборки из `dist/.artifacts/<profile>.json` без Cargo и
+без проверки свежести исходников. Пути берутся из Cargo artifacts, включая
+внешние target/cache каталоги. Общий `proteus-reference-module` остался только
+для conformance/differential tests и не входит в обычную поставку.
+
+На Linux/glibc каждый worker до запуска потоков ограничивает malloc
 двумя аренами, чтобы уменьшить удержание свободной памяти при множестве
 компонентов. Явные `MALLOC_ARENA_MAX` и `GLIBC_TUNABLES` с
 `glibc.malloc.arena_max` имеют приоритет; process-host environment policy
@@ -65,8 +78,8 @@ Proteus-desktop и использует закреплённую ревизию 
 [research/dcp](research/dcp/README.md) — отложенный эксперимент с отдельным
 Node executable и hook/tool exports. Он исключён из штатных профилей,
 поставки и общего test gate; npm запускается только вручную в его каталоге.
-Реализации reference-модуля собираются как Rust libraries внутри одного
-executable, без отдельного native ABI.
+Библиотечные реализации линкуются в отдельные процессные пакеты. Общая обвязка
+`components/module-runtime` не зависит от implementations; отдельного native ABI нет.
 Код DCP и его upstream имеют лицензию AGPL-3.0-or-later; сведения и notices
 сохранены в его каталоге. Лицензии остальных заимствованных частей находятся
 рядом с исходниками.

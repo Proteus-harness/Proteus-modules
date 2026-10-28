@@ -1,0 +1,20 @@
+[package]
+name = "proteus-codex-context-preparation-module"
+version = "0.1.0-alpha.3"
+edition = "2024"
+license = "MIT"
+publish = false
+
+[package.metadata.proteus]
+id = "codex-context-preparation"
+implementation = "hook/codex-context-preparation"
+
+[[bin]]
+name = "proteus-codex-context-preparation-module"
+path = "src/main.rs"
+test = false
+bench = false
+
+[dependencies]
+proteus-module-runtime = { path = "../module-runtime" }
+codex-context-preparation = { path = "../../hook/codex-context-preparation", default-features = false }

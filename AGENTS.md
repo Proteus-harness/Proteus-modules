@@ -11,8 +11,12 @@ process adapters принадлежат [Proteus-core](https://github.com/Proteu
   напрямую между собой; общие DTO берите из proteus-contracts.
 - Реализации расположены по основному slot. Модуль с несколькими exports
   хранится один раз; каждый export сохраняет authority своего slot.
-- components/process-module собирает библиотеки в reference executable. Это
-  обычный процесс, без особого ABI или исключений по имени.
+- components/<id>-module — независимые исполняемые пакеты. Общая обвязка
+  components/module-runtime не зависит от implementations и использует Core SDK.
+  components/process-module — aggregate fixture только для тестов, не поставка.
+- Правка одного пакета: `python3 package.py --package ID`; установка без сборки
+  хостов/остальных пакетов: `--package ID --install /path/to/Proteus`.
+  Не собирайте reference fixture, Core или Desktop для обычной правки пакета.
 - Не возвращайте dylib/native registrations, compatibility readers, старые
   aliases или новые behavior defaults в Core. Черновые producers и consumers
   обновляются вместе.

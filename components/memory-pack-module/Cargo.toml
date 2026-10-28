@@ -1,0 +1,20 @@
+[package]
+name = "proteus-memory-pack-module"
+version = "0.1.0-alpha.3"
+edition = "2024"
+license = "MIT"
+publish = false
+
+[package.metadata.proteus]
+id = "memory-pack"
+implementation = "context_provider/memory-pack"
+
+[[bin]]
+name = "proteus-memory-pack-module"
+path = "src/main.rs"
+test = false
+bench = false
+
+[dependencies]
+proteus-module-runtime = { path = "../module-runtime" }
+memory-pack = { path = "../../context_provider/memory-pack", default-features = false }

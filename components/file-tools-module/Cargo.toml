@@ -1,0 +1,20 @@
+[package]
+name = "proteus-file-tools-module"
+version = "0.1.0-alpha.3"
+edition = "2024"
+license = "MIT"
+publish = false
+
+[package.metadata.proteus]
+id = "file-tools"
+implementation = "tool/file-tools"
+
+[[bin]]
+name = "proteus-file-tools-module"
+path = "src/main.rs"
+test = false
+bench = false
+
+[dependencies]
+proteus-module-runtime = { path = "../module-runtime" }
+file-tools = { path = "../../tool/file-tools", default-features = false }

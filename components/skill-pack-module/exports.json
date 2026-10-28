@@ -1,0 +1,8 @@
+{
+  "tool": [
+    "skill_tool"
+  ],
+  "context_provider": [
+    "skills"
+  ]
+}

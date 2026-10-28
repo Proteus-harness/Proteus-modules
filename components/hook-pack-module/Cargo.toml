@@ -1,0 +1,20 @@
+[package]
+name = "proteus-hook-pack-module"
+version = "0.1.0-alpha.3"
+edition = "2024"
+license = "MIT"
+publish = false
+
+[package.metadata.proteus]
+id = "hook-pack"
+implementation = "hook/hook-pack"
+
+[[bin]]
+name = "proteus-hook-pack-module"
+path = "src/main.rs"
+test = false
+bench = false
+
+[dependencies]
+proteus-module-runtime = { path = "../module-runtime" }
+hook-pack = { path = "../../hook/hook-pack", default-features = false }

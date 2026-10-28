@@ -1,0 +1,6 @@
+{
+  "hook": [
+    "hook.instructions",
+    "hook.output_budget"
+  ]
+}

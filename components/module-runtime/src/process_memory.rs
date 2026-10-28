@@ -1,5 +1,5 @@
 //! Bound glibc arena retention in multi-process workloads before workers start.
-pub(super) fn initialize() {
+pub fn initialize() {
     #[cfg(all(target_os = "linux", target_env = "gnu"))]
     {
         // Keep explicit caller tuning, including the glibc tunables interface.

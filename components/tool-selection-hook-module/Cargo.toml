@@ -1,0 +1,20 @@
+[package]
+name = "proteus-tool-selection-hook-module"
+version = "0.1.0-alpha.3"
+edition = "2024"
+license = "MIT"
+publish = false
+
+[package.metadata.proteus]
+id = "tool-selection-hook"
+implementation = "hook/tool-selection-hook"
+
+[[bin]]
+name = "proteus-tool-selection-hook-module"
+path = "src/main.rs"
+test = false
+bench = false
+
+[dependencies]
+proteus-module-runtime = { path = "../module-runtime" }
+tool-selection-hook = { path = "../../hook/tool-selection-hook", default-features = false }

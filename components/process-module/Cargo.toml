@@ -9,6 +9,7 @@ name = "proteus-reference-module"
 path = "src/main.rs"
 
 [dependencies]
+proteus-module-runtime = { path = "../module-runtime" }
 anyhow = "1"
 proteus-contracts = { workspace = true }
 proteus-module-protocol = { workspace = true }

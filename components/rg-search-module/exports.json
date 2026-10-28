@@ -1,0 +1,8 @@
+{
+  "tool": [
+    "rg_search"
+  ],
+  "context_provider": [
+    "rg_search"
+  ]
+}
