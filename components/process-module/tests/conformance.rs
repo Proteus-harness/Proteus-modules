@@ -426,6 +426,9 @@ fn aggregate_tool_module_lists_and_invokes_real_tools() {
     );
     assert!(output.result.ok, "{:?}", output.result.error);
     assert!(output.result.output.contains("process tool works"));
+    let listed_again: ProcessToolListResponse =
+        invoke(&session, PROCESS_TOOL_LIST_METHOD, Value::Null);
+    assert_eq!(listed_again.result, listed.result);
 }
 
 #[test]

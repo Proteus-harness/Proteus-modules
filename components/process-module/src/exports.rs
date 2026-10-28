@@ -8,7 +8,6 @@ use proteus_contracts::{
         ProcessPolicyVisibilityInput, ProcessToolInvokeInput, ProcessToolInvokeResponse,
         ProcessToolListResponse, ProcessWorkflowInput, ProcessWorkflowResponse, WorkflowOutput,
     },
-    domain::ToolSpec,
     process_module::{
         ContextBuilderModuleInput, PolicyModuleInvocationContext, PolicyModuleVisibilityContext,
         ToolModuleInvocationContext, WorkflowModuleInput, WorkflowModuleOutput,
@@ -22,9 +21,13 @@ use crate::{
     registry::CollectedModules,
 };
 
+mod tools;
+use tools::ToolCatalog;
+
 pub(crate) struct ModuleExport {
     binding: ProcessComponentExportInitialize,
     modules: CollectedModules,
+    tool_catalog: ToolCatalog,
 }
 
 impl ModuleExport {
@@ -34,7 +37,16 @@ impl ModuleExport {
             &binding.module_id,
             binding.module_config.clone(),
         )?;
-        Ok(Self { binding, modules })
+        let tool_catalog = if binding.slot == "tool" {
+            ToolCatalog::new(&modules.tools)
+        } else {
+            ToolCatalog::default()
+        };
+        Ok(Self {
+            binding,
+            modules,
+            tool_catalog,
+        })
     }
 
     pub(crate) fn manifest(&self) -> ProcessComponentExportManifest {
@@ -117,32 +129,17 @@ impl ModuleExport {
                 if !params.is_null() {
                     bail!("tool list params must be null");
                 }
-                let specs = self
-                    .modules
-                    .tools
-                    .iter()
-                    .map(|tool| {
-                        let json = tool.spec_json();
-                        Ok(proteus_contracts::contracts::ProcessToolDefinition {
-                            spec: serde_json::from_str::<ToolSpec>(json.as_str())?,
-                            model_visible: tool.model_visible(),
-                            user_command: tool.user_command(),
-                        })
-                    })
-                    .collect::<Result<Vec<_>>>()?;
-                encode(ProcessToolListResponse::new(specs))
+                encode(ProcessToolListResponse::new(
+                    self.tool_catalog.definitions()?,
+                ))
             }
             PROCESS_TOOL_INVOKE_METHOD => {
                 let input: ProcessToolInvokeInput = decode(params)?;
-                let tool = self
-                    .modules
-                    .tools
-                    .iter()
-                    .find(|tool| {
-                        serde_json::from_str::<ToolSpec>(tool.spec_json().as_str())
-                            .is_ok_and(|spec| spec.name == input.call.name)
-                    })
+                let index = self
+                    .tool_catalog
+                    .index(&input.call.name)
                     .ok_or_else(|| anyhow!("tool module does not provide {}", input.call.name))?;
+                let tool = &self.modules.tools[index];
                 let call_json = serde_json::to_string(&input.call)?;
                 let context_json = serde_json::to_string(&ToolModuleInvocationContext {
                     cwd: input.cwd,
