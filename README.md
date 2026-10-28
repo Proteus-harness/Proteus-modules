@@ -2,7 +2,7 @@
 
 Реализации публичных контрактов [Proteus-core](https://github.com/Proteus-harness/Proteus-core).
 Текущая версия первого согласованного набора — `0.1.0-alpha.3` (experimental).
-Версии DCP и процессных контрактов учитываются отдельно. Совместимость между
+Версии процессных контрактов учитываются отдельно. Совместимость между
 alpha-выпусками не обещана; потребитель закрепляет конкретную ревизию.
 Исходники сгруппированы по основному слоту:
 
@@ -12,7 +12,7 @@ alpha-выпусками не обещана; потребитель закре�
 | `workflow/` | Алгоритмы выполнения задач |
 | `context/` | Построение контекста |
 | `policy/` | Разрешения и подтверждения |
-| `hook/` | Обработка истории, отбор инструментов, DCP |
+| `hook/` | Обработка истории, отбор инструментов |
 | `tool/` | Файлы, shell, git, patch, plan, skills, Rust LSP |
 | `context_provider/` | Поиск и память; некоторые также экспортируют tool |
 | `components/` | Исполняемые сборки с несколькими exports |
@@ -25,8 +25,8 @@ executable описано в [reference.md](docs/reference.md).
 
 ## Сборка И Проверка
 
-Нужны Rust, Git, Python 3; Node gates DCP и Claude command hooks дополнительно
-требуют Node.js 22.18+ и npm.
+Нужны Rust, Git, Python 3; gate Claude command hooks дополнительно
+требует Node.js 22.18+.
 Контракты и test harness подключены по фиксированному Git commit в Cargo.toml;
 соседний checkout harness для обычной сборки не требуется.
 
@@ -38,8 +38,8 @@ python3 scripts/test.py -p rg-search --lib
 
 Runner получает путь к harness из Cargo metadata: интеграционные тесты читают
 его fixtures и профили из той же ревизии, против которой собраны зависимости.
-Полный gate и scope `-p proteus-reference-module` включают Node-тесты DCP и
-Claude command hooks. Для последних runner задаёт `PROTEUS_HOOK_SDK_ROOT`
+Полный gate и scope `-p proteus-reference-module` включают Node-тесты
+Claude command hooks. Runner задаёт `PROTEUS_HOOK_SDK_ROOT`
 из той же закреплённой зависимости Core, поэтому SDK integration tests
 не пропускаются из-за отсутствия переменной окружения. Никакие модели
 с платным API не вызываются.
@@ -60,11 +60,13 @@ Proteus-desktop и использует закреплённую ревизию 
 не зависят от приложения и его расширений. Конфигурация slots и примеры:
 [документация harness](https://github.com/Proteus-harness/Proteus-core/blob/main/docs/architecture/modules.md).
 
-## DCP И Происхождение
+## Отложенные Эксперименты И Происхождение
 
-[hook/dcp](hook/dcp/README.md) — отдельный Node executable с hook/tool exports;
-он не линкуется в Rust reference-module. Прочие реализации собираются как
-ordinary Rust libraries внутри этого executable, без отдельного native ABI.
+[research/dcp](research/dcp/README.md) — отложенный эксперимент с отдельным
+Node executable и hook/tool exports. Он исключён из штатных профилей,
+поставки и общего test gate; npm запускается только вручную в его каталоге.
+Реализации reference-модуля собираются как Rust libraries внутри одного
+executable, без отдельного native ABI.
 Код DCP и его upstream имеют лицензию AGPL-3.0-or-later; сведения и notices
 сохранены в его каталоге. Лицензии остальных заимствованных частей находятся
 рядом с исходниками.

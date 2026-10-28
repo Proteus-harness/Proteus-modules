@@ -223,7 +223,7 @@ SDK с runtime-файлами, соответствующими `sdk-pin.json`.
 
 Из корня Modules `python3 scripts/test.py full` и
 `python3 scripts/test.py -p proteus-reference-module` запускают эти Node-тесты
-вместе с DCP и Rust gate. Runner получает SDK из закреплённого Cargo dependency
+вместе с Rust gate. Runner получает SDK из закреплённого Cargo dependency
 Core и задаёт `PROTEUS_HOOK_SDK_ROOT`, поэтому integration tests выполняются
 без ручной настройки пути. Отсутствующий или несовместимый SDK завершает gate
 ошибкой.

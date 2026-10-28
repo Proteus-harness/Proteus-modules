@@ -1,26 +1,27 @@
 # DCP: Context View И `compress`
 
+**Отложенный эксперимент.** Не подключается штатными профилями, не собирается
+общими runners и не входит в CLI/Desktop portable. Код, tests, lockfile и
+лицензии сохранены для отдельного ручного исследования.
+
 Самостоятельный процессный модуль Node.js 22+. Один component предоставляет `hook/hook.dcp`
 и `tool/dcp.tools`; права каждого export остаются правами его slot.
 
 ## Подключение
 
 ```bash
-cd hook/dcp
+cd research/dcp
 npm ci --ignore-scripts
 npm run build
 PROTEUS_TEST_HARNESS_ROOT=/path/to/Proteus-core npm test
 ```
 
-Пример профиля: [proteus.dcp.example.toml](https://github.com/Proteus-harness/Proteus-core/blob/main/examples/configs/proteus.dcp.example.toml).
+Архивный пример профиля: [proteus.dcp.example.toml](https://github.com/Proteus-harness/Proteus-core/blob/main/examples/research/dcp/proteus.dcp.example.toml).
 Замените путь к `dist/worker.js` абсолютным путём вашей сборки. При переносе
 модуля сохраняйте `dist`, `package.json`, lock и `node_modules` либо выполните
 `npm ci` на целевой машине: tokenizer загружает собственный WASM из зависимостей.
-`install.sh` Core не устанавливает DCP автоматически. Portable-приложение
-Proteus-desktop собирает DCP в отдельной staging-папке и включает его исходники,
-`dist` и production dependencies в `share/modules/dcp`; launcher
-`bin/proteus-dcp` использует этот набор после переноса. На целевой машине нужен
-Node.js 22+.
+Штатные installer и portable этот эксперимент не устанавливают. Для отдельного
+ручного запуска нужны Node.js 22.18+, npm и собранный `dist/worker.js`.
 
 Добавьте `hook.dcp` в явную цепочку `modules.hooks` и `compress`, `dcp` в
 `tools.enabled`, сохранив остальные нужные инструменты. Настройки
@@ -150,11 +151,8 @@ executable не линкуется в Rust reference-module.
 Overrides обновляют только неиспользуемое здесь upstream TUI dependency tree
 (`solid-js`, `seroval`, `@babel/core`), не DCP algorithms/version.
 
-`npm test` проверяет protected content, файловые DTO из таблицы выше, оба modes,
-fresh-state persistence, согласование блоков после удаления prefix history,
-управление blocks, ошибки, отмену и wire multiplexing. `scripts/test.py full`
-готовит свежую Node-сборку до Rust tests. `hook_runtime` дополнительно проверяет
-actual model requests, cold history и replay `Success`/`Error` без повторных
-effects; `hook_runtime::dcp::composition` сочетает DCP с реально сработавшими
-Rust Codex и Python suffix preparation hooks, checkpoint и новым runtime/component,
-использующим ту же session и сохранённое DCP state.
+`npm test` вручную проверяет protected content, файловые DTO, оба modes,
+fresh-state persistence, управление blocks, ошибки, отмену и wire multiplexing.
+Для composition test с Python suffix задайте `PROTEUS_TEST_HARNESS_ROOT`
+на checkout Core. Прежние Rust integration fixtures отложены в
+`Proteus-core/examples/research/dcp`; штатные runners их не запускают.

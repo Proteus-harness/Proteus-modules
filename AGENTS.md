@@ -26,8 +26,9 @@ process adapters принадлежат [Proteus-core](https://github.com/Proteu
 
 `python3 scripts/test.py -p PACKAGE ...` — затронутый scope,
 `python3 scripts/test.py full` — взаимодействие crates, contracts или wiring.
-Runner задаёт PROTEUS_TEST_HARNESS_ROOT из закреплённого Cargo dependency и
-готовит DCP; не запускайте сборки или установки из Rust tests. Выбирайте
+Runner задаёт PROTEUS_TEST_HARNESS_ROOT из закреплённого Cargo dependency;
+DCP отложен в research/dcp и исключён из штатной сборки и проверок.
+Не запускайте сборки или установки из Rust tests. Выбирайте
 реальные проверки поведения и контрактов, без тестов на расположение исходников.
 После успешной проверки создайте отдельный git commit. Не повторяйте полный
 прогон после правки только tests/fixtures: достаточно упавшего target.
