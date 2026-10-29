@@ -186,11 +186,11 @@ fn apply_openai_prompt_cache(
 }
 
 fn joined_instructions(request: &CanonicalModelRequest) -> Option<String> {
-    let mut instructions = request.instructions.clone();
+    let mut instructions: Vec<_> = request.instructions.iter().collect();
     instructions.sort_by_key(|instruction| std::cmp::Reverse(instruction.priority));
     let text = instructions
         .into_iter()
-        .map(|instruction| instruction.text)
+        .map(|instruction| instruction.text.as_str())
         .filter(|text| !text.trim().is_empty())
         .collect::<Vec<_>>()
         .join("\n\n");
@@ -433,7 +433,7 @@ fn to_openai_input(messages: &[CanonicalMessage]) -> Result<Vec<Value>> {
                     "role": "user",
                     "content": [{
                         "type": "input_text",
-                        "text": format!("File reference: {}\n{}", path.display(), content.clone().unwrap_or_default())
+                        "text": format!("File reference: {}\n{}", path.display(), content.as_deref().unwrap_or_default())
                     }]
                 })),
                 ContentPart::Patch { patch } => input.push(json!({

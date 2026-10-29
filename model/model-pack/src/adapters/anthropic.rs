@@ -29,6 +29,8 @@ use crate::{
 #[cfg(test)]
 mod image_tests;
 mod request;
+#[cfg(test)]
+mod request_tests;
 mod response;
 mod sanitize;
 mod stream;
@@ -211,7 +213,7 @@ impl AnthropicMessagesClient {
         // закрывает. Для tool_use input_json_delta приходит инкрементально;
         // собираем всё в state и на message_stop отдаём Response.
         let client = self.clone();
-        let fallback_request = request.clone();
+        let fallback_request = request;
         let state = Arc::new(Mutex::new(AnthropicStreamState::default()));
         let mut sse = response.bytes_stream().eventsource();
         let events = async_stream::stream! {

@@ -133,11 +133,11 @@ fn anthropic_system_value(system: String, cache_control: Option<&Value>) -> Valu
 }
 
 fn joined_instructions(request: &CanonicalModelRequest) -> Option<String> {
-    let mut instructions = request.instructions.clone();
+    let mut instructions: Vec<_> = request.instructions.iter().collect();
     instructions.sort_by_key(|instruction| std::cmp::Reverse(instruction.priority));
     let text = instructions
         .into_iter()
-        .map(|instruction| instruction.text)
+        .map(|instruction| instruction.text.as_str())
         .filter(|text| !text.trim().is_empty())
         .collect::<Vec<_>>()
         .join("\n\n");
@@ -259,7 +259,7 @@ fn anthropic_content_blocks(message: &CanonicalMessage) -> Result<Vec<Value>> {
                 "text": format!(
                     "File reference: {}\n{}",
                     path.display(),
-                    content.clone().unwrap_or_default()
+                    content.as_deref().unwrap_or_default()
                 )
             })),
             ContentPart::Patch { patch } => blocks.push(json!({

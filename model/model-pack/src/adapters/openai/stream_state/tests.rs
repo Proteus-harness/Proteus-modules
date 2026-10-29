@@ -2,6 +2,46 @@ use super::*;
 use crate::model_standard::{ContentPart, ModelStreamEvent};
 
 #[test]
+fn malformed_envelopes_and_multipart_deltas_preserve_terminal_text_and_identity() {
+    let mut state = OpenAiStreamState::default();
+    for malformed in ["{", "null", "{}", r#"{"type":"response.completed""#] {
+        assert!(state.translate(malformed).is_empty());
+    }
+    let mut id = None;
+    for (part, delta, visible) in [
+        (0, "Привет", "Привет"),
+        (0, "!", "!"),
+        (1, "next", "\nnext"),
+    ] {
+        let events = state.translate(
+            &json!({
+                "type":"response.output_text.delta", "item_id":"answer", "output_index":0,
+                "content_index":part, "delta":delta,
+            })
+            .to_string(),
+        );
+        let [
+            ModelStreamEvent::TextDelta {
+                message_id, text, ..
+            },
+        ] = events.as_slice()
+        else {
+            panic!("one text delta expected: {events:?}");
+        };
+        assert_eq!(text, visible);
+        assert_eq!(*id.get_or_insert(*message_id), *message_id);
+    }
+    let terminal = state
+        .translate(&json!({"type":"response.completed", "response":{"output":[]}}).to_string());
+    let [ModelStreamEvent::Response { response }] = terminal.as_slice() else {
+        panic!("terminal expected");
+    };
+    assert_eq!(response.messages.len(), 1);
+    assert_eq!(Some(response.messages[0].id), id);
+    assert_eq!(response.messages[0].display_text(), "Привет!\nnext");
+}
+
+#[test]
 fn completed_tool_items_preserve_call_surface_and_terminal_message_identity() {
     for item in [
         json!({"type": "function_call", "id": "function-item", "call_id": "function-call",

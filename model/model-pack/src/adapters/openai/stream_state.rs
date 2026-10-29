@@ -126,12 +126,12 @@ impl OpenAiStreamState {
                 if emitted.is_empty() {
                     return Vec::new();
                 }
-                let text = emitted.as_str();
+                let text = emitted;
                 let previous = self.text_parts.insert(key, part);
                 let text = if previous.is_some_and(|previous| previous != part) {
                     format!("\n{text}")
                 } else {
-                    text.to_owned()
+                    text
                 };
                 vec![ModelStreamEvent::TextDelta {
                     message_id,
@@ -147,7 +147,7 @@ impl OpenAiStreamState {
                         json!({"type": "refusal", "refusal": text})
                     } else { json!({"type": "output_text", "text": text}) }).collect::<Vec<_>>(),
                 })).collect::<Vec<_>>();
-                finalize_completed_event(data, &self.completed_items, &streamed_items, &self.ids)
+                finalize_completed_event(parsed, &self.completed_items, &streamed_items, &self.ids)
             }
             _ => translate_non_message_event(event_type, &parsed),
         }

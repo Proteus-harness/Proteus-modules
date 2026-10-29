@@ -360,10 +360,9 @@ fn empty_completed_output_recovered_from_output_item_done() {
         "type": "response.completed",
         "response": { "status": "completed", "output": [],
             "usage": { "input_tokens": 5, "output_tokens": 3 } }
-    })
-    .to_string();
+    });
 
-    let events = finalize_completed_event(&completed, &fallback_items, &[], &Default::default());
+    let events = finalize_completed_event(completed, &fallback_items, &[], &Default::default());
     let [ModelStreamEvent::Response { response }] = events.as_slice() else {
         panic!("expected single Response event");
     };
@@ -393,11 +392,10 @@ fn nonempty_completed_output_ignores_fallback_items() {
             "type": "message", "role": "assistant",
             "content": [{ "type": "output_text", "text": "real answer" }]
         }], "usage": { "input_tokens": 5, "output_tokens": 3 } }
-    })
-    .to_string();
+    });
 
     let events = finalize_completed_event(
-        &completed,
+        completed,
         &fallback_items,
         &fallback_items,
         &Default::default(),

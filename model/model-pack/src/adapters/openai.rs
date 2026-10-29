@@ -40,6 +40,8 @@ mod http_retry;
 mod image_tests;
 mod model_profile;
 mod request;
+#[cfg(test)]
+mod request_tests;
 mod response;
 #[cfg(test)]
 mod round_trip_tests;
@@ -261,7 +263,7 @@ impl OpenAiResponsesClient {
         // State-parser хранит накопленные text parts / tool_calls / usage и
         // выплёвывает финальный `Response` на event `response.completed`.
         let client = self.clone();
-        let fallback_request = request.clone();
+        let fallback_request = request;
         let mut sse = response.bytes_stream().eventsource();
         let events = async_stream::stream! {
             let mut state = OpenAiStreamState::default();

@@ -111,14 +111,11 @@ pub(super) fn translate_non_message_event(
 /// полученными text deltas. Provider-specific repair остаётся в adapter-е,
 /// поэтому generic ModelService получает полный canonical Response.
 pub(super) fn finalize_completed_event(
-    data: &str,
+    parsed: Value,
     fallback_items: &[Value],
     streamed_items: &[Value],
     ids: &std::collections::HashMap<String, crate::domain::MessageId>,
 ) -> Vec<ModelStreamEvent> {
-    let Ok(parsed) = serde_json::from_str::<Value>(data) else {
-        return Vec::new();
-    };
     let mut response_value = parsed.get("response").cloned().unwrap_or(parsed);
     let mut output = response_value
         .get("output")
