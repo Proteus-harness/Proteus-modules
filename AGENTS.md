@@ -39,5 +39,9 @@ DCP отложен в research/dcp и исключён из штатной сб�
 
 При изменении публичной границы обновите harness и его module_swap gate.
 После завершённой правки приложения/backend пересоберите portable в соседнем
-Proteus-desktop (`../Proteus-desktop` при общей раскладке):
-`python3 scripts/portable.py --fast`. Сохраняйте target и инкрементальные caches.
+Proteus-desktop (`../Proteus-desktop` при общей раскладке). Выбирайте только
+затронутые компоненты по его BUILDING.md: для одного модуля достаточно
+`python3 package.py --package ID --install /absolute/ready/Proteus` из Modules;
+для всего набора — `python3 scripts/portable.py --components modules --no-archive`
+из Desktop. `--fast` удалён; обычный профиль — release.
+Сохраняйте target и инкрементальные caches.
