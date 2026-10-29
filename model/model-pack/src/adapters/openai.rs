@@ -47,6 +47,8 @@ mod response;
 mod round_trip_tests;
 mod sse_idle;
 mod stream;
+#[cfg(test)]
+mod stream_fallback_tests;
 mod stream_state;
 #[cfg(test)]
 mod tests;
@@ -257,13 +259,15 @@ impl OpenAiResponsesClient {
 
     async fn stream_response(&self, request: CanonicalModelRequest) -> Result<ModelEventStream> {
         let body = self.request_body(&request, true)?;
+        // Only diagnostic fallback needs the canonical request after encoding.
+        // Drop it before network waits when replay is disabled (including Codex).
+        let fallback_request = self.stream_error_fallback.then_some(request);
         let response = self.send_response(&body).await?;
 
         // reqwest bytes_stream → eventsource-stream Event → наши ModelStreamEvent.
         // State-parser хранит накопленные text parts / tool_calls / usage и
         // выплёвывает финальный `Response` на event `response.completed`.
         let client = self.clone();
-        let fallback_request = request;
         let mut sse = response.bytes_stream().eventsource();
         let events = async_stream::stream! {
             let mut state = OpenAiStreamState::default();
@@ -295,7 +299,7 @@ impl OpenAiResponsesClient {
                         }
                     }
                     Err(error) => {
-                        if client.stream_error_fallback {
+                        if let Some(fallback_request) = fallback_request {
                             match client.complete_response(fallback_request).await {
                                 Ok(response) => yield Ok(ModelStreamEvent::Response { response }),
                                 Err(fallback_error) => {

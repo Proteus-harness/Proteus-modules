@@ -20,8 +20,11 @@ pub(super) fn to_anthropic_request_with_cache(
     let mut body = json!({
         "model": request.model.model,
         "max_tokens": request.limits.max_output_tokens.unwrap_or(2048),
-        "messages": to_anthropic_messages(&request.messages)?,
+        "messages": [],
     });
+    // Replace the existing slot to preserve key order without reserializing
+    // the already-built JSON array through json!.
+    body["messages"] = Value::Array(to_anthropic_messages(&request.messages)?);
 
     let cache_control = anthropic_cache_control(request, prompt_cache);
     let system = joined_instructions(request);
@@ -301,5 +304,7 @@ fn push_message(out: &mut Vec<Value>, role: &str, blocks: Vec<Value>) {
         }
     }
 
-    out.push(json!({ "role": role, "content": blocks }));
+    let mut message = json!({ "role": role, "content": [] });
+    message["content"] = Value::Array(blocks);
+    out.push(message);
 }

@@ -2,6 +2,38 @@ use super::*;
 use crate::model_standard::{InstructionBlock, InstructionKind};
 
 #[test]
+fn moved_message_arrays_preserve_provider_json_bytes_and_merged_roles() {
+    let mut request = CanonicalModelRequest::new(
+        ModelRef::new("anthropic", "fixture"),
+        vec![
+            CanonicalMessage::text(MessageRole::User, " first\n"),
+            CanonicalMessage::text(MessageRole::User, "second"),
+            CanonicalMessage::text(MessageRole::Assistant, "reply"),
+            CanonicalMessage::text(MessageRole::User, "last"),
+        ],
+    );
+    request.limits.max_output_tokens = None;
+    request.sampling.temperature = None;
+    request.sampling.top_p = None;
+    let expected = json!({
+        "model": "fixture",
+        "max_tokens": 2048,
+        "messages": [
+            {"role": "user", "content": [
+                {"type": "text", "text": " first\n"},
+                {"type": "text", "text": "second"},
+            ]},
+            {"role": "assistant", "content": [{"type": "text", "text": "reply"}]},
+            {"role": "user", "content": [{"type": "text", "text": "last"}]},
+        ],
+    });
+    let body = to_anthropic_request(&request).unwrap();
+    assert_eq!(body, expected);
+    // Value equality alone does not check key order with preserve_order enabled.
+    assert_eq!(body.to_string(), expected.to_string());
+}
+
+#[test]
 fn request_preserves_instruction_order_and_file_content_without_mutating_source() {
     let request = CanonicalModelRequest::new(
         ModelRef::new("anthropic", "fixture"),

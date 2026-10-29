@@ -217,11 +217,12 @@ fn handle_search(
         .clamp(1, 20) as usize;
     let safety = args.get("safety").and_then(Value::as_str);
     let tools = all_policy_visible_tools(host, input)?;
+    let query_terms = tokenize(query);
     let mut ranked = tools
         .iter()
         .filter(|tool| !is_meta_tool(&tool.name))
         .filter(|tool| safety_matches(tool, safety))
-        .map(|tool| (score_tool(tool, query), tool))
+        .map(|tool| (score_tool(tool, &query_terms), tool))
         .filter(|(score, _)| *score > 0.0)
         .collect::<Vec<_>>();
 
@@ -438,17 +439,16 @@ fn compact_metadata(metadata: &Value) -> Value {
     Value::Object(compact)
 }
 
-fn score_tool(tool: &ToolSpec, query: &str) -> f32 {
-    let query_terms = tokenize(query);
+fn score_tool(tool: &ToolSpec, query_terms: &HashSet<String>) -> f32 {
     if query_terms.is_empty() {
         return 0.0;
     }
 
     let mut score = 0.0;
-    score += overlap(&query_terms, &tokenize(&tool.name)) as f32 * 5.0;
-    score += overlap(&query_terms, &tokenize(&tool.description)) as f32 * 1.5;
-    score += overlap(&query_terms, &tokenize(&tool.input_schema.to_string())) as f32 * 0.5;
-    score += overlap(&query_terms, &metadata_terms(&tool.metadata)) as f32 * 2.0;
+    score += overlap(query_terms, &tokenize(&tool.name)) as f32 * 5.0;
+    score += overlap(query_terms, &tokenize(&tool.description)) as f32 * 1.5;
+    score += overlap(query_terms, &tokenize(&tool.input_schema.to_string())) as f32 * 0.5;
+    score += overlap(query_terms, &metadata_terms(&tool.metadata)) as f32 * 2.0;
     score
 }
 

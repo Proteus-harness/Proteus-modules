@@ -34,7 +34,7 @@ pub(super) fn to_openai_request_with_cache(
 ) -> Result<Value> {
     let mut body = json!({
         "model": request.model.model,
-        "input": to_openai_input(&request.messages)?,
+        "input": [],
         "tool_choice": match &request.tool_choice {
             ToolChoice::None => "none",
             ToolChoice::Auto => "auto",
@@ -45,6 +45,9 @@ pub(super) fn to_openai_request_with_cache(
         "parallel_tool_calls": profile.supports_parallel_tool_calls,
         "store": profile.store,
     });
+    // Replace the existing slot to preserve key order without reserializing
+    // the already-built JSON array through json!.
+    body["input"] = Value::Array(to_openai_input(&request.messages)?);
 
     if let Some(instructions) = joined_instructions(request) {
         body["instructions"] = Value::String(instructions);

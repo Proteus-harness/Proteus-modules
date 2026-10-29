@@ -396,3 +396,188 @@ fn provider_hosted_tool_stays_direct_outside_hot_tool_budget() {
         "provider_hosted_direct"
     );
 }
+
+#[test]
+fn scoring_preserves_weights_and_reason_precedence() {
+    let cases = [
+        (
+            "shell",
+            "",
+            ToolSafety::RunsCommands,
+            false,
+            "TEST",
+            101.5,
+            "intent_match",
+        ),
+        (
+            "apply_patch",
+            "",
+            ToolSafety::WritesFiles,
+            false,
+            "FIX",
+            94.0,
+            "intent_match",
+        ),
+        (
+            "write_file",
+            "",
+            ToolSafety::WritesFiles,
+            false,
+            "CREATE",
+            73.0,
+            "intent_match",
+        ),
+        (
+            "remember_fact",
+            "",
+            ToolSafety::ReadOnly,
+            false,
+            "MEMORY",
+            56.5,
+            "intent_match",
+        ),
+        (
+            "shell",
+            "",
+            ToolSafety::RunsCommands,
+            true,
+            "TEST",
+            126.5,
+            "metadata_hot",
+        ),
+        (
+            "read_file",
+            "",
+            ToolSafety::ReadOnly,
+            false,
+            "READ_FILE",
+            18.5,
+            "codex_hot_set",
+        ),
+        (
+            "extra",
+            "Needle NEEDLE",
+            ToolSafety::ReadOnly,
+            false,
+            "needle",
+            2.5,
+            "lexical_match",
+        ),
+        (
+            "extra",
+            "needle",
+            ToolSafety::ReadOnly,
+            true,
+            "needle",
+            27.5,
+            "metadata_hot",
+        ),
+        (
+            "extra",
+            "",
+            ToolSafety::ReadOnly,
+            false,
+            "",
+            0.5,
+            "codex_hot_set",
+        ),
+        (
+            "extra",
+            "",
+            ToolSafety::Network,
+            false,
+            "",
+            -1.0,
+            "codex_hot_set",
+        ),
+        (
+            "extra",
+            "needle",
+            ToolSafety::Dangerous,
+            false,
+            "needle",
+            0.0,
+            "lexical_match",
+        ),
+        (
+            "extra",
+            "",
+            ToolSafety::ReadOnly,
+            false,
+            "object",
+            1.5,
+            "lexical_match",
+        ),
+    ];
+    for (name, description, safety, hot, query, expected_score, expected_reason) in cases {
+        let tool = spec(name, description, safety).with_metadata(json!({"hot": hot}));
+        let actual = score_tool(&tool, &tokenize(query));
+        assert_eq!(actual.score, expected_score, "{name}: {query:?}");
+        assert_eq!(actual.reason, expected_reason, "{name}: {query:?}");
+    }
+
+    let tool = spec("extra", "", ToolSafety::ReadOnly)
+        .with_metadata(json!({"needle": ["NEEDLE", {"tags": ["needle"]}]}));
+    let actual = score_tool(&tool, &tokenize("Needle needle"));
+    assert_eq!(actual.score, 2.5);
+    assert_eq!(actual.reason, "lexical_match");
+}
+
+#[test]
+fn selector_preserves_empty_unicode_queries_and_case_sensitive_ties() {
+    let candidates = ["zeta", "alpha", "Alpha"]
+        .into_iter()
+        .map(|name| spec(name, "École 中 stanbul ___ read_file", ToolSafety::ReadOnly))
+        .collect::<Vec<_>>();
+    for (query, lexical_match) in [
+        ("", false),
+        (" \t\n", false),
+        ("é ab __ !", false),
+        ("read file", false),
+        ("ÉCOLE école", true),
+        ("中 中", true),
+        ("İSTANBUL", true),
+        ("READ_FILE read_file", true),
+        ("___", true),
+    ] {
+        let output = select(query, 2, candidates.clone());
+        assert_eq!(
+            output.tools,
+            vec![candidates[2].clone(), candidates[1].clone()]
+        );
+        let expected_reason = if lexical_match {
+            "lexical_match"
+        } else {
+            "codex_hot_set"
+        };
+        assert_eq!(
+            output.metadata["selected_tool_reasons"],
+            json!({"Alpha": expected_reason, "alpha": expected_reason}),
+            "{query:?}"
+        );
+        let effective_query = if query.trim().is_empty() { "" } else { query };
+        assert_eq!(output.metadata["query"], effective_query);
+        assert_eq!(
+            output.metadata["query_source"],
+            if effective_query.is_empty() {
+                "stable_hot_set"
+            } else {
+                "explicit"
+            }
+        );
+    }
+}
+
+#[test]
+fn selector_keeps_input_order_when_score_and_name_both_tie() {
+    let first =
+        spec("duplicate", "needle", ToolSafety::ReadOnly).with_metadata(json!({"ordinal": 1}));
+    let second =
+        spec("duplicate", "needle", ToolSafety::ReadOnly).with_metadata(json!({"ordinal": 2}));
+    let output = select("needle", 1, vec![first.clone(), second]);
+    assert_eq!(output.tools, vec![first]);
+    assert_eq!(
+        output.metadata["selected_tool_reasons"]["duplicate"],
+        "lexical_match"
+    );
+}

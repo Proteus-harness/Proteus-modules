@@ -2,6 +2,49 @@ use super::*;
 use crate::model_standard::{InstructionBlock, InstructionKind};
 
 #[test]
+fn moved_input_array_preserves_provider_json_bytes_and_order() {
+    let mut request = CanonicalModelRequest::new(
+        ModelRef::new("openai", "fixture"),
+        vec![
+            CanonicalMessage::new(
+                MessageRole::User,
+                vec![
+                    ContentPart::Text {
+                        text: " first\n".into(),
+                    },
+                    ContentPart::Text {
+                        text: "second".into(),
+                    },
+                ],
+            ),
+            CanonicalMessage::text(MessageRole::Assistant, "reply"),
+        ],
+    );
+    request.tool_choice = ToolChoice::None;
+    request.limits.max_output_tokens = None;
+    let expected = json!({
+        "model": "fixture",
+        "input": [
+            {"type": "message", "role": "user", "content": [
+                {"type": "input_text", "text": " first\n"},
+                {"type": "input_text", "text": "second"},
+            ]},
+            {"type": "message", "role": "assistant", "content": [
+                {"type": "output_text", "text": "reply"},
+            ]},
+        ],
+        "tool_choice": "none",
+        "parallel_tool_calls": true,
+        "store": false,
+        "include": [],
+    });
+    let body = to_openai_request(&request).unwrap();
+    assert_eq!(body, expected);
+    // Value equality alone does not check key order with preserve_order enabled.
+    assert_eq!(body.to_string(), expected.to_string());
+}
+
+#[test]
 fn request_preserves_instruction_order_and_file_content_without_mutating_source() {
     let request = CanonicalModelRequest::new(
         ModelRef::new("openai", "fixture"),

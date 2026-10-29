@@ -139,6 +139,128 @@ fn proteus_tool_call_rejects_meta_tool_recursion_without_execution() {
 }
 
 #[test]
+fn tool_search_preserves_field_weights_filters_and_case_sensitive_ties() {
+    let input = workflow_input("search scoring regression");
+    let make = |name: &str, description: &str| {
+        ToolSpec::new(name, description, json!({}), ToolSafety::ReadOnly)
+    };
+    let candidates = vec![
+        make("zeta", "needle"),
+        make("alpha", "needle"),
+        make("Alpha", "needle"),
+        make("description_only", "needle needle"),
+        make("needle", ""),
+        make("metadata_only", "").with_metadata(json!({
+            "needle": ["NEEDLE", {"tags": ["needle"]}]
+        })),
+        ToolSpec::new(
+            "schema_only",
+            "",
+            json!({"type": "object", "properties": {"needle": {"type": "string"}}}),
+            ToolSafety::ReadOnly,
+        ),
+        make(dynamic_tools::TOOL_SEARCH, "needle"),
+        ToolSpec::new("writer", "needle", json!({}), ToolSafety::WritesFiles),
+    ];
+    let mut host = FakeHost::default().with_tools(candidates, Vec::new());
+    let query = "  Needle NEEDLE needle  ";
+    for limit in [3, 20] {
+        let call = ToolCall::new(
+            new_call_id(),
+            dynamic_tools::TOOL_SEARCH,
+            json!({"query": query, "limit": limit, "safety": "read_only"}),
+        );
+        let result =
+            dynamic_tools::handle_meta_tool_call(&mut host, &input, &call, "execute").unwrap();
+        assert!(result.ok);
+        let output: Value = serde_json::from_str(&result.output).unwrap();
+        let actual = output["matches"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|item| {
+                (
+                    item["name"].as_str().unwrap(),
+                    item["score"].as_f64().unwrap(),
+                )
+            })
+            .collect::<Vec<_>>();
+        let expected = [
+            ("needle", 5.0),
+            ("metadata_only", 2.0),
+            ("Alpha", 1.5),
+            ("alpha", 1.5),
+            ("description_only", 1.5),
+            ("zeta", 1.5),
+            ("schema_only", 0.5),
+        ];
+        assert_eq!(actual, expected[..limit.min(expected.len())]);
+        assert_eq!(output["query"], query);
+        assert_eq!(output["searched"], 9);
+    }
+}
+
+#[test]
+fn tool_search_preserves_unicode_empty_and_underscore_queries() {
+    let input = workflow_input("search tokenizer regression");
+    let candidates = ["zeta", "alpha"]
+        .into_iter()
+        .map(|name| {
+            ToolSpec::new(
+                name,
+                "École 中 stanbul ___ read_file",
+                json!({}),
+                ToolSafety::ReadOnly,
+            )
+        })
+        .collect();
+    let mut host = FakeHost::default().with_tools(candidates, Vec::new());
+
+    // Token length is UTF-8 bytes, underscores stay in tokens, and lowercase
+    // expansion is split with the same Unicode predicate as before.
+    for (query, matches) in [
+        ("", false),
+        (" \t\n", false),
+        ("é ab __ !", false),
+        ("read file", false),
+        ("ÉCOLE école", true),
+        ("中 中", true),
+        ("İSTANBUL", true),
+        ("READ_FILE read_file", true),
+        ("___", true),
+    ] {
+        let call = ToolCall::new(
+            new_call_id(),
+            dynamic_tools::TOOL_SEARCH,
+            json!({"query": query}),
+        );
+        let result =
+            dynamic_tools::handle_meta_tool_call(&mut host, &input, &call, "execute").unwrap();
+        assert!(result.ok, "{query:?}");
+        let output: Value = serde_json::from_str(&result.output).unwrap();
+        let actual = output["matches"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|item| {
+                (
+                    item["name"].as_str().unwrap(),
+                    item["score"].as_f64().unwrap(),
+                )
+            })
+            .collect::<Vec<_>>();
+        let expected = if matches {
+            vec![("alpha", 1.5), ("zeta", 1.5)]
+        } else {
+            vec![]
+        };
+        assert_eq!(actual, expected, "{query:?}");
+        assert_eq!(output["query"], query);
+        assert_eq!(output["searched"], 2);
+    }
+}
+
+#[test]
 fn proteus_tool_call_rejects_provider_hosted_tool_without_execution() {
     let input = workflow_input("bad hosted call");
     let web_search = test_tool("web_search", "Search the web", ToolSafety::Network).with_surface(

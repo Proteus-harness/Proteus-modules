@@ -203,7 +203,7 @@ fn select_tools(input: ToolSelectionInput, config: &DynamicSelectionConfig) -> T
             break;
         }
         selected_names.insert(tool.name.clone());
-        selected_reasons.insert(tool.name.clone(), reason);
+        selected_reasons.insert(tool.name.clone(), reason.to_owned());
         selected.push(tool.clone());
     }
 
@@ -220,7 +220,7 @@ fn select_tools(input: ToolSelectionInput, config: &DynamicSelectionConfig) -> T
 
 struct ScoredTool {
     score: f32,
-    reason: String,
+    reason: &'static str,
 }
 
 fn score_tool(tool: &ToolSpec, query_terms: &HashSet<String>) -> ScoredTool {
@@ -244,7 +244,8 @@ fn score_tool(tool: &ToolSpec, query_terms: &HashSet<String>) -> ScoredTool {
         reason = "intent_match";
     }
 
-    if let Some(priority) = codex_priority(&tool.name) {
+    let priority = codex_priority(&tool.name);
+    if let Some(priority) = priority {
         score += priority;
     }
     if metadata_hot(&tool.metadata) {
@@ -255,16 +256,13 @@ fn score_tool(tool: &ToolSpec, query_terms: &HashSet<String>) -> ScoredTool {
     let lexical = lexical_score(tool, query_terms);
     if lexical > 0.0 {
         score += lexical;
-        if reason == "codex_hot_set" && codex_priority(&tool.name).is_none() {
+        if reason == "codex_hot_set" && priority.is_none() {
             reason = "lexical_match";
         }
     }
 
     score += safety_adjustment(&tool.safety);
-    ScoredTool {
-        score,
-        reason: reason.to_owned(),
-    }
+    ScoredTool { score, reason }
 }
 
 /// Plan-фаза read-only: workflow всё равно вырежет write/shell из запроса,
