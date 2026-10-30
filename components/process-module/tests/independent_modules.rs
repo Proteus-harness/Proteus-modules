@@ -12,6 +12,9 @@ use proteus_module_protocol::{
 use proteus_process_host::ProcessSpec;
 use serde_json::{Value, json};
 
+#[path = "independent_modules/source_capture.rs"]
+mod source_capture;
+
 fn connect(
     binary: &Path,
     workspace: &Path,

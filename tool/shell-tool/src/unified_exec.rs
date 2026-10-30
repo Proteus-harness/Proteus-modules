@@ -5,6 +5,7 @@ use crate::sandbox::{SandboxKind, SandboxPolicy, resolve_workdir};
 use anyhow::{Context, Result, anyhow};
 use proteus_contracts::process_module::{ToolModuleHostMut, ToolModuleInvocationContext};
 use serde_json::{Value, json};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 const DEFAULT_EXEC_YIELD_MS: u64 = 10_000;
@@ -29,12 +30,15 @@ const CANCELLATION_POLL_INTERVAL: Duration = Duration::from_millis(50);
 /// После выхода процесса даём reader'у дочитать хвост из PTY.
 const EXIT_DRAIN_GRACE: Duration = Duration::from_millis(50);
 
+mod capture;
 mod output;
 mod process;
 mod pty_lifetime;
+mod reader;
 mod session;
 mod spec;
 
+pub(crate) use capture::{CaptureStore, ReadCaptureTool};
 use output::*;
 use process::spawn_session;
 use session::*;
@@ -43,6 +47,7 @@ pub(crate) use spec::{ExecCommandTool, WriteStdinTool};
 fn exec_command_impl(
     call_json: &str,
     context_json: &str,
+    capture: Option<&Arc<CaptureStore>>,
     host: &mut ToolModuleHostMut<'_>,
 ) -> Result<String> {
     ensure_not_cancelled(host)?;
@@ -76,6 +81,7 @@ fn exec_command_impl(
         &context,
         escalated,
         sandbox_policy,
+        capture,
         host,
     )
 }
@@ -87,6 +93,7 @@ fn execute_command(
     context: &ToolModuleInvocationContext,
     escalated: bool,
     sandbox_policy: SandboxPolicy,
+    capture: Option<&Arc<CaptureStore>>,
     host: &mut ToolModuleHostMut<'_>,
 ) -> Result<String> {
     ensure_not_cancelled(host)?;
@@ -109,15 +116,23 @@ fn execute_command(
         .unwrap_or(false);
     let sandbox = sandbox_policy.select(escalated, false)?;
 
+    let owner = ExecSessionOwner::from_context(context, &resolved.workspace);
+    // Capture admission must precede session pruning as well as OS spawn.
     let started = Instant::now();
-    let (session_id, session) = spawn_session(
-        cmd,
-        tty,
-        &resolved.workspace,
-        &resolved.workdir,
-        sandbox,
-        ExecSessionOwner::from_context(context, &resolved.workspace),
-    )?;
+    let (session_id, session) = capture::admit(capture, owner, tty, |owner, prepared| {
+        if prepared.is_some() {
+            ensure_not_cancelled(host)?;
+        }
+        spawn_session(
+            cmd,
+            tty,
+            &resolved.workspace,
+            &resolved.workdir,
+            sandbox,
+            owner,
+            prepared,
+        )
+    })?;
     let _interaction = match session.lock_interaction(host) {
         Ok(guard) => guard,
         Err(error) => {
@@ -138,13 +153,16 @@ fn execute_command(
         lock(sessions()).remove(&session_id);
     }
 
-    let metadata = json!({
+    let mut metadata = json!({
         "yield_time_ms": yield_time_ms,
         "workdir": resolved.workdir,
         "sandbox": session.sandbox.as_ref().map(SandboxKind::label),
         "escalated": escalated,
         "tty": tty,
     });
+    if let Some(receipt) = capture.and_then(|store| store.metadata(session.capture.as_ref())) {
+        metadata["source_capture"] = receipt;
+    }
     Ok(render_result(
         &call_id,
         session_id,
@@ -158,6 +176,7 @@ fn execute_command(
 fn write_stdin_impl(
     call_json: &str,
     context_json: &str,
+    capture: Option<&Arc<CaptureStore>>,
     host: &mut ToolModuleHostMut<'_>,
 ) -> Result<String> {
     ensure_not_cancelled(host)?;
@@ -225,12 +244,17 @@ fn write_stdin_impl(
         lock(sessions()).remove(&session_id);
     }
 
-    let metadata = json!({
+    let mut metadata = json!({
         "yield_time_ms": yield_time_ms,
         "stdin_bytes": chars.len(),
         "tty": session.tty,
         "sandbox": session.sandbox.as_ref().map(SandboxKind::label),
     });
+    // Legacy cross-binding interaction remains valid, but cannot disclose the
+    // capture handle of another bound store or start a replacement capture.
+    if let Some(receipt) = capture.and_then(|store| store.metadata(session.capture.as_ref())) {
+        metadata["source_capture"] = receipt;
+    }
     Ok(render_result(
         &call_id,
         session_id,

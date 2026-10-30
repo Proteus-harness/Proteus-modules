@@ -82,7 +82,7 @@ async fn retryable_statuses_reuse_the_request_and_preserve_the_final_response() 
 }
 
 #[tokio::test]
-async fn transport_retries_are_bounded_and_invalid_requests_fail_before_retry() {
+async fn noncloneable_transport_retries_are_bounded_and_invalid_requests_fail_before_retry() {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let url = format!("http://{}", listener.local_addr().unwrap());
     drop(listener);
@@ -92,11 +92,119 @@ async fn transport_retries_are_bounded_and_invalid_requests_fail_before_retry() 
         let error = RequestRetry { max_retries: 2 }
             .send(|| {
                 attempts += 1;
-                client.get(url)
+                // Streaming bodies must retain the per-attempt builder path.
+                client
+                    .get(url)
+                    .body(reqwest::Body::wrap_stream(futures_util::stream::once(
+                        async { Ok::<_, std::io::Error>("fixture") },
+                    )))
             })
             .await
             .unwrap_err();
         assert_eq!(attempts, expected_count);
         assert!(error.is_connect() || error.is_builder());
     }
+}
+
+#[tokio::test]
+async fn retryable_json_is_serialized_once_and_every_attempt_keeps_identical_bytes() {
+    struct CountedJson<'a> {
+        serializations: &'a AtomicUsize,
+        value: &'a Value,
+    }
+    impl serde::Serialize for CountedJson<'_> {
+        fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+        where
+            S: serde::Serializer,
+        {
+            self.serializations.fetch_add(1, Ordering::SeqCst);
+            serde::Serialize::serialize(self.value, serializer)
+        }
+    }
+
+    tokio::time::timeout(Duration::from_secs(10), async {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("http://{}", listener.local_addr().unwrap());
+        // Both halves belong to this timeout, rather than a detached task:
+        // timeout or panic drops the fixture listener/socket with the client.
+        let server = async move {
+            let mut received = Vec::new();
+            for status in [503, 502, 200] {
+                let (mut socket, _) = listener.accept().await.unwrap();
+                let mut headers = Vec::new();
+                while !headers.ends_with(b"\r\n\r\n") {
+                    headers.push(socket.read_u8().await.unwrap());
+                }
+                let headers = String::from_utf8(headers).unwrap();
+                assert!(headers.starts_with("POST / HTTP/1.1\r\n"));
+                let length = headers
+                    .lines()
+                    .find_map(|line| {
+                        let (name, value) = line.split_once(':')?;
+                        name.eq_ignore_ascii_case("content-length")
+                            .then(|| value.trim().parse::<usize>().unwrap())
+                    })
+                    .unwrap();
+                let mut body = vec![0; length];
+                socket.read_exact(&mut body).await.unwrap();
+                received.push(body);
+                socket
+                    .write_all(
+                        format!(
+                            "HTTP/1.1 {status} Fixture\r\nContent-Length: 5\r\nConnection: close\r\n\r\nfinal"
+                        )
+                        .as_bytes(),
+                    )
+                    .await
+                    .unwrap();
+            }
+            received
+        };
+        let client = reqwest::Client::builder().no_proxy().build().unwrap();
+        let value = json!({"input": "Текст\n\"quoted\"", "tools": [{"name": "fixture"}]});
+        let serializations = AtomicUsize::new(0);
+        let payload = CountedJson {
+            serializations: &serializations,
+            value: &value,
+        };
+        let send = async {
+            let response = RequestRetry { max_retries: 2 }
+                .send(|| client.post(&url).json(&payload))
+                .await
+                .unwrap();
+            assert_eq!(response.status(), reqwest::StatusCode::OK);
+            response.text().await.unwrap()
+        };
+        let (response, received) = tokio::join!(send, server);
+        assert_eq!(response, "final");
+        assert_eq!(serializations.load(Ordering::SeqCst), 1);
+        let expected = serde_json::to_vec(&value).unwrap();
+        assert_eq!(received, vec![expected; 3]);
+    })
+    .await
+    .expect("retry JSON loopback exchange must finish within 10 seconds");
+}
+
+#[tokio::test]
+async fn serialization_errors_are_not_rebuilt_or_retried() {
+    struct FailingJson<'a>(&'a AtomicUsize);
+    impl serde::Serialize for FailingJson<'_> {
+        fn serialize<S>(&self, _serializer: S) -> Result<S::Ok, S::Error>
+        where
+            S: serde::Serializer,
+        {
+            self.0.fetch_add(1, Ordering::SeqCst);
+            Err(serde::ser::Error::custom("fixture serialization failure"))
+        }
+    }
+
+    let serializations = AtomicUsize::new(0);
+    let payload = FailingJson(&serializations);
+    let client = reqwest::Client::builder().no_proxy().build().unwrap();
+    let error = RequestRetry { max_retries: 2 }
+        .send(|| client.post("http://127.0.0.1:1").json(&payload))
+        .await
+        .unwrap_err();
+    assert!(error.is_builder());
+    assert_eq!(serializations.load(Ordering::SeqCst), 1);
 }

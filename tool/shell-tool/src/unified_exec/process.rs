@@ -10,6 +10,7 @@ use anyhow::{Context, Result, anyhow};
 use portable_pty::{CommandBuilder, MasterPty, PtySize, native_pty_system};
 use proteus_contracts::domain::EXEC_SHELL;
 
+use super::capture::PreparedCapture;
 use super::pty_lifetime::PtyLifetime;
 use super::session::{
     ExecSession, ExecSessionOwner, ProcessControl, ensure_session_janitor, lock, register_session,
@@ -24,6 +25,7 @@ pub(super) fn spawn_session(
     workdir: &str,
     sandbox: Option<SandboxKind>,
     owner: ExecSessionOwner,
+    capture: Option<PreparedCapture>,
 ) -> Result<(i64, Arc<ExecSession>)> {
     ensure_session_janitor()?;
     let (program, args) = match sandbox.as_ref() {
@@ -36,9 +38,9 @@ pub(super) fn spawn_session(
     let mut sessions = lock(sessions());
     register_session(&mut sessions, || {
         if tty {
-            spawn_pty(&program, args, workdir, sandbox, owner)
+            spawn_pty(&program, args, workdir, sandbox, owner, capture)
         } else {
-            spawn_pipes(&program, args, workdir, sandbox, owner)
+            spawn_pipes(&program, args, workdir, sandbox, owner, capture)
         }
     })
 }
@@ -72,6 +74,7 @@ fn spawn_pty(
     workdir: &str,
     sandbox: Option<SandboxKind>,
     owner: ExecSessionOwner,
+    mut capture: Option<PreparedCapture>,
 ) -> Result<Arc<ExecSession>> {
     let pair = native_pty_system()
         .openpty(PtySize {
@@ -100,6 +103,9 @@ fn spawn_pty(
         .slave
         .spawn_command(builder)
         .map_err(|error| anyhow!("failed to spawn command in PTY: {error}"))?;
+    if let Some(capture) = &mut capture {
+        capture.process_started();
+    }
     let lifetime = Arc::new(PtyLifetime::new(child));
     let control = PtyControl {
         writer: Mutex::new(writer),
@@ -107,7 +113,8 @@ fn spawn_pty(
         _master: Mutex::new(pair.master),
     };
     drop(pair.slave);
-    let session = Arc::new(ExecSession::new(Box::new(control), true, sandbox, owner));
+    let session =
+        Arc::new(ExecSession::new(Box::new(control), true, sandbox, owner).with_capture(capture));
     read_output(reader, session.clone());
     let wait_session = session.clone();
     std::thread::spawn(move || {
@@ -127,7 +134,7 @@ fn spawn_pty(
         // WNOWAIT retains process identity through the existing output drain
         // budget. Cancellation/eviction can still stop actual live descendants.
         loop {
-            let closed = lock(&wait_session.output).closed;
+            let closed = lock(&wait_session.output).readers.is_closed();
             if closed || wait_session.drain_expired() {
                 break;
             }
@@ -200,6 +207,7 @@ fn spawn_pipes(
     workdir: &str,
     sandbox: Option<SandboxKind>,
     owner: ExecSessionOwner,
+    mut capture: Option<PreparedCapture>,
 ) -> Result<Arc<ExecSession>> {
     let mut command = Command::new(program);
     command
@@ -219,6 +227,9 @@ fn spawn_pipes(
     let mut child = command
         .spawn()
         .context("failed to spawn command with pipes")?;
+    if let Some(capture) = &mut capture {
+        capture.process_started();
+    }
     let stdout = child.stdout.take().expect("piped stdout");
     let stderr = child.stderr.take().expect("piped stderr");
     #[cfg(unix)]
@@ -234,7 +245,8 @@ fn spawn_pipes(
     let control = PipeControl {
         child: child.clone(),
     };
-    let session = Arc::new(ExecSession::new(Box::new(control), false, sandbox, owner));
+    let session =
+        Arc::new(ExecSession::new(Box::new(control), false, sandbox, owner).with_capture(capture));
     read_output(stdout, session.clone());
     read_output(stderr, session.clone());
     let wait_session = session.clone();
@@ -270,22 +282,13 @@ fn set_nonblocking(file: &impl std::os::fd::AsRawFd) -> io::Result<()> {
 
 fn read_output(mut reader: impl Read + Send + 'static, session: Arc<ExecSession>) {
     std::thread::spawn(move || {
-        let mut buffer = [0; 8192];
-        loop {
-            if session.drain_expired() {
-                break;
-            }
-            match reader.read(&mut buffer) {
-                Ok(0) => break,
-                Ok(size) => session.push_output(&buffer[..size]),
-                Err(error) if error.kind() == io::ErrorKind::Interrupted => continue,
-                Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
-                    std::thread::sleep(Duration::from_millis(5));
-                }
-                Err(_) => break,
-            }
-        }
-        session.mark_closed();
+        let end = super::reader::drain_output(
+            &mut reader,
+            || session.drain_expired(),
+            |chunk| session.push_output(chunk),
+            || std::thread::sleep(Duration::from_millis(5)),
+        );
+        session.mark_reader_ended(end);
     });
 }
 

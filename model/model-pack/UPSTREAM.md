@@ -64,7 +64,8 @@ Client id соответствует OAuth-приложению Codex, как в
   сохраняются, `visibility` становится `hidden`, порядок задаёт `priority`.
   Из catalog не импортируются base instructions, tools или capabilities.
   В отличие от полного Codex ModelsManager здесь только memory cache на
-  5 минут и общий deadline 30 секунд: нет disk cache, embedded model list,
+  5 минут и общий deadline 30 секунд, включая ожидание cache lock другого
+  читателя: нет disk cache, embedded model list,
   ETag merge или stale fallback при ошибке.
 - Квота читается из `/backend-api/wham/usage`. Основная группа `codex` и все
   `additional_rate_limits` сохраняют свои окна, `used_percent`, длительности в

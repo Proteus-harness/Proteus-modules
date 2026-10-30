@@ -35,6 +35,69 @@ parallel capability относятся к этой реализации и её 
 Ошибочный ToolSpec по-прежнему приводит к ошибке list; проверка schema,
 policy/approval и authority остаётся на прежних границах.
 
+## Завершение Readers В Shell Exec
+
+В `shell_tools` выход команды, остановка output readers и полнота потока —
+разные факты. У pipes два readers, у PTY один. Каждый сохраняет terminal reason:
+EOF, ошибка чтения или исчерпание exit-drain grace. Остановка всех readers
+завершает ожидание независимо от причины; ожидание также ограничено yield
+deadline и exit-drain grace. Возврат результата не доказывает полноту потока.
+Exit code, cancellation и bounded head/tail
+preview сохраняют прежнюю semantics. Этот внутренний учёт сам по себе не
+включает capture на диск и не выдаёт artifact receipt.
+
+### Явный Source Capture Для Exec
+
+Опциональный объект `source_capture` в существующем module config export
+`tool/shell_tools` включает ephemeral raw-prefix storage для `exec_command` и
+`write_stdin` (pipes и PTY). One-shot `shell` / Ptyxis не меняются. Пример:
+
+```json
+{"source_capture":{"mode":"ephemeral_file","directory":"/absolute/private/capture-dir","max_capture_bytes":8388608,"max_captures":8,"retention_seconds":300}}
+```
+
+Directory заранее выбирает/создаёт оператор; вывод может содержать secrets.
+Нет content logs, uploader или отдельного network channel. Requested ranges
+возвращаются обычным tool RPC и доступны выбранному host/model pipeline.
+Отсутствующий объект не добавляет tool, files или writer threads. Неполный /
+невалидный объект отклоняется до регистрации tools. Schema одинакова в
+standalone shell package и aggregate `shell_tools` / `reference.tools` fixture.
+
+Capture admission (quota, anonymous tempfile, writer) выполняется **до** session
+pruning и command spawn; ошибка означает, что команда не запущена. После запуска
+queue overflow / storage failure прекращают только capture: обычный drain,
+bounded preview, original exit code и cancellation остаются прежними. Raw prefix
+имеет отдельный cap; exact cap ещё не доказывает truncation, следующий observed
+byte — доказывает. Все reader EOF нужны для complete_stream: exit/drain timeout,
+read error, failed storage или saturated counter не превращаются в completeness.
+
+Результат exec содержит opaque handle независимо от session_id. Только тот же
+binding generation и frozen session/thread/workspace owner могут вызвать новый
+ReadOnly tool `read_exec_capture({handle,offset,max_bytes,format})`. Read range:
+1..65536 raw bytes (default 4096), offset default 0. `format=utf8` (default)
+строго проверяет выбранный byte range: разрезанный multibyte codepoint или binary
+data дают encoding error; `format=hex` возвращает точные bytes без потерь.
+Tool output — JSON envelope с `text` либо `bytes_hex`, `range` и полным receipt;
+metadata повторяет bounded status для typed consumers. Pending/failed тоже
+видны модели, а не скрыты только в metadata. `range_eof` относится к сохранённому
+prefix, **не** к исходному потоку. Failed capture не требует rerun команды.
+
+Хранилище только в этом worker generation: anonymous files закрываются после
+последнего владельца; restart/rebind не восстанавливает handles. TTL 1..1800 s
+считается от terminal writer state, lookup отклоняет expired handle. Cleanup lazy,
+не обещание физического удаления ровно в N секунд. In-flight read, начавшийся до
+expiry, может завершиться после неё; lease сохраняет reservation до file close.
+Weak session taps не удерживают sealed file после expiry/drop binding.
+
+Лимиты **на binding**, не на весь процесс/RSS: cap от 1 байта до 64 MiB, captures 1..16,
+произведение до 256 MiB. Queue 8×8192 bytes + writer-held и enqueue-candidate
+chunks (до 10 payloads); stack buffers/read buffers/hex/JSON escaping/envelope
+copies, small metadata, thread/allocator overhead и OS page cache — отдельно.
+Не более четырёх active range reads, один file cursor защищён на seek+read.
+Blocking OS I/O не имеет гарантии мгновенной отмены. Успешный seal означает
+readable immutable prefix, не fsync durability или гарантированный capture под
+любой нагрузкой. Количественный throughput/RAM benefit без измерений не заявлен.
+
 ## Стоимость Реализаций
 
 Эти правила относятся и к самостоятельному пакету, и к aggregate fixture:
@@ -55,6 +118,12 @@ policy/approval и authority остаётся на прежних граница
   а JSON кодируйте один раз у process/HTTP/storage writer. API, требующий строку,
   и подпись точных bytes — конкретные исключения, не повод для roundtrip
   между соседними helpers. Strict validation и wire format сохраняются.
+  В OpenAI HTTP retry одна фаза повторяет уже подготовленный request: JSON
+  body сериализуется один раз, попытки разделяют immutable bytes reqwest.
+  Encoded body живёт до конца фазы, включая backoff; drop future освобождает
+  его. После OAuth refresh начинается отдельная фаза со свежими headers.
+  Non-cloneable streaming body по-прежнему строится для каждой попытки;
+  число повторов, ошибки, backoff и принятый response/SSE не меняются.
 - Token estimates, context projections и другие derived данные обновляйте
   по изменившемуся срезу. Переиспользование prefix требует доказанного
   append-only состояния; edit/truncate/reset или смена config/revision

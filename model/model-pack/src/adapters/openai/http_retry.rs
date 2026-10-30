@@ -29,11 +29,21 @@ impl RequestRetry {
     where
         F: FnMut() -> reqwest::RequestBuilder,
     {
+        // Each phase retries one immutable request. JSON bodies are reusable
+        // reqwest bytes: keep the encoding, not another copy of the payload.
+        // Auth refresh remains outside this phase. Streaming bodies cannot be
+        // cloned and keep the existing per-attempt builder path.
+        let mut next = build();
+        let template = if self.max_retries > 0 {
+            next.try_clone()
+        } else {
+            None
+        };
         let mut attempt = 0;
         loop {
             // Building is not a transport operation. Invalid URL/headers/body
             // must fail immediately, before entering the network retry path.
-            let (client, request) = build().build_split();
+            let (client, request) = next.build_split();
             let response = client.execute(request?).await;
             let retryable = match &response {
                 Ok(response) => response.status().is_server_error(),
@@ -49,6 +59,10 @@ impl RequestRetry {
             // The caller owns the model deadline and cancellation. Dropping
             // this future cancels both the request and this backoff sleep.
             tokio::time::sleep(backoff(attempt)).await;
+            next = template
+                .as_ref()
+                .and_then(reqwest::RequestBuilder::try_clone)
+                .unwrap_or_else(&mut build);
         }
     }
 }

@@ -59,13 +59,15 @@ impl OpenAiResponsesClient {
         let Some(auth) = &self.codex_auth else {
             return Ok(None);
         };
-        let mut cache = self.catalog_cache.lock().await;
-        if let Some((fetched, catalog)) = &*cache {
-            if fetched.elapsed() < CACHE_TTL {
-                return Ok(Some(catalog.clone()));
+        tokio::time::timeout(Duration::from_secs(30), async {
+            // The caller's total budget includes coalescing behind another
+            // reader, not only the HTTP request after acquiring the cache.
+            let mut cache = self.catalog_cache.lock().await;
+            if let Some((fetched, catalog)) = &*cache {
+                if fetched.elapsed() < CACHE_TTL {
+                    return Ok(Some(catalog.clone()));
+                }
             }
-        }
-        let catalog = tokio::time::timeout(Duration::from_secs(30), async {
             let mut access = auth.access(None).await?;
             let version = self.catalog_client_version();
             for attempt in 0..2 {
@@ -110,13 +112,12 @@ impl OpenAiResponsesClient {
                         .collect(),
                 };
                 catalog.validate().map_err(anyhow::Error::msg)?;
-                return Ok(catalog);
+                *cache = Some((Instant::now(), catalog.clone()));
+                return Ok(Some(catalog));
             }
             unreachable!()
         })
         .await
-        .context("ChatGPT model catalog timed out")??;
-        *cache = Some((Instant::now(), catalog.clone()));
-        Ok(Some(catalog))
+        .context("ChatGPT model catalog timed out")?
     }
 }

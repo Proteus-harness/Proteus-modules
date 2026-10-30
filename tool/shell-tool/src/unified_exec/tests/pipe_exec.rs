@@ -160,7 +160,7 @@ fn long_empty_poll_returns_final_stdout_and_stderr_once() {
                     let call = json!({"id": "poll", "name": "write_stdin", "args": {
                         "session_id": id, "yield_time_ms": 300000
                     }});
-                    write_stdin_impl(&call.to_string(), &context_json, &mut host)
+                    write_stdin_impl(&call.to_string(), &context_json, None, &mut host)
                 })
             })
             .collect::<Vec<_>>();
@@ -308,6 +308,7 @@ fn cancel_poll_kills_process_group(tty: bool) {
         write_stdin_impl(
             &call.to_string(),
             &serde_json::to_string(&context).unwrap(),
+            None,
             host,
         )
     })

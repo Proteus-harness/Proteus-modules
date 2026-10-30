@@ -4,6 +4,6 @@ fn main() {
         env!("CARGO_PKG_VERSION"),
         include_str!("../exports.json"),
         |registry, _binding| Ok(shell_tool::register_modules(registry)?),
-        |_binding| Some(Default::default()),
+        |_binding| Some(shell_tool::config_schema()),
     );
 }

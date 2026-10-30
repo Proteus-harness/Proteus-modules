@@ -10,6 +10,70 @@ fn remote_model(id: &str, priority: i64, hidden: bool, efforts: &[&str]) -> Valu
         "base_instructions": "must not enter the canonical catalog"})
 }
 
+#[tokio::test(start_paused = true)]
+async fn catalog_deadline_includes_waiting_for_another_reader() {
+    use std::time::Duration;
+
+    let root = tempfile::tempdir().unwrap();
+    // No credentials are created or read: the held cache prevents auth/HTTP.
+    let client = OpenAiResponsesClient::from_codex_config(json!({
+        "auth_file": root.path().join("unused.json"),
+        "base_url": "http://127.0.0.1:1"
+    }))
+    .unwrap();
+    let guard = client.catalog_cache.lock().await;
+    let started = tokio::time::Instant::now();
+    let error = tokio::time::timeout(Duration::from_secs(31), client.catalog())
+        .await
+        .expect("catalog must enforce its own deadline while waiting for the lock")
+        .unwrap_err();
+    assert_eq!(error.to_string(), "ChatGPT model catalog timed out");
+    assert_eq!(started.elapsed(), Duration::from_secs(30));
+    assert!(guard.is_none());
+}
+
+#[tokio::test(start_paused = true)]
+async fn catalog_waiter_uses_the_leaders_cache_within_its_budget() {
+    use proteus_contracts::contracts::ModelCatalog;
+    use std::time::{Duration, Instant};
+
+    let root = tempfile::tempdir().unwrap();
+    let client = OpenAiResponsesClient::from_codex_config(json!({
+        "auth_file": root.path().join("unused.json"),
+        "base_url": "http://127.0.0.1:1"
+    }))
+    .unwrap();
+    let mut guard = client.catalog_cache.lock().await;
+    let mut lookup = Box::pin(client.catalog());
+    assert!(futures_util::poll!(&mut lookup).is_pending());
+    tokio::time::advance(Duration::from_secs(29)).await;
+    let catalog = ModelCatalog { models: vec![] };
+    *guard = Some((Instant::now(), catalog.clone()));
+    drop(guard);
+    assert_eq!(lookup.await.unwrap(), Some(catalog));
+}
+
+#[tokio::test(start_paused = true)]
+async fn dropping_a_catalog_waiter_leaves_the_cache_usable() {
+    use proteus_contracts::contracts::ModelCatalog;
+    use std::time::Instant;
+
+    let root = tempfile::tempdir().unwrap();
+    let client = OpenAiResponsesClient::from_codex_config(json!({
+        "auth_file": root.path().join("unused.json"),
+        "base_url": "http://127.0.0.1:1"
+    }))
+    .unwrap();
+    let mut guard = client.catalog_cache.lock().await;
+    let mut lookup = Box::pin(client.catalog());
+    assert!(futures_util::poll!(&mut lookup).is_pending());
+    drop(lookup);
+    let catalog = ModelCatalog { models: vec![] };
+    *guard = Some((Instant::now(), catalog.clone()));
+    drop(guard);
+    assert_eq!(client.catalog().await.unwrap(), Some(catalog));
+}
+
 #[tokio::test]
 async fn catalog_fetches_all_models_and_per_model_efforts_with_oauth_and_shared_cache() {
     let root = tempfile::tempdir().unwrap();

@@ -1,4 +1,6 @@
 //! Session ownership, storage and lifetime.
+use super::capture::{CaptureTap, PreparedCapture};
+use super::reader::{ReaderCompletions, ReaderEnd};
 use super::{
     CANCELLATION_POLL_INTERVAL, EXIT_DRAIN_GRACE, MAX_SESSIONS, SESSION_BUFFER_LIMIT,
     SESSION_JANITOR_INTERVAL, SESSION_MAX_IDLE, ensure_not_cancelled,
@@ -20,9 +22,8 @@ use std::{
 pub(super) struct SessionOutput {
     pub(super) buffer: Vec<u8>,
     pub(super) dropped_bytes: usize,
-    /// All output readers reached EOF.
-    pub(super) closed: bool,
-    readers: usize,
+    /// Reader termination facts; closed readers may have failed or timed out.
+    pub(super) readers: ReaderCompletions,
     pub(super) exited: bool,
     pub(super) exit_code: Option<i32>,
     exited_at: Option<Instant>,
@@ -37,6 +38,7 @@ pub(super) struct ExecSession {
     pub(super) tty: bool,
     pub(super) sandbox: Option<SandboxKind>,
     pub(super) owner: ExecSessionOwner,
+    pub(super) capture: Option<CaptureTap>,
     /// Для LRU-prune: обновляется при каждом обращении к сессии.
     pub(super) last_used: Mutex<Instant>,
 }
@@ -57,6 +59,9 @@ enum ExecSessionPrincipal {
 }
 
 impl ExecSessionOwner {
+    pub(super) fn workspace_bytes(&self) -> usize {
+        self.workspace.as_os_str().as_encoded_bytes().len()
+    }
     pub(super) fn from_context(
         context: &ToolModuleInvocationContext,
         canonical_workspace: &str,
@@ -106,8 +111,7 @@ impl ExecSession {
             output: Mutex::new(SessionOutput {
                 buffer: Vec::new(),
                 dropped_bytes: 0,
-                closed: false,
-                readers: if tty { 1 } else { 2 },
+                readers: ReaderCompletions::new(tty),
                 exited: false,
                 exit_code: None,
                 exited_at: None,
@@ -117,12 +121,18 @@ impl ExecSession {
             tty,
             sandbox,
             owner,
+            capture: None,
             last_used: Mutex::new(Instant::now()),
         }
     }
 
     pub(super) fn touch(&self) {
         *lock(&self.last_used) = Instant::now();
+    }
+
+    pub(super) fn with_capture(mut self, capture: Option<PreparedCapture>) -> Self {
+        self.capture = capture.map(PreparedCapture::attach);
+        self
     }
 
     pub(super) fn lock_interaction(
@@ -150,6 +160,9 @@ impl ExecSession {
 
     pub(super) fn push_output(&self, chunk: &[u8]) {
         let mut output = lock(&self.output);
+        if let Some(capture) = &self.capture {
+            capture.observe(chunk);
+        }
         output.buffer.extend_from_slice(chunk);
         if output.buffer.len() > SESSION_BUFFER_LIMIT {
             let excess = output.buffer.len() - SESSION_BUFFER_LIMIT;
@@ -161,10 +174,12 @@ impl ExecSession {
         self.output_cond.notify_all();
     }
 
-    pub(super) fn mark_closed(&self) {
+    pub(super) fn mark_reader_ended(&self, end: ReaderEnd) {
         let mut output = lock(&self.output);
-        output.readers -= 1;
-        output.closed = output.readers == 0;
+        output.readers.record(end);
+        if let Some(capture) = &self.capture {
+            capture.ended(end);
+        }
         drop(output);
         self.output_cond.notify_all();
     }

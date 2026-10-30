@@ -52,7 +52,7 @@ fn exec_command_with_context(context: &ToolModuleInvocationContext, mut args: Va
     let call = json!({ "id": "call_exec", "name": "exec_command", "args": args });
     let context_json = serde_json::to_string(context).expect("context json");
     let result = with_host(Arc::new(AtomicBool::new(false)), |host| {
-        exec_command_impl(&call.to_string(), &context_json, host)
+        exec_command_impl(&call.to_string(), &context_json, None, host)
     })
     .expect("invoke");
     serde_json::from_str(&result).expect("tool result")
@@ -66,7 +66,7 @@ fn write_stdin_result(context: &ToolModuleInvocationContext, args: Value) -> Res
     let call = json!({ "id": "call_stdin", "name": "write_stdin", "args": args });
     let context_json = serde_json::to_string(context).expect("context json");
     with_host(Arc::new(AtomicBool::new(false)), |host| {
-        write_stdin_impl(&call.to_string(), &context_json, host)
+        write_stdin_impl(&call.to_string(), &context_json, None, host)
     })
 }
 
@@ -312,7 +312,7 @@ fn cancellation_kills_and_removes_interactive_session() {
 
     let started = Instant::now();
     let error = with_host(cancelled, |host| {
-        exec_command_impl(&call.to_string(), &context_json, host)
+        exec_command_impl(&call.to_string(), &context_json, None, host)
     })
     .expect_err("cancelled invocation must fail");
     canceller.join().expect("canceller");
@@ -362,7 +362,7 @@ fn exec_command_requires_cmd_arg() {
         serde_json::to_string(&invocation_context(dir.path())).expect("context json");
 
     let error = with_host(Arc::new(AtomicBool::new(false)), |host| {
-        exec_command_impl(&call.to_string(), &context_json, host)
+        exec_command_impl(&call.to_string(), &context_json, None, host)
     })
     .expect_err("missing cmd must error");
 
@@ -384,6 +384,7 @@ fn exec_command_fails_closed_without_bwrap() {
             &context,
             false,
             SandboxPolicy::unavailable_for_test(),
+            None,
             host,
         )
     })
@@ -406,7 +407,7 @@ fn exec_command_rejects_external_workdir_without_escalation() {
         serde_json::to_string(&invocation_context(workspace.path())).expect("context json");
 
     let error = with_host(Arc::new(AtomicBool::new(false)), |host| {
-        exec_command_impl(&call.to_string(), &context_json, host)
+        exec_command_impl(&call.to_string(), &context_json, None, host)
     })
     .expect_err("external workdir must require escalation");
 

@@ -29,6 +29,7 @@ use proteus_contracts::{
 };
 use serde_json::{Value, json};
 
+mod capture_config;
 #[cfg(unix)]
 mod child_status;
 mod execution;
@@ -36,6 +37,8 @@ mod ptyxis;
 mod result;
 mod sandbox;
 mod unified_exec;
+
+pub use capture_config::config_schema;
 
 #[cfg(test)]
 use execution::BoundedBuffer;
@@ -291,14 +294,26 @@ fn spawn_shell(
 }
 
 pub fn register_modules(registry: &mut dyn ModuleRegistry) -> Result<(), ProcessModuleError> {
+    // Parse the sole existing bound config path before registering any tools.
+    let capture = capture_config::CaptureConfig::parse(registry.module_config())
+        .map_err(|error| ProcessModuleError::new(format!("{error:#}")))?
+        .map(unified_exec::CaptureStore::new);
     let tool: ToolModuleObject = Box::new(ShellTool);
     registry.register_tool(tool)?;
 
-    let exec: ToolModuleObject = Box::new(unified_exec::ExecCommandTool);
+    let exec: ToolModuleObject = Box::new(unified_exec::ExecCommandTool {
+        capture: capture.clone(),
+    });
     registry.register_tool(exec)?;
 
-    let stdin: ToolModuleObject = Box::new(unified_exec::WriteStdinTool);
-    registry.register_tool(stdin)
+    let stdin: ToolModuleObject = Box::new(unified_exec::WriteStdinTool {
+        capture: capture.clone(),
+    });
+    registry.register_tool(stdin)?;
+    if let Some(store) = capture {
+        registry.register_tool(Box::new(unified_exec::ReadCaptureTool(store)))?;
+    }
+    Ok(())
 }
 
 #[cfg(test)]

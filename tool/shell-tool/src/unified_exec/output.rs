@@ -37,7 +37,7 @@ pub(super) fn wait_and_collect(
         }
         if output.exited {
             let seen = *exit_seen_at.get_or_insert_with(Instant::now);
-            if output.closed || seen.elapsed() >= EXIT_DRAIN_GRACE {
+            if output.readers.is_closed() || seen.elapsed() >= EXIT_DRAIN_GRACE {
                 break;
             }
         }
@@ -106,6 +106,12 @@ pub(super) fn render_result(
             "[{} bytes from the middle of output were dropped from the session buffer]",
             collected.dropped_bytes
         ));
+    }
+    if let Some(capture) = metadata.get("source_capture") {
+        sections.push(format!("Source capture: {} (state={}, complete_stream={}); use read_exec_capture to inspect status or read a sealed retained prefix. This is independent of the command exit code.",
+            capture["handle"].as_str().unwrap_or("unavailable"),
+            capture["storage_state"].as_str().unwrap_or("unknown"),
+            capture["complete_stream"].as_bool().unwrap_or(false)));
     }
     sections.push(format!("Output:\n{text}"));
 

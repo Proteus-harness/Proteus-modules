@@ -14,6 +14,7 @@ pub(crate) fn describe(slot: &str, id: &str, config: &Value) -> Option<ModuleCon
         "tool" | "context_provider" if id == "sqlite_memory" => sqlite_memory::config_schema(),
         "tool" | "context_provider" if id == "rg_search" => ModuleConfigSchema::default(),
         "tool" if id == "codex_patch" => codex_patch::config_schema(),
+        "tool" if matches!(id, "shell_tools" | "reference.tools") => shell_tool::config_schema(),
         // These packs read no module config.
         "tool"
             if matches!(
@@ -23,10 +24,8 @@ pub(crate) fn describe(slot: &str, id: &str, config: &Value) -> Option<ModuleCon
                     | "plan_tool"
                     | "policy_tools"
                     | "rust_lsp"
-                    | "shell_tools"
                     | "skill_tool"
                     | "direct_patch"
-                    | "reference.tools"
             ) =>
         {
             ModuleConfigSchema::default()
@@ -34,4 +33,24 @@ pub(crate) fn describe(slot: &str, id: &str, config: &Value) -> Option<ModuleCon
         "context_provider" if id == "skills" => ModuleConfigSchema::default(),
         _ => return None,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn standalone_shell_and_aggregate_reference_advertise_one_canonical_schema() {
+        let expected = shell_tool::config_schema();
+        expected.validate().unwrap();
+        for id in ["shell_tools", "reference.tools"] {
+            assert_eq!(
+                describe("tool", id, &serde_json::json!({})),
+                Some(expected.clone())
+            );
+        }
+        assert_eq!(
+            describe("tool", "file_tools", &serde_json::json!({})),
+            Some(ModuleConfigSchema::default())
+        );
+    }
 }

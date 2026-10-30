@@ -1,13 +1,17 @@
 //! Model-visible terminal specifications and process tool entrypoints.
+use super::CaptureStore;
 use super::{EXEC_SPEC_TIMEOUT_MS, WRITE_SPEC_TIMEOUT_MS, exec_command_impl, write_stdin_impl};
 use proteus_contracts::process_module::{ProcessModuleError, ToolModule, ToolModuleHostMut};
 use serde_json::json;
+use std::sync::Arc;
 
-pub(crate) struct ExecCommandTool;
+pub(crate) struct ExecCommandTool {
+    pub(crate) capture: Option<Arc<CaptureStore>>,
+}
 
 impl ToolModule for ExecCommandTool {
     fn spec_json(&self) -> String {
-        let spec = json!({
+        let mut spec = json!({
             "name": "exec_command",
             "description": "Runs a shell command (sh -lc) with closed stdin and stdout/stderr pipes by default. Set `tty: true` for a PTY with interactive stdin. Waits up to `yield_time_ms` for output; if the process is still running, returns a Session ID for follow-up interaction via `write_stdin`. Non-escalated commands require bwrap and run with no network access, a private PID namespace, and a read-only filesystem outside the workspace; execution fails closed when bwrap is unavailable or disabled. The sandbox network is isolated per session: a localhost server started in a sandboxed session is unreachable from other tool calls and from the user's machine; start servers that must stay reachable with `with_escalated_permissions: true`. Set `with_escalated_permissions: true` with a short `justification` to request an unsandboxed run (requires user approval). Non-escalated workdirs must stay inside the workspace. Live sessions belong to the current runtime session/thread/workspace, expire after 30 minutes idle, and are killed when the invocation is cancelled. At most 16 live sessions: the least recently used one is killed to make room, so close finished sessions via write_stdin (Ctrl-C/Ctrl-D). Safety: RunsCommands.",
             "input_schema": {
@@ -48,6 +52,10 @@ impl ToolModule for ExecCommandTool {
                 "aliases": ["interactive shell", "repl", "long-running command"]
             }
         });
+        if self.capture.is_some() {
+            let description = spec["description"].as_str().unwrap().to_owned();
+            spec["description"] = format!("{description} This binding explicitly retains a bounded raw output prefix in ephemeral local storage. Capture admission failure prevents command launch. After launch, capture overflow or storage failure does not change the command's outcome. Results include a source capture handle for read_exec_capture; incomplete streams are never declared complete.").into();
+        }
         spec.to_string()
     }
 
@@ -57,14 +65,21 @@ impl ToolModule for ExecCommandTool {
         context_json: String,
         host: &mut ToolModuleHostMut<'_>,
     ) -> Result<String, ProcessModuleError> {
-        match exec_command_impl(call_json.as_str(), context_json.as_str(), host) {
+        match exec_command_impl(
+            call_json.as_str(),
+            context_json.as_str(),
+            self.capture.as_ref(),
+            host,
+        ) {
             Ok(result_json) => Ok(result_json),
             Err(error) => Err(ProcessModuleError::new(format!("{error:#}"))),
         }
     }
 }
 
-pub(crate) struct WriteStdinTool;
+pub(crate) struct WriteStdinTool {
+    pub(crate) capture: Option<Arc<CaptureStore>>,
+}
 
 impl ToolModule for WriteStdinTool {
     fn spec_json(&self) -> String {
@@ -112,7 +127,12 @@ impl ToolModule for WriteStdinTool {
         context_json: String,
         host: &mut ToolModuleHostMut<'_>,
     ) -> Result<String, ProcessModuleError> {
-        match write_stdin_impl(call_json.as_str(), context_json.as_str(), host) {
+        match write_stdin_impl(
+            call_json.as_str(),
+            context_json.as_str(),
+            self.capture.as_ref(),
+            host,
+        ) {
             Ok(result_json) => Ok(result_json),
             Err(error) => Err(ProcessModuleError::new(format!("{error:#}"))),
         }
