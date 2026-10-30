@@ -4,7 +4,7 @@ mod discovery;
 
 use std::path::Path;
 
-use discovery::{SkillDocument, discover_skills};
+use discovery::{BodyMode, SkillDocument, discover_skills};
 use proteus_contracts::{
     contracts::{ProcessContextProviderRequest, ProcessSkillCatalogInput},
     domain::{ContextChunk, SkillCatalog, SkillDescriptor, SkillRuntimeSettings},
@@ -40,7 +40,7 @@ impl ContextProviderModule for SkillsContextProvider {
                 input.provider_id
             )));
         }
-        let skills = match discover_skills(&input.task.cwd, &request.skills) {
+        let skills = match discover_skills(&input.task.cwd, &request.skills, BodyMode::Omit) {
             Ok((skills, _)) => skills
                 .into_iter()
                 .filter(|skill| skill.enabled)
@@ -60,8 +60,8 @@ impl ContextProviderModule for SkillsContextProvider {
         &self,
         input: ProcessSkillCatalogInput,
     ) -> Result<Option<SkillCatalog>, ProcessModuleError> {
-        let (skills, warnings) =
-            discover_skills(&input.cwd, &input.skills).map_err(ProcessModuleError::new)?;
+        let (skills, warnings) = discover_skills(&input.cwd, &input.skills, BodyMode::Omit)
+            .map_err(ProcessModuleError::new)?;
         Ok(Some(SkillCatalog {
             skills: skills
                 .into_iter()
@@ -161,7 +161,7 @@ fn invoke_skill(call: &ToolCallDto, cwd: &Path, settings: &SkillRuntimeSettings)
         Ok(args) => args,
         Err(error) => return tool_error(&call.id, format!("invalid skill arguments: {error}")),
     };
-    let skills = match discover_skills(cwd, settings) {
+    let skills = match discover_skills(cwd, settings, BodyMode::Include) {
         Ok((skills, _)) => skills,
         Err(error) => return tool_error(&call.id, error),
     };

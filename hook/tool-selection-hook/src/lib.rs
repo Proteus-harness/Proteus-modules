@@ -3,7 +3,10 @@
 //! This stable hot-set and optional intent-ranking strategy is not upstream
 //! Codex parity. It only narrows the preceding policy-visible tools.
 
-use std::collections::{HashMap, HashSet};
+use std::{
+    collections::{HashMap, HashSet},
+    io::{self, Write},
+};
 
 use proteus_contracts::{
     contracts::{HookEvent, HookInput, HookResponse, ToolSelectionInput, ToolSelectionOutput},
@@ -355,9 +358,34 @@ fn tool_query(input: &ToolSelectionInput) -> String {
 fn estimate_tool_schema_tokens(tools: &[ToolSpec]) -> usize {
     tools
         .iter()
-        .filter_map(|tool| serde_json::to_string(tool).ok())
-        .map(|tool| tool.len() / 4)
+        .filter_map(|tool| serialized_json_len(tool).ok())
+        .map(|bytes| bytes / 4)
         .sum()
+}
+
+fn serialized_json_len(value: &impl serde::Serialize) -> serde_json::Result<usize> {
+    let mut counter = JsonByteCounter(0);
+    serde_json::to_writer(&mut counter, value)?;
+    Ok(counter.0)
+}
+
+struct JsonByteCounter(usize);
+
+impl Write for JsonByteCounter {
+    fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+        // Match the representable length of to_string's Vec<u8>, not a
+        // saturating estimate or a serialization error that would be skipped.
+        self.0 = self
+            .0
+            .checked_add(bytes.len())
+            .filter(|length| *length <= isize::MAX as usize)
+            .expect("capacity overflow");
+        Ok(bytes.len())
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        Ok(())
+    }
 }
 
 fn tokenize(value: &str) -> HashSet<String> {

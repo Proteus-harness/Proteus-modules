@@ -192,3 +192,55 @@ fn detached_acknowledgement_does_not_replace_full_initial_history_with_partial_p
     assert_eq!(turn.persistent_messages, before);
     assert_eq!(turn.model_messages, before);
 }
+
+#[test]
+fn root_acknowledgement_moves_context_from_removed_anchor_without_rewriting_its_payload() {
+    let mut input = workflow_input("continue");
+    let removed = CanonicalMessage::text(MessageRole::User, "removed history");
+    input.history.insert(0, removed.clone());
+    let current = input.history.last().unwrap().clone();
+    let mut host = FakeHost::default();
+    let mut turn = TurnScaffold::begin_without_context(&mut host, &input).unwrap();
+    let make_context = |text| {
+        CanonicalMessage::new(
+            MessageRole::User,
+            vec![ContentPart::Context {
+                chunk: proteus_contracts::domain::ContextChunk::new("fixture", text),
+            }],
+        )
+    };
+    let before_removed = make_context("before removed");
+    let before_current = make_context("before current");
+    let trailing = make_context("trailing");
+    let progress = CanonicalMessage::text(MessageRole::Assistant, "accepted progress");
+    turn.model_messages = vec![
+        before_removed.clone(),
+        removed,
+        before_current.clone(),
+        current.clone(),
+        progress.clone(),
+        trailing.clone(),
+    ];
+    turn.persistent_messages.push(progress.clone());
+    let steering = CanonicalMessage::text(MessageRole::User, "new steering");
+    let accepted = vec![current.clone(), progress.clone(), steering.clone()];
+    *host.checkpoint_ack.lock().unwrap() = Some(WorkflowCheckpointAck {
+        history: WorkflowHistoryUpdate::new(vec![progress.clone(), steering.clone()])
+            .with_history_replacement(vec![current.clone()]),
+        messages: accepted.clone(),
+        revision: Some(2),
+    });
+    turn.checkpoint(&host, &[]).unwrap();
+    assert_eq!(turn.persistent_messages, accepted);
+    assert_eq!(
+        turn.model_messages,
+        vec![
+            before_removed,
+            before_current,
+            current,
+            progress,
+            steering,
+            trailing,
+        ]
+    );
+}

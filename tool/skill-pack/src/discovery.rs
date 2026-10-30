@@ -12,6 +12,12 @@ const MAX_SKILL_FILE_BYTES: u64 = 256 * 1024;
 const MAX_SKILLS: usize = 128;
 const MAX_DESCRIPTION_CHARACTERS: usize = 1024;
 
+#[derive(Clone, Copy)]
+pub(crate) enum BodyMode {
+    Omit,
+    Include,
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum SkillSource {
     User,
@@ -56,10 +62,11 @@ struct SkillFrontmatter {
 pub(crate) fn discover_skills(
     cwd: &Path,
     settings: &SkillRuntimeSettings,
+    body_mode: BodyMode,
 ) -> Result<(Vec<SkillDocument>, Vec<String>), String> {
     let project_root = workspace_root(cwd).join(".proteus/skills");
     let user_root = user_skills_root();
-    let mut skills = discover_from_roots(user_root.as_deref(), &project_root)?;
+    let mut skills = discover_from_roots(user_root.as_deref(), &project_root, body_mode)?;
     let mut warnings = Vec::new();
     for package in &settings.packages {
         let root = package.root.join("skills");
@@ -89,7 +96,7 @@ pub(crate) fn discover_skills(
                     .file_name()
                     .and_then(|name| name.to_str())
                     .ok_or_else(|| "skill directory name is not UTF-8".to_string())?;
-                let mut skill = parse_skill_file(&path, name, SkillSource::Plugin)?;
+                let mut skill = parse_skill_file(&path, name, SkillSource::Plugin, body_mode)?;
                 skill.id = format!("{}:{}", package.id, skill.name);
                 skill.enabled = package.enabled;
                 Ok(Some(skill))
@@ -128,12 +135,19 @@ fn workspace_root(cwd: &Path) -> PathBuf {
 pub(crate) fn discover_from_roots(
     user_root: Option<&Path>,
     project_root: &Path,
+    body_mode: BodyMode,
 ) -> Result<Vec<SkillDocument>, String> {
     let mut skills = BTreeMap::new();
     if let Some(root) = user_root {
-        insert_root(&mut skills, root, SkillSource::User, false)?;
+        insert_root(&mut skills, root, SkillSource::User, false, body_mode)?;
     }
-    insert_root(&mut skills, project_root, SkillSource::Project, true)?;
+    insert_root(
+        &mut skills,
+        project_root,
+        SkillSource::Project,
+        true,
+        body_mode,
+    )?;
     if skills.len() > MAX_SKILLS {
         return Err(format!(
             "skill discovery found {} skills; maximum is {MAX_SKILLS}",
@@ -148,6 +162,7 @@ fn insert_root(
     root: &Path,
     source: SkillSource,
     replace_existing: bool,
+    body_mode: BodyMode,
 ) -> Result<(), String> {
     let entries = match fs::read_dir(root) {
         Ok(entries) => entries,
@@ -197,7 +212,7 @@ fn insert_root(
             .file_name()
             .and_then(|name| name.to_str())
             .ok_or_else(|| format!("skill directory name is not UTF-8: {}", directory.display()))?;
-        let document = parse_skill_file(&canonical_path, directory_name, source)?;
+        let document = parse_skill_file(&canonical_path, directory_name, source, body_mode)?;
         if let Some(previous) = root_names.insert(document.name.clone(), canonical_path.clone()) {
             return Err(format!(
                 "duplicate skill name '{}' in {} and {}",
@@ -217,6 +232,7 @@ fn parse_skill_file(
     path: &Path,
     directory_name: &str,
     source: SkillSource,
+    body_mode: BodyMode,
 ) -> Result<SkillDocument, String> {
     let mut file = fs::File::open(path)
         .map_err(|error| format!("failed to open {}: {error}", path.display()))?;
@@ -266,7 +282,12 @@ fn parse_skill_file(
             path.display()
         ));
     }
-    let body = body.trim().to_owned();
+    // Metadata callers still read and validate the entire file on every request.
+    // Only the unused owned body is omitted; size/UTF-8 errors remain observable.
+    let body = match body_mode {
+        BodyMode::Omit => String::new(),
+        BodyMode::Include => body.trim().to_owned(),
+    };
     Ok(SkillDocument {
         id: frontmatter.name.clone(),
         enabled: true,
@@ -348,7 +369,8 @@ mod tests {
         write_skill(project.path(), "review", "project review", "project body");
         write_skill(user.path(), "testing", "testing help", "testing body");
 
-        let skills = discover_from_roots(Some(user.path()), project.path()).expect("skills");
+        let skills = discover_from_roots(Some(user.path()), project.path(), BodyMode::Include)
+            .expect("skills");
 
         assert_eq!(skills.len(), 2);
         assert_eq!(skills[0].name, "review");
@@ -367,7 +389,7 @@ mod tests {
             "Use cargo test.",
         );
 
-        let skills = discover_from_roots(None, root.path()).expect("skills");
+        let skills = discover_from_roots(None, root.path(), BodyMode::Include).expect("skills");
 
         assert_eq!(skills[0].description, "Run Rust checks");
         assert_eq!(skills[0].body, "Use cargo test.");
@@ -384,8 +406,96 @@ mod tests {
         )
         .expect("skill");
 
-        let error = discover_from_roots(None, root.path()).expect_err("mismatch must fail");
+        let error = discover_from_roots(None, root.path(), BodyMode::Include)
+            .expect_err("mismatch must fail");
 
         assert!(error.contains("must match directory"), "{error}");
+    }
+
+    #[test]
+    fn metadata_discovery_preserves_precedence_order_and_freshness_without_bodies() {
+        let user = tempfile::tempdir().expect("user root");
+        let project = tempfile::tempdir().expect("project root");
+        write_skill(user.path(), "review", "user review", "user body");
+        write_skill(user.path(), "testing", "testing help", "testing body");
+        write_skill(
+            project.path(),
+            "review",
+            "project review",
+            "\u{2003} Review. \u{2003}",
+        );
+
+        let mut full = discover_from_roots(Some(user.path()), project.path(), BodyMode::Include)
+            .expect("full skills");
+        let metadata = discover_from_roots(Some(user.path()), project.path(), BodyMode::Omit)
+            .expect("metadata skills");
+        assert_eq!(full[0].body, "Review.");
+        assert_eq!(full[0].source, SkillSource::Project);
+        assert_eq!(full[1].name, "testing");
+        for skill in &mut full {
+            skill.body.clear();
+        }
+        assert_eq!(metadata, full);
+
+        write_skill(project.path(), "review", "changed review", "changed body");
+        let changed = discover_from_roots(Some(user.path()), project.path(), BodyMode::Omit)
+            .expect("fresh metadata");
+        assert_eq!(changed[0].description, "changed review");
+        assert!(changed[0].body.is_empty());
+        let loaded = discover_from_roots(Some(user.path()), project.path(), BodyMode::Include)
+            .expect("fresh bodies");
+        assert_eq!(loaded[0].body, "changed body");
+    }
+
+    #[test]
+    fn metadata_mode_preserves_full_file_validation_errors() {
+        let root = tempfile::tempdir().expect("root");
+        let path = root.path().join("SKILL.md");
+        let valid_header = "---\nname: review\ndescription: Review\n---\n";
+        let mut invalid_utf8 = valid_header.as_bytes().to_vec();
+        invalid_utf8.push(0xff);
+        let mut oversized = valid_header.as_bytes().to_vec();
+        oversized.resize(MAX_SKILL_FILE_BYTES as usize + 1, b'x');
+        let cases = [
+            (invalid_utf8, "not UTF-8"),
+            (oversized, "exceeds"),
+            (b"---\nname: [\n---\nBody".to_vec(), "invalid YAML"),
+            (b"---\nname: review\n".to_vec(), "missing closing"),
+            (
+                b"---\nname: other\ndescription: Review\n---\nBody".to_vec(),
+                "must match directory",
+            ),
+            (
+                b"---\nname: review\ndescription: ''\n---\nBody".to_vec(),
+                "must not be empty",
+            ),
+        ];
+        for (bytes, expected) in cases {
+            fs::write(&path, bytes).expect("skill bytes");
+            let full = parse_skill_file(&path, "review", SkillSource::Project, BodyMode::Include)
+                .expect_err("full mode rejects invalid file");
+            let metadata = parse_skill_file(&path, "review", SkillSource::Project, BodyMode::Omit)
+                .expect_err("metadata mode rejects invalid file");
+            assert!(full.contains(expected), "{full}");
+            assert_eq!(metadata, full);
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn metadata_mode_keeps_root_containment_checks() {
+        let root = tempfile::tempdir().expect("root");
+        let outside = tempfile::tempdir().expect("outside root");
+        write_skill(outside.path(), "review", "outside review", "outside body");
+        std::os::unix::fs::symlink(outside.path().join("review"), root.path().join("review"))
+            .expect("skill symlink");
+
+        let full = discover_from_roots(None, root.path(), BodyMode::Include)
+            .expect_err("full mode rejects escape");
+        let metadata = discover_from_roots(None, root.path(), BodyMode::Omit)
+            .expect_err("metadata mode rejects escape");
+
+        assert!(full.contains("escapes its project root"), "{full}");
+        assert_eq!(metadata, full);
     }
 }

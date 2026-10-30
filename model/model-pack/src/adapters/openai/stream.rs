@@ -4,6 +4,9 @@ use super::errors::{failure_from_sse_error, failure_from_sse_failed};
 use super::response::{from_openai_response, from_openai_response_with_ids};
 use crate::model_standard::{ModelFailure, ModelStreamEvent};
 
+#[cfg(test)]
+mod tests;
+
 /// Трансляция одного SSE event'а от OpenAI Responses API в наши
 /// `ModelStreamEvent`. Вариантов много; всё что не распознали —
 /// игнорируем (возвращаем пустой вектор), это безопасно потому что
@@ -113,7 +116,7 @@ pub(super) fn translate_non_message_event(
 pub(super) fn finalize_completed_event(
     parsed: Value,
     fallback_items: &[Value],
-    streamed_items: &[Value],
+    streamed_items: impl FnOnce() -> Vec<Value>,
     ids: &std::collections::HashMap<String, crate::domain::MessageId>,
 ) -> Vec<ModelStreamEvent> {
     let mut response_value = parsed.get("response").cloned().unwrap_or(parsed);
@@ -126,7 +129,10 @@ pub(super) fn finalize_completed_event(
         output.extend_from_slice(fallback_items);
     }
     if !has_emittable_text_or_tool_call(&output) {
-        for streamed in streamed_items {
+        // Reconstruct deltas only when terminal output and completed items
+        // cannot supply emittable text or a tool call.
+        let streamed_items = streamed_items();
+        for streamed in &streamed_items {
             if let Some(existing) = output
                 .iter_mut()
                 .find(|item| item.get("id").is_some() && item.get("id") == streamed.get("id"))

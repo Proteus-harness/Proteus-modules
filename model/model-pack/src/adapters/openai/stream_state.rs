@@ -140,14 +140,16 @@ impl OpenAiStreamState {
                 }]
             }
             "response.completed" => {
-                let streamed_items = self.streamed_items.values().map(|(key, parts)| json!({
+                let streamed_items = || {
+                    self.streamed_items.values().map(|(key, parts)| json!({
                     "id": key, "type": "message", "role": "assistant",
                     "phase": self.phases.get(key).copied().flatten(),
                     "content": parts.values().map(|(text, refusal)| if *refusal {
                         json!({"type": "refusal", "refusal": text})
                     } else { json!({"type": "output_text", "text": text}) }).collect::<Vec<_>>(),
-                })).collect::<Vec<_>>();
-                finalize_completed_event(parsed, &self.completed_items, &streamed_items, &self.ids)
+                })).collect::<Vec<_>>()
+                };
+                finalize_completed_event(parsed, &self.completed_items, streamed_items, &self.ids)
             }
             _ => translate_non_message_event(event_type, &parsed),
         }

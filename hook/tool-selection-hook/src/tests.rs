@@ -1,4 +1,6 @@
 use super::*;
+mod schema_token_count;
+
 use proteus_contracts::{
     contracts::ToolSelectionRequest,
     domain::{

@@ -108,26 +108,44 @@ fn merge_request_context(
                 .iter()
                 .all(|part| part.scope == PartScope::Request)
     };
+    let Some(first_context) = model.iter().position(ephemeral) else {
+        return canonical.to_vec();
+    };
+    // This index belongs to this ACK only: replacements can remove or reorder
+    // anchors even when earlier message identities remain unchanged.
+    let accepted = canonical
+        .iter()
+        .map(|message| message.id)
+        .collect::<std::collections::HashSet<_>>();
     let mut groups = std::collections::HashMap::<MessageId, Vec<CanonicalMessage>>::new();
     let mut trailing = Vec::new();
-    for (index, message) in model
-        .iter()
-        .enumerate()
-        .filter(|(_, message)| ephemeral(message))
-    {
-        let next = model[index + 1..].iter().find(|next| {
-            !ephemeral(next) && canonical.iter().any(|accepted| accepted.id == next.id)
-        });
-        match next {
-            Some(next) => groups.entry(next.id).or_default().push(message.clone()),
-            None => trailing.push(message.clone()),
+    let mut next_anchor = None;
+    // Walking backwards finds each context's first retained non-request
+    // message without rescanning its suffix or the full canonical history.
+    for message in model[first_context..].iter().rev() {
+        if ephemeral(message) {
+            match next_anchor {
+                Some(id) => groups.entry(id).or_default().push(message.clone()),
+                None => trailing.push(message.clone()),
+            }
+        } else if accepted.contains(&message.id) {
+            next_anchor = Some(message.id);
         }
     }
     let mut merged = Vec::with_capacity(model.len().max(canonical.len()));
     for message in canonical {
-        merged.extend(groups.remove(&message.id).unwrap_or_default());
+        merged.extend(
+            groups
+                .remove(&message.id)
+                .unwrap_or_default()
+                .into_iter()
+                .rev(),
+        );
         merged.push(message.clone());
     }
-    merged.extend(trailing);
+    merged.extend(trailing.into_iter().rev());
     merged
 }
+
+#[cfg(test)]
+mod tests;

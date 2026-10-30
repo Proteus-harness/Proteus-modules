@@ -362,7 +362,8 @@ fn empty_completed_output_recovered_from_output_item_done() {
             "usage": { "input_tokens": 5, "output_tokens": 3 } }
     });
 
-    let events = finalize_completed_event(completed, &fallback_items, &[], &Default::default());
+    let events =
+        finalize_completed_event(completed, &fallback_items, Vec::new, &Default::default());
     let [ModelStreamEvent::Response { response }] = events.as_slice() else {
         panic!("expected single Response event");
     };
@@ -397,7 +398,7 @@ fn nonempty_completed_output_ignores_fallback_items() {
     let events = finalize_completed_event(
         completed,
         &fallback_items,
-        &fallback_items,
+        || fallback_items.clone(),
         &Default::default(),
     );
     let [ModelStreamEvent::Response { response }] = events.as_slice() else {

@@ -64,6 +64,11 @@ policy/approval и authority остаётся на прежних граница
   Derived cache не хранит effective authority или решения policy. Явные
   grants/remembered approvals принадлежат policy contract; его владелец
   проверяет их scope/lifetime заново для каждого invocation.
+  Для membership/lookups внутри одного ACK используйте временный индекс,
+  а не вложенные полные обходы. Он строится из текущего canonical input:
+  request-only context остаётся перед следующим сохранённым canonical
+  message, без такого anchor — в конце, с прежним порядком внутри группы.
+  Этот индекс не переиспользуется между ACK и не заменяет validation истории.
 - Проверяйте admission/резервируйте очередь до крупных allocation/encoding;
   освобождайте reservation по окончании её области владения, а не по одному
   запросу cancel активной записи/effect. Coalescing до дорогой работы
