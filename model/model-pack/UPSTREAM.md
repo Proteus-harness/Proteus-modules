@@ -18,6 +18,10 @@ Codex или OpenCode.
   [quota mapping](https://github.com/openai/codex/blob/0bbea86a6aae37b1f243676db4248000f04ad111/codex-rs/backend-client/src/client.rs).
   Проверка auth/backend boundary и набора полей запроса. Общий Responses/SSE
   mapper Proteus сохраняет собственную ранее закреплённую provenance.
+- Codex `67f0994b532b8740f14b5b738af7b7b2a915b1d6`:
+  [Responses session identity](https://github.com/openai/codex/blob/67f0994b532b8740f14b5b738af7b7b2a915b1d6/codex-rs/core/src/client.rs),
+  [проверка cache key и headers между ходами](https://github.com/openai/codex/blob/67f0994b532b8740f14b5b738af7b7b2a915b1d6/codex-rs/core/tests/suite/prompt_cache_key.rs).
+  Разделение HTTP cache affinity и настраиваемого ключа в JSON body.
 - [Официальная авторизация Codex](https://learn.chatgpt.com/docs/auth):
   ChatGPT subscription access отличается от API-key billing.
 - [Модели Codex](https://learn.chatgpt.com/docs/models), проверено 2026-09-09:
@@ -60,6 +64,19 @@ Client id соответствует OAuth-приложению Codex, как в
 - API credentials, non-stream error fallback и `prompt_cache_retention` в
   subscription config отклоняются. При 429 нет повторов, переключения на API
   или другую модель. Общие Responses error/canonical semantics сохраняются.
+- Подписочный Responses transport передаёт `session-id` и `thread-id` из
+  canonical `client_metadata` текущего запроса. Значения не берутся из
+  настраиваемого `prompt_cache_key`: этот ключ управляет JSON body отдельно.
+  Обычный OpenAI API не получает эти headers. Detached-запрос без conversation
+  metadata остаётся допустимым; отсутствующие headers не выдумываются.
+  Identity живёт в запросе, без общего cache между параллельными сессиями.
+  Это восстанавливает session affinity, но не гарантирует cache hit.
+  Отдельный upstream token `x-codex-turn-state` пока не сохраняется:
+  для него нужен собственный lifecycle в пределах одного хода.
+- Общий Responses mapper сохраняет `input_tokens_details.cached_tokens` и
+  `cache_write_tokens` как canonical cache read/write counters. Отсутствующее
+  поле остаётся неизвестным (`None`), явный ноль сохраняется как ноль;
+  эти показатели не вычисляются из локального кеша журнала или контекста.
 - Каталог запрашивается отдельным `GET /models?client_version=<версия Codex>`
   с теми же OAuth headers и однократным refresh после 401. Сервер показывает
   модель только клиентам не ниже её минимальной версии, поэтому отправляется

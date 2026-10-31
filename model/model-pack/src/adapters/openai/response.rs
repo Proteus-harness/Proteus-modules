@@ -88,6 +88,11 @@ fn parse_usage(response: &Value) -> Option<TokenUsage> {
         .and_then(|details| details.get("cached_tokens"))
         .and_then(Value::as_u64)
         .map(|tokens| tokens as u32);
+    let cache_creation_input_tokens = usage
+        .get("input_tokens_details")
+        .and_then(|details| details.get("cache_write_tokens"))
+        .and_then(Value::as_u64)
+        .map(|tokens| tokens as u32);
     let reasoning_output_tokens = usage
         .get("output_tokens_details")
         .and_then(|details| details.get("reasoning_tokens"))
@@ -97,6 +102,7 @@ fn parse_usage(response: &Value) -> Option<TokenUsage> {
     Some(
         TokenUsage::new(input_tokens, output_tokens)
             .with_cached_input_tokens(cached_input_tokens)
+            .with_cache_creation_input_tokens(cache_creation_input_tokens)
             .with_reasoning_output_tokens(reasoning_output_tokens),
     )
 }

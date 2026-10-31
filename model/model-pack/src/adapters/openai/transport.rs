@@ -93,7 +93,36 @@ impl OpenAiResponsesClient {
         Ok(body)
     }
 
-    pub(super) async fn send_response(&self, body: &Value) -> Result<reqwest::Response> {
+    pub(super) fn request_identity_headers(
+        &self,
+        request: &CanonicalModelRequest,
+    ) -> Result<HeaderMap> {
+        let mut headers = HeaderMap::new();
+        if self.codex_auth.is_none() {
+            return Ok(headers);
+        }
+        // ChatGPT cache affinity uses the conversation identity independently
+        // of the body's configurable prompt_cache_key. Only the canonical
+        // per-request metadata carries this identity; provider defaults must
+        // not bind unrelated sessions to the same transport headers.
+        for (metadata_key, header_name) in
+            [("session_id", "session-id"), ("thread_id", "thread-id")]
+        {
+            if let Some(value) = request.client_metadata.get(metadata_key) {
+                let mut value = HeaderValue::from_str(value)
+                    .map_err(|_| anyhow::anyhow!("invalid ChatGPT {header_name} header"))?;
+                value.set_sensitive(true);
+                headers.insert(header_name, value);
+            }
+        }
+        Ok(headers)
+    }
+
+    pub(super) async fn send_response(
+        &self,
+        body: &Value,
+        identity_headers: &HeaderMap,
+    ) -> Result<reqwest::Response> {
         let url = format!("{}/responses", self.base_url);
         let Some(auth) = &self.codex_auth else {
             let key =
@@ -112,7 +141,10 @@ impl OpenAiResponsesClient {
         let access = auth.access(None).await?;
         let mut response = self
             .request_retry
-            .send(|| self.request_builder(&url, body, &access.headers))
+            .send(|| {
+                self.request_builder(&url, body, &access.headers)
+                    .headers(identity_headers.clone())
+            })
             .await?;
         // A rejected request has no accepted model output. Refresh once; all
         // 429s and other 4xx retain the ordinary error path, without API fallback.
@@ -121,7 +153,10 @@ impl OpenAiResponsesClient {
             let access = auth.access(Some(access.token)).await?;
             response = self
                 .request_retry
-                .send(|| self.request_builder(&url, body, &access.headers))
+                .send(|| {
+                    self.request_builder(&url, body, &access.headers)
+                        .headers(identity_headers.clone())
+                })
                 .await?;
         }
         ensure_success(response).await

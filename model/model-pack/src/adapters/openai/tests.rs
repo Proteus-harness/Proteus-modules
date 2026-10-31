@@ -245,7 +245,7 @@ fn response_usage_includes_cache_and_reasoning_details() {
         "usage": {
             "input_tokens": 100,
             "output_tokens": 20,
-            "input_tokens_details": { "cached_tokens": 30 },
+            "input_tokens_details": { "cached_tokens": 30, "cache_write_tokens": 40 },
             "output_tokens_details": { "reasoning_tokens": 7 }
         }
     });
@@ -256,7 +256,37 @@ fn response_usage_includes_cache_and_reasoning_details() {
     assert_eq!(usage.input_tokens, 100);
     assert_eq!(usage.output_tokens, 20);
     assert_eq!(usage.cached_input_tokens, Some(30));
+    assert_eq!(usage.cache_creation_input_tokens, Some(40));
     assert_eq!(usage.reasoning_output_tokens, Some(7));
+}
+
+#[test]
+fn response_cache_usage_preserves_missing_and_explicit_zero_independently() {
+    for (details, cached, created) in [
+        (None, None, None),
+        (Some(json!({})), None, None),
+        (
+            Some(json!({"cached_tokens":0, "cache_write_tokens":0})),
+            Some(0),
+            Some(0),
+        ),
+        (Some(json!({"cached_tokens":12})), Some(12), None),
+        (Some(json!({"cache_write_tokens":34})), None, Some(34)),
+        (
+            Some(json!({"cached_tokens":null, "cache_write_tokens":null})),
+            None,
+            None,
+        ),
+    ] {
+        let mut raw = json!({"status":"completed", "output":[],
+            "usage":{"input_tokens":100, "output_tokens":20}});
+        if let Some(details) = details {
+            raw["usage"]["input_tokens_details"] = details;
+        }
+        let usage = from_openai_response(raw).unwrap().usage.unwrap();
+        assert_eq!(usage.cached_input_tokens, cached);
+        assert_eq!(usage.cache_creation_input_tokens, created);
+    }
 }
 
 #[test]

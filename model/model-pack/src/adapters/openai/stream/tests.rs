@@ -13,7 +13,7 @@ fn terminal(output: Value) -> Value {
             "id": "response-id", "status": "completed", "output": output,
             "end_turn": false, "extra": {"preserve": ["provider", "metadata"]},
             "usage": {"input_tokens": 17, "output_tokens": 9,
-                "input_tokens_details": {"cached_tokens": 5},
+                "input_tokens_details": {"cached_tokens": 5, "cache_write_tokens": 6},
                 "output_tokens_details": {"reasoning_tokens": 3}},
         },
     })
@@ -68,6 +68,7 @@ fn authoritative_terminal_or_completed_items_do_not_build_streamed_items() {
             let usage = response.usage.as_ref().unwrap();
             assert_eq!((usage.input_tokens, usage.output_tokens), (17, 9));
             assert_eq!(usage.cached_input_tokens, Some(5));
+            assert_eq!(usage.cache_creation_input_tokens, Some(6));
             assert_eq!(usage.reasoning_output_tokens, Some(3));
             match item["type"].as_str().unwrap() {
                 "message" => {
@@ -100,6 +101,38 @@ fn authoritative_terminal_or_completed_items_do_not_build_streamed_items() {
                 }
             }
         }
+    }
+}
+
+#[test]
+fn terminal_cache_usage_preserves_missing_and_explicit_zero_independently() {
+    use super::super::stream_state::OpenAiStreamState;
+    for (details, cached, created) in [
+        (None, None, None),
+        (Some(json!({})), None, None),
+        (
+            Some(json!({"cached_tokens":0, "cache_write_tokens":0})),
+            Some(0),
+            Some(0),
+        ),
+        (Some(json!({"cached_tokens":12})), Some(12), None),
+        (Some(json!({"cache_write_tokens":34})), None, Some(34)),
+        (
+            Some(json!({"cached_tokens":null, "cache_write_tokens":null})),
+            None,
+            None,
+        ),
+    ] {
+        let mut event = terminal(json!([]));
+        let usage = event["response"]["usage"].as_object_mut().unwrap();
+        usage.remove("input_tokens_details");
+        if let Some(details) = details {
+            usage.insert("input_tokens_details".into(), details);
+        }
+        let events = OpenAiStreamState::default().translate(&event.to_string());
+        let usage = response(&events).usage.as_ref().unwrap();
+        assert_eq!(usage.cached_input_tokens, cached);
+        assert_eq!(usage.cache_creation_input_tokens, created);
     }
 }
 

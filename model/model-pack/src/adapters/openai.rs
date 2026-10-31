@@ -259,7 +259,9 @@ impl OpenAiResponsesClient {
         request: CanonicalModelRequest,
     ) -> Result<CanonicalModelResponse> {
         let body = self.request_body(&request, false)?;
-        let response = self.send_response(&body).await?;
+        let identity_headers = self.request_identity_headers(&request)?;
+        drop(request);
+        let response = self.send_response(&body, &identity_headers).await?;
         let response: Value = response.json().await?;
 
         from_openai_response(response)
@@ -267,10 +269,11 @@ impl OpenAiResponsesClient {
 
     async fn stream_response(&self, request: CanonicalModelRequest) -> Result<ModelEventStream> {
         let body = self.request_body(&request, true)?;
+        let identity_headers = self.request_identity_headers(&request)?;
         // Only diagnostic fallback needs the canonical request after encoding.
         // Drop it before network waits when replay is disabled (including Codex).
         let fallback_request = self.stream_error_fallback.then_some(request);
-        let response = self.send_response(&body).await?;
+        let response = self.send_response(&body, &identity_headers).await?;
 
         // reqwest bytes_stream → eventsource-stream Event → наши ModelStreamEvent.
         // State-parser хранит накопленные text parts / tool_calls / usage и
