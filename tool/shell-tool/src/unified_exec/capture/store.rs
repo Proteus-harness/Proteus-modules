@@ -154,6 +154,7 @@ impl CaptureStore {
                 attached: false,
             }),
             sender,
+            changed: std::sync::Condvar::new(),
             file: Mutex::new(None),
             _reservation: reservation,
         });

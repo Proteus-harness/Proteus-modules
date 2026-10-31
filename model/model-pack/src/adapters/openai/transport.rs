@@ -59,12 +59,10 @@ impl OpenAiResponsesClient {
                     .context("openai_codex client_version must be a string")?,
             )?;
         }
-        let mut client = Self::from_provider_config(config)?;
-        let mut http = reqwest::Client::builder().redirect(reqwest::redirect::Policy::none());
-        if client.secret_config.get("http1_only") == Some(&json!(true)) {
-            http = http.http1_only();
-        }
-        client.http = http.build()?;
+        let mut client = Self::from_provider_config_with_http(
+            config,
+            reqwest::Client::builder().redirect(reqwest::redirect::Policy::none()),
+        )?;
         client.base_url = base_url;
         client.codex_auth = Some(auth);
         client.quota_url = Some(quota_url);
@@ -162,3 +160,7 @@ impl OpenAiResponsesClient {
         Err(ModelFailure::other("ChatGPT response ended without a terminal event").into())
     }
 }
+
+#[cfg(test)]
+#[path = "transport_tests.rs"]
+mod tests;

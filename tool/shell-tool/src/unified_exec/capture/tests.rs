@@ -17,6 +17,7 @@ use crate::capture_config::CaptureConfig;
 
 mod process_paths;
 mod read_ranges;
+mod writer_wake;
 
 struct Host {
     cancelled: bool,
@@ -234,6 +235,7 @@ fn queue_full_is_irreversible_but_preview_and_source_drain_continue() {
             attached: true,
         }),
         sender,
+        changed: Condvar::new(),
         file: Mutex::new(None),
         _reservation: store.quota.reserve().unwrap(),
     });
@@ -300,6 +302,7 @@ fn failed_append_receipt_preserves_uncertainty_and_exposes_no_readable_file() {
             attached: true,
         }),
         sender,
+        changed: Condvar::new(),
         file: Mutex::new(None),
         _reservation: store.quota.reserve().unwrap(),
     };

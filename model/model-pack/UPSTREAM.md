@@ -47,6 +47,11 @@ Client id соответствует OAuth-приложению Codex, как в
   ротацией на сервере и записью файла всё ещё может потребовать нового входа.
 - Login ограничен 15 минутами, отдельный HTTP auth request — 30 секундами;
   device polling ждёт server interval плюс 3 секунды. HTTP redirects отключены.
+- Responses client строится сразу с окончательной transport policy: subscription
+  запрещает redirects, обычный API сохраняет default reqwest policy; `http1_only`
+  применяется в общем constructor после прежних config checks. Не создаётся
+  промежуточный API connection pool, который пришлось бы сразу выбросить.
+  Auth client остаётся отдельным; global cache и sharing между bindings нет.
 - `originator`/User-Agent обозначают Proteus. Подписочный endpoint получает
   `store=false`, `stream=true`, без `max_output_tokens`. Как в OpenCode, этот
   output limit не отправляется провайдеру; локальные deadline/cancellation

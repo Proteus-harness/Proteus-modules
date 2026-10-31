@@ -3,9 +3,9 @@ use std::{
     io::{self, Write},
     sync::{
         Arc,
-        mpsc::{Receiver, RecvTimeoutError, TryRecvError},
+        mpsc::{Receiver, TryRecvError},
     },
-    time::{Duration, Instant},
+    time::Instant,
 };
 
 use super::super::session::lock;
@@ -83,37 +83,35 @@ impl Writer {
         state.terminal_at = Some(Instant::now());
     }
 
-    fn run(mut self, receiver: Receiver<Box<[u8]>>) {
+    fn run(self, receiver: Receiver<Box<[u8]>>) {
+        self.run_with_wait_hook(receiver, |_, _| {});
+    }
+
+    fn run_with_wait_hook(
+        mut self,
+        receiver: Receiver<Box<[u8]>>,
+        mut before_wait: impl FnMut(u64, u64),
+    ) {
         loop {
-            if lock(&self.record.state).failure.is_some() {
+            let mut state = lock(&self.record.state);
+            if state.failure.is_some() {
+                drop(state);
                 self.fail();
                 return;
             }
-            match receiver.recv_timeout(Duration::from_millis(20)) {
-                Ok(chunk) => self.chunk(&chunk),
-                Err(RecvTimeoutError::Disconnected) => self.record.abort(Failure::WriterLost),
-                Err(RecvTimeoutError::Timeout) => {
-                    if !lock(&self.record.state).readers.is_closed() {
-                        continue;
-                    }
-                    // Terminal facts are ordered AFTER all sends. Recheck queue
-                    // after observing closure, not before, to avoid a final-chunk race.
-                    loop {
-                        match receiver.try_recv() {
-                            Ok(chunk) => self.chunk(&chunk),
-                            Err(TryRecvError::Empty) => break,
-                            Err(TryRecvError::Disconnected) => {
-                                self.record.abort(Failure::WriterLost);
-                                break;
-                            }
-                        }
-                    }
-                    let mut state = lock(&self.record.state);
-                    if state.failure.is_some() {
-                        drop(state);
-                        self.fail();
-                        return;
-                    }
+            // Queue publication and every terminal predicate use this mutex.
+            // An empty check followed by atomic wait-release cannot lose a send,
+            // EOF or abort notification. Control facts consume no queue capacity.
+            match receiver.try_recv() {
+                Ok(chunk) => {
+                    drop(state);
+                    self.chunk(&chunk);
+                }
+                Err(TryRecvError::Disconnected) => {
+                    drop(state);
+                    self.record.abort(Failure::WriterLost);
+                }
+                Err(TryRecvError::Empty) if state.readers.is_closed() => {
                     if state.confirmed != state.queued {
                         state.failure = Some(Failure::Protocol);
                         drop(state);
@@ -127,9 +125,32 @@ impl Writer {
                     state.terminal_at = Some(Instant::now());
                     return;
                 }
+                Err(TryRecvError::Empty) => {
+                    before_wait(state.confirmed, state.queued);
+                    drop(
+                        self.record
+                            .changed
+                            .wait(state)
+                            .unwrap_or_else(|error| error.into_inner()),
+                    );
+                }
             }
         }
     }
+}
+
+#[cfg(test)]
+pub(super) fn run_with_wait_hook(
+    record: Arc<Record>,
+    receiver: Receiver<Box<[u8]>>,
+    file: File,
+    before_wait: impl FnMut(u64, u64),
+) {
+    Writer {
+        file: Some(file),
+        record,
+    }
+    .run_with_wait_hook(receiver, before_wait);
 }
 
 #[cfg(test)]

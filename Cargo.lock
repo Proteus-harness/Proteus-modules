@@ -126,7 +126,7 @@ version = "1.1.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "40c48f72fd53cd289104fc64099abca73db4166ad86ea0b4341abe65af83dadc"
 dependencies = [
- "windows-sys 0.61.2",
+ "windows-sys 0.60.2",
 ]
 
 [[package]]
@@ -137,7 +137,7 @@ checksum = "291e6a250ff86cd4a820112fb8898808a366d8f9f58ce16d1f538353ad55747d"
 dependencies = [
  "anstyle",
  "once_cell_polyfill",
- "windows-sys 0.61.2",
+ "windows-sys 0.60.2",
 ]
 
 [[package]]
@@ -682,7 +682,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "39cab71617ae0d63f51a36d69f866391735b51691dbda63cf6f96d042b63efeb"
 dependencies = [
  "libc",
- "windows-sys 0.61.2",
+ "windows-sys 0.60.2",
 ]
 
 [[package]]
@@ -1946,7 +1946,7 @@ dependencies = [
 [[package]]
 name = "proteus-contracts"
 version = "0.1.0-alpha.2"
-source = "git+https://github.com/Proteus-harness/Proteus-core.git?rev=1f533a13f20a93bf164f7c8a169553b0b219bb51#1f533a13f20a93bf164f7c8a169553b0b219bb51"
+source = "git+https://github.com/Proteus-harness/Proteus-core.git?rev=c70b98a3dddd70ecb263450f86454c6bbc11e757#c70b98a3dddd70ecb263450f86454c6bbc11e757"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -1964,7 +1964,7 @@ dependencies = [
 [[package]]
 name = "proteus-core"
 version = "0.1.0-alpha.3"
-source = "git+https://github.com/Proteus-harness/Proteus-core.git?rev=1f533a13f20a93bf164f7c8a169553b0b219bb51#1f533a13f20a93bf164f7c8a169553b0b219bb51"
+source = "git+https://github.com/Proteus-harness/Proteus-core.git?rev=c70b98a3dddd70ecb263450f86454c6bbc11e757#c70b98a3dddd70ecb263450f86454c6bbc11e757"
 dependencies = [
  "agent-client-protocol",
  "anyhow",
@@ -2043,10 +2043,9 @@ dependencies = [
 [[package]]
 name = "proteus-module-protocol"
 version = "0.1.0-alpha.2"
-source = "git+https://github.com/Proteus-harness/Proteus-core.git?rev=1f533a13f20a93bf164f7c8a169553b0b219bb51#1f533a13f20a93bf164f7c8a169553b0b219bb51"
+source = "git+https://github.com/Proteus-harness/Proteus-core.git?rev=c70b98a3dddd70ecb263450f86454c6bbc11e757#c70b98a3dddd70ecb263450f86454c6bbc11e757"
 dependencies = [
  "anyhow",
- "clap",
  "proteus-contracts",
  "proteus-process-host",
  "serde",
@@ -2069,7 +2068,7 @@ dependencies = [
 [[package]]
 name = "proteus-module-sdk"
 version = "0.1.0-alpha.2"
-source = "git+https://github.com/Proteus-harness/Proteus-core.git?rev=1f533a13f20a93bf164f7c8a169553b0b219bb51#1f533a13f20a93bf164f7c8a169553b0b219bb51"
+source = "git+https://github.com/Proteus-harness/Proteus-core.git?rev=c70b98a3dddd70ecb263450f86454c6bbc11e757#c70b98a3dddd70ecb263450f86454c6bbc11e757"
 dependencies = [
  "anyhow",
  "proteus-contracts",
@@ -2097,7 +2096,7 @@ dependencies = [
 [[package]]
 name = "proteus-process-host"
 version = "0.1.0-alpha.2"
-source = "git+https://github.com/Proteus-harness/Proteus-core.git?rev=1f533a13f20a93bf164f7c8a169553b0b219bb51#1f533a13f20a93bf164f7c8a169553b0b219bb51"
+source = "git+https://github.com/Proteus-harness/Proteus-core.git?rev=c70b98a3dddd70ecb263450f86454c6bbc11e757#c70b98a3dddd70ecb263450f86454c6bbc11e757"
 dependencies = [
  "anyhow",
  "libc",
@@ -2525,7 +2524,7 @@ dependencies = [
  "errno",
  "libc",
  "linux-raw-sys",
- "windows-sys 0.61.2",
+ "windows-sys 0.60.2",
 ]
 
 [[package]]
@@ -2841,7 +2840,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3a766e1110788c36f4fa1c2b71b387a7815aa65f88ce0229841826633d93723e"
 dependencies = [
  "libc",
- "windows-sys 0.61.2",
+ "windows-sys 0.60.2",
 ]
 
 [[package]]
@@ -2947,7 +2946,7 @@ dependencies = [
  "getrandom 0.4.2",
  "once_cell",
  "rustix",
- "windows-sys 0.61.2",
+ "windows-sys 0.60.2",
 ]
 
 [[package]]

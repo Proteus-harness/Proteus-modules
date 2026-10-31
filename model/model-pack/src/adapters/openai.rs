@@ -102,6 +102,13 @@ struct OpenAiPromptCacheConfig {
 
 impl OpenAiResponsesClient {
     pub fn from_provider_config(config: Value) -> Result<Self> {
+        Self::from_provider_config_with_http(config, reqwest::Client::builder())
+    }
+
+    fn from_provider_config_with_http(
+        config: Value,
+        mut http: reqwest::ClientBuilder,
+    ) -> Result<Self> {
         if config.get("prompt_caching").is_some() {
             anyhow::bail!("unknown openai setting prompt_caching; use prompt_cache");
         }
@@ -144,7 +151,8 @@ impl OpenAiResponsesClient {
             })
             .transpose()?
             .unwrap_or(false);
-        let mut http = reqwest::Client::builder();
+        // The caller selects the final transport policy before this single build.
+        // Codex must not construct and discard an ordinary API client first.
         if http1_only {
             http = http.http1_only();
         }

@@ -31,6 +31,11 @@ async fn context_search_profile_prefetches_code_and_preserves_workflow_replay() 
     let root = PathBuf::from(
         std::env::var_os("PROTEUS_TEST_HARNESS_ROOT").expect("run python3 scripts/test.py"),
     );
+    let artifacts = std::env::var_os("PROTEUS_TEST_MODULE_ARTIFACTS")
+        .expect("run python3 scripts/test.py full to prepare independent workers");
+    let artifacts: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(artifacts).unwrap()).unwrap();
+    let packages = artifacts["packages"].as_object().unwrap();
     for prefetch in [false, true] {
         let store_root = tempfile::tempdir().unwrap();
         let config_path = store_root.path().join("config.json");
@@ -54,9 +59,14 @@ async fn context_search_profile_prefetches_code_and_preserves_workflow_replay() 
         let mut config = AppConfig::load(Some(&config_path)).await.unwrap();
         for component in config.components.values_mut() {
             let mut value = serde_json::to_value(&*component).unwrap();
-            if value["command"] == "proteus-reference-module" {
-                value["command"] = json!(env!("CARGO_BIN_EXE_proteus-reference-module"));
-            }
+            // The pinned production profile uses independent packages. Resolve
+            // their actual Cargo artifacts instead of depending on the user's
+            // PATH or substituting the aggregate reference executable.
+            let package = packages
+                .values()
+                .find(|package| package["binary"] == value["command"])
+                .unwrap_or_else(|| panic!("no prepared worker for {}", value["command"]));
+            value["command"] = package["executable"].clone();
             *component = serde_json::from_value(value).unwrap();
         }
         // Preserve the provider capabilities; only HTTP inference is stubbed.

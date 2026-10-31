@@ -3,7 +3,7 @@
 use std::{
     fs::File,
     sync::{
-        Mutex, Weak,
+        Condvar, Mutex, Weak,
         mpsc::{SyncSender, TrySendError},
     },
     time::Instant,
@@ -101,6 +101,7 @@ struct Record {
     owner: ExecSessionOwner,
     cap: u64,
     state: Mutex<State>,
+    changed: Condvar,
     sender: SyncSender<Box<[u8]>>,
     // One actual File. Writer owns it until seal; reads serialize seek+read here.
     file: Mutex<Option<File>>,
@@ -152,6 +153,7 @@ impl Record {
         if chunk.len() > CHUNK_BYTES || !state.attached || state.readers.is_closed() {
             state.failure = Some(Failure::Protocol);
             state.storage = StorageState::Failed;
+            self.changed.notify_one();
             return;
         }
         let offered = chunk
@@ -172,6 +174,7 @@ impl Record {
                 state.storage = StorageState::Failed;
             }
         }
+        self.changed.notify_one();
     }
 
     fn ended(&self, end: ReaderEnd) {
@@ -180,12 +183,14 @@ impl Record {
         if state.readers.is_closed() && state.failure.is_none() {
             state.storage = StorageState::Finalizing;
         }
+        self.changed.notify_one();
     }
 
     fn abort(&self, reason: Failure) {
         let mut state = lock(&self.state);
         state.failure.get_or_insert(reason);
         state.storage = StorageState::Failed;
+        self.changed.notify_one();
     }
 
     fn receipt(&self) -> Value {

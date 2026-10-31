@@ -64,11 +64,11 @@ default-members = [
 ]
 
 [workspace.dependencies]
-proteus-module-sdk = { git = "https://github.com/Proteus-harness/Proteus-core.git", rev = "1f533a13f20a93bf164f7c8a169553b0b219bb51" }
-proteus-contracts = { git = "https://github.com/Proteus-harness/Proteus-core.git", rev = "1f533a13f20a93bf164f7c8a169553b0b219bb51" }
-proteus-module-protocol = { git = "https://github.com/Proteus-harness/Proteus-core.git", rev = "1f533a13f20a93bf164f7c8a169553b0b219bb51" }
-proteus-process-host = { git = "https://github.com/Proteus-harness/Proteus-core.git", rev = "1f533a13f20a93bf164f7c8a169553b0b219bb51" }
-proteus-core = { git = "https://github.com/Proteus-harness/Proteus-core.git", rev = "1f533a13f20a93bf164f7c8a169553b0b219bb51" }
+proteus-module-sdk = { git = "https://github.com/Proteus-harness/Proteus-core.git", rev = "c70b98a3dddd70ecb263450f86454c6bbc11e757" }
+proteus-contracts = { git = "https://github.com/Proteus-harness/Proteus-core.git", rev = "c70b98a3dddd70ecb263450f86454c6bbc11e757" }
+proteus-module-protocol = { git = "https://github.com/Proteus-harness/Proteus-core.git", rev = "c70b98a3dddd70ecb263450f86454c6bbc11e757" }
+proteus-process-host = { git = "https://github.com/Proteus-harness/Proteus-core.git", rev = "c70b98a3dddd70ecb263450f86454c6bbc11e757" }
+proteus-core = { git = "https://github.com/Proteus-harness/Proteus-core.git", rev = "c70b98a3dddd70ecb263450f86454c6bbc11e757" }
 
 [profile.dev]
 debug = "line-tables-only"
