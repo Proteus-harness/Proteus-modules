@@ -30,7 +30,7 @@ pub fn config_schema(config: &Value) -> ModuleConfigSchema {
         Field::new(
             "base_url",
             "Адрес сервера",
-            "Базовый адрес API.",
+            "Базовый адрес API для этого подключения; не определяет выбранную модель.",
             Kind::text(),
         )
         .with_default(if codex {
@@ -39,15 +39,19 @@ pub fn config_schema(config: &Value) -> ModuleConfigSchema {
             "https://api.anthropic.com"
         } else {
             "https://api.openai.com/v1"
-        }),
+        })
+        .advanced(),
     );
     if codex {
-        fields.push(Field::new(
-            "auth_file",
-            "Файл авторизации",
-            "Без явного пути используется стандартное хранилище авторизации Proteus.",
-            Kind::text(),
-        ));
+        fields.push(
+            Field::new(
+                "auth_file",
+                "Файл авторизации",
+                "Без явного пути используется стандартное хранилище авторизации Proteus.",
+                Kind::text(),
+            )
+            .advanced(),
+        );
         fields.push(
             Field::new(
                 "quota_url",
@@ -89,7 +93,8 @@ pub fn config_schema(config: &Value) -> ModuleConfigSchema {
                 "ANTHROPIC_API_KEY"
             } else {
                 "OPENAI_API_KEY"
-            }),
+            })
+            .advanced(),
         );
         fields.push(
             Field::new(
@@ -142,7 +147,7 @@ pub fn config_schema(config: &Value) -> ModuleConfigSchema {
         Field::new(
             "prompt_cache",
             "Кэш запросов",
-            "Передавать параметры кэширования провайдеру.",
+            "Передавать провайдеру подсказки кэширования. Попадание в кэш определяет сервер; включение не гарантирует cache hit.",
             Kind::Boolean {},
         )
         .with_default(true),
@@ -155,7 +160,8 @@ pub fn config_schema(config: &Value) -> ModuleConfigSchema {
                 "Заголовок для передачи ключа.",
                 Kind::choices(&[("x-api-key", "X-API-Key"), ("bearer", "Bearer")]),
             )
-            .with_default("x-api-key"),
+            .with_default("x-api-key")
+            .advanced(),
         );
         fields.push(
             Field::new(
@@ -180,14 +186,15 @@ pub fn config_schema(config: &Value) -> ModuleConfigSchema {
         fields.push(
             Field::new(
                 "max_input_tokens",
-                "Окно контекста",
-                "Без явного значения предел определяется возможностями модели.",
+                "Бюджет входного контекста",
+                "Локальный предел входных токенов, объявляемый адаптером. Используется для бюджета контекста в Proteus; не увеличивает окно модели на сервере. Без значения адаптер не объявляет свой предел.",
                 Kind::Integer {
                     minimum: Some(1),
                     maximum: Some(u32::MAX as i64),
                 },
             )
-            .unit("токенов"),
+            .unit("токенов")
+            .advanced(),
         );
         fields.push(Field::new("request_max_retries","Повторы запроса","Повторы при транспортных ошибках и HTTP 5xx; значения выше 100 ограничиваются сотней.",Kind::integer(0)).with_default(4).advanced());
         fields.push(
@@ -227,7 +234,7 @@ pub fn config_schema(config: &Value) -> ModuleConfigSchema {
             Field::new(
                 "prompt_cache_key",
                 "Ключ кэша",
-                "Без явного значения используется ключ текущего запроса.",
+                "Явный ключ, передаваемый провайдеру для маршрутизации кэша. Без значения адаптер формирует ключ из запроса; совпадение ключа не гарантирует попадание в кэш.",
                 Kind::text(),
             )
             .advanced(),
@@ -243,45 +250,71 @@ pub fn config_schema(config: &Value) -> ModuleConfigSchema {
                 .advanced(),
             );
         }
-        let capability_fields: Vec<_> = [
-            ("supports_image_input", "Изображения"),
-            ("supports_parallel_tool_calls", "Параллельные инструменты"),
-            ("supports_freeform_tools", "Инструменты с текстовым вводом"),
-            ("supports_json_schema", "Структурированный ответ"),
-            ("supports_reasoning_config", "Настройка рассуждений"),
-            ("support_verbosity", "Настройка подробности"),
+        let capabilities = config.get("capabilities");
+        let mut nested: Vec<_> = [
+            (
+                "supports_image_input",
+                "Изображения",
+                "Разрешить адаптеру передавать изображения во входном запросе.",
+            ),
+            (
+                "supports_parallel_tool_calls",
+                "Параллельные инструменты",
+                "Разрешить параметр параллельных вызовов инструментов в запросе.",
+            ),
+            (
+                "supports_freeform_tools",
+                "Инструменты с текстовым вводом",
+                "Разрешить описание инструментов со свободным текстовым вводом вместо JSON.",
+            ),
+            (
+                "supports_json_schema",
+                "Структурированный ответ",
+                "Разрешить формат структурированного ответа по JSON Schema.",
+            ),
+            (
+                "supports_reasoning_config",
+                "Настройка рассуждений",
+                "Разрешить передачу параметров рассуждений в запросе.",
+            ),
+            (
+                "support_verbosity",
+                "Настройка подробности",
+                "Разрешить передачу verbosity и default_verbosity провайдеру.",
+            ),
         ]
         .into_iter()
-        .map(|(key, title)| {
-            Field::new(
-                key,
-                title,
-                "Переопределение возможностей модели.",
-                Kind::Boolean {},
-            )
+        .map(|(key, title, description)| {
+            // Match the adapter's existing precedence without changing config:
+            // an explicit nested value wins, otherwise the existing flat key.
+            let default = capabilities
+                .and_then(|capabilities| capabilities.get(key))
+                .or_else(|| config.get(key))
+                .cloned()
+                .unwrap_or(Value::Bool(false));
+            Field::new(key, title, description, Kind::Boolean {}).with_default(default)
         })
         .collect();
-        for mut field in capability_fields.clone() {
-            field.default = Some(false.into());
-            fields.push(field.advanced());
-        }
-        let mut nested = capability_fields;
+        let hosted_kinds = capabilities
+            .and_then(|capabilities| capabilities.get("hosted_tools"))
+            .cloned()
+            .unwrap_or_else(|| serde_json::json!([]));
         nested.push(Field::new(
             "hosted_tools",
-            "Инструменты провайдера",
-            "Поддерживаемые семейства инструментов.",
+            "Поддерживаемые инструменты провайдера",
+            "Вручную объявленные семейства инструментов. Их параметры задаются отдельно в разделе инструментов провайдера; доступность на сервере автоматически не проверяется.",
             Kind::Array {
                 items: Box::new(Kind::choices(&[
                     ("web_search", "Поиск в интернете"),
                     ("file_search", "Поиск в файлах"),
                 ])),
             },
-        ));
+        ).with_default(hosted_kinds));
         fields.push(
             Field::new(
                 "capabilities",
-                "Возможности модели",
-                "Вложенные значения имеют приоритет над одноимёнными параметрами выше.",
+                "Формат запросов",
+                "Ручные настройки формата запросов адаптера. Это не автоматически определённые способности выбранной модели: включайте только параметры, которые принимает ваш сервер и модель.",
                 Kind::Object { fields: nested },
             )
             .advanced(),
@@ -341,3 +374,6 @@ pub fn config_schema(config: &Value) -> ModuleConfigSchema {
     }
     ModuleConfigSchema { fields }
 }
+
+#[cfg(test)]
+mod tests;
