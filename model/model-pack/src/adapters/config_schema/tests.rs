@@ -123,8 +123,6 @@ fn technical_transport_authentication_and_cache_metadata_stay_advanced() {
         let fields = schema_fields(&json!({"implementation":implementation}));
         for key in [
             "base_url",
-            "auth_file",
-            "api_key_env",
             "auth",
             "prompt_cache_key",
             "client_metadata",
@@ -138,5 +136,89 @@ fn technical_transport_authentication_and_cache_metadata_stay_advanced() {
         if implementation == "anthropic" {
             assert!(fields.iter().all(|field| field.key != "capabilities"));
         }
+    }
+}
+
+#[test]
+fn provider_sections_keep_paths_defaults_and_normal_authentication_visible() {
+    for implementation in [
+        "openai",
+        "openai_compatible",
+        "openai_codex",
+        "anthropic",
+        "fake",
+    ] {
+        let config = json!({"implementation": implementation});
+        let original = config.clone();
+        let schema = config_schema(&config);
+        schema.validate().unwrap();
+        assert!(schema.fields.iter().all(|field| field.section.is_some()));
+        assert_eq!(
+            field(&schema.fields, "implementation")
+                .section
+                .as_ref()
+                .unwrap()
+                .id,
+            "connection"
+        );
+        if implementation != "fake" {
+            let auth = if implementation == "openai_codex" {
+                "auth_file"
+            } else {
+                "api_key_env"
+            };
+            assert!(!field(&schema.fields, auth).advanced);
+            assert_eq!(
+                field(&schema.fields, auth).section.as_ref().unwrap().id,
+                "authentication"
+            );
+            assert_eq!(
+                field(&schema.fields, "prompt_cache").default,
+                Some(json!(true))
+            );
+            assert_eq!(
+                field(&schema.fields, "prompt_cache")
+                    .section
+                    .as_ref()
+                    .unwrap()
+                    .id,
+                "cache"
+            );
+            assert!(field(&schema.fields, "base_url").advanced);
+        }
+        if matches!(
+            implementation,
+            "openai" | "openai_compatible" | "openai_codex"
+        ) {
+            assert_eq!(
+                field(&schema.fields, "max_input_tokens")
+                    .section
+                    .as_ref()
+                    .unwrap()
+                    .id,
+                "response"
+            );
+            assert_eq!(
+                field(&schema.fields, "capabilities")
+                    .section
+                    .as_ref()
+                    .unwrap()
+                    .id,
+                "api_compatibility"
+            );
+            assert_eq!(
+                field(&schema.fields, "request_max_retries").default,
+                Some(json!(4))
+            );
+            assert_eq!(
+                field(&schema.fields, "request_max_retries")
+                    .section
+                    .as_ref()
+                    .unwrap()
+                    .id,
+                "network"
+            );
+        }
+        assert_eq!(config, original);
     }
 }

@@ -4,12 +4,14 @@ use proteus_contracts::domain::{
 };
 use serde_json::Value;
 
+mod sections;
+
 pub fn config_schema(config: &Value) -> ModuleConfigSchema {
     let implementation = config
         .get("implementation")
         .and_then(Value::as_str)
         .unwrap_or("");
-    let mut fields = vec![Field::new("implementation","Подключение","Способ подключения модели. После сохранения форма обновится для выбранного подключения.",Kind::choices(&[
+    let mut fields = vec![Field::new("implementation","Способ подключения","Способ подключения провайдера. Модель выбирается отдельно в чате. После сохранения форма обновится для выбранного подключения.",Kind::choices(&[
         ("openai","OpenAI API"),("openai_compatible","OpenAI-совместимый API"),("openai_codex","Подписка ChatGPT"),("anthropic","Anthropic API"),("fake","Тестовая модель"),
     ])).required()];
     if implementation == "fake" {
@@ -22,7 +24,7 @@ pub fn config_schema(config: &Value) -> ModuleConfigSchema {
             )
             .unit("мс"),
         );
-        return ModuleConfigSchema { fields };
+        return sections::group(fields);
     }
     let codex = implementation == "openai_codex";
     let anthropic = implementation == "anthropic";
@@ -43,15 +45,12 @@ pub fn config_schema(config: &Value) -> ModuleConfigSchema {
         .advanced(),
     );
     if codex {
-        fields.push(
-            Field::new(
-                "auth_file",
-                "Файл авторизации",
-                "Без явного пути используется стандартное хранилище авторизации Proteus.",
-                Kind::text(),
-            )
-            .advanced(),
-        );
+        fields.push(Field::new(
+            "auth_file",
+            "Файл авторизации",
+            "Без явного пути используется стандартное хранилище авторизации Proteus.",
+            Kind::text(),
+        ));
         fields.push(
             Field::new(
                 "quota_url",
@@ -65,8 +64,7 @@ pub fn config_schema(config: &Value) -> ModuleConfigSchema {
             Field::new(
                 "client_version",
                 "Версия клиента для каталога",
-                "Версия Codex, с которой запрашивается список моделей. Новые модели \
-                 видны только клиентам новее определённой версии.",
+                "Версия в запросе каталога моделей Codex. Влияет на доступные записи каталога; не меняет установленный клиент и выбранную модель.",
                 Kind::text(),
             )
             .with_default(super::codex_auth::CODEX_CLIENT_VERSION)
@@ -86,15 +84,14 @@ pub fn config_schema(config: &Value) -> ModuleConfigSchema {
             Field::new(
                 "api_key_env",
                 "Переменная с ключом",
-                "Имя переменной окружения процесса модуля.",
+                "Имя переменной окружения процесса модуля. Используется, если не заданы явный ключ API или файл с ключом.",
                 Kind::text(),
             )
             .with_default(if anthropic {
                 "ANTHROPIC_API_KEY"
             } else {
                 "OPENAI_API_KEY"
-            })
-            .advanced(),
+            }),
         );
         fields.push(
             Field::new(
@@ -146,8 +143,8 @@ pub fn config_schema(config: &Value) -> ModuleConfigSchema {
     fields.push(
         Field::new(
             "prompt_cache",
-            "Кэш запросов",
-            "Передавать провайдеру подсказки кэширования. Попадание в кэш определяет сервер; включение не гарантирует cache hit.",
+            "Подсказки кэширования",
+            "Передавать провайдеру подсказки кэширования входного контекста. Попадание определяет сервер; это не локальное хранение готовых ответов, и включение не гарантирует cache hit.",
             Kind::Boolean {},
         )
         .with_default(true),
@@ -313,7 +310,7 @@ pub fn config_schema(config: &Value) -> ModuleConfigSchema {
         fields.push(
             Field::new(
                 "capabilities",
-                "Формат запросов",
+                "Разрешения адаптера",
                 "Ручные настройки формата запросов адаптера. Это не автоматически определённые способности выбранной модели: включайте только параметры, которые принимает ваш сервер и модель.",
                 Kind::Object { fields: nested },
             )
@@ -327,7 +324,7 @@ pub fn config_schema(config: &Value) -> ModuleConfigSchema {
                 Field::new(
                     key,
                     title,
-                    "Требует включённой настройки подробности.",
+                    "Требует разрешения адаптера «Настройка подробности». Явная подробность ответа имеет приоритет над подробностью по умолчанию.",
                     Kind::choices(&[
                         ("low", "Кратко"),
                         ("medium", "Обычно"),
@@ -372,7 +369,7 @@ pub fn config_schema(config: &Value) -> ModuleConfigSchema {
             ] }),
         ] }).advanced());
     }
-    ModuleConfigSchema { fields }
+    sections::group(fields)
 }
 
 #[cfg(test)]
