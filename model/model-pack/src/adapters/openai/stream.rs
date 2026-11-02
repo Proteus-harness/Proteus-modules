@@ -114,16 +114,19 @@ pub(super) fn translate_non_message_event(
 /// полученными text deltas. Provider-specific repair остаётся в adapter-е,
 /// поэтому generic ModelService получает полный canonical Response.
 pub(super) fn finalize_completed_event(
-    parsed: Value,
+    mut parsed: Value,
     fallback_items: &[Value],
     streamed_items: impl FnOnce() -> Vec<Value>,
     ids: &std::collections::HashMap<String, crate::domain::MessageId>,
 ) -> Vec<ModelStreamEvent> {
-    let mut response_value = parsed.get("response").cloned().unwrap_or(parsed);
+    let mut response_value = parsed
+        .get_mut("response")
+        .map(Value::take)
+        .unwrap_or(parsed);
     let mut output = response_value
-        .get("output")
-        .and_then(Value::as_array)
-        .cloned()
+        .get_mut("output")
+        .and_then(Value::as_array_mut)
+        .map(std::mem::take)
         .unwrap_or_default();
     if output.is_empty() {
         output.extend_from_slice(fallback_items);
@@ -131,15 +134,14 @@ pub(super) fn finalize_completed_event(
     if !has_emittable_text_or_tool_call(&output) {
         // Reconstruct deltas only when terminal output and completed items
         // cannot supply emittable text or a tool call.
-        let streamed_items = streamed_items();
-        for streamed in &streamed_items {
+        for streamed in streamed_items() {
             if let Some(existing) = output
                 .iter_mut()
                 .find(|item| item.get("id").is_some() && item.get("id") == streamed.get("id"))
             {
-                *existing = streamed.clone();
+                *existing = streamed;
             } else {
-                output.push(streamed.clone());
+                output.push(streamed);
             }
         }
     }

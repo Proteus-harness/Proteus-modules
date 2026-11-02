@@ -86,6 +86,13 @@ Proteus-desktop и использует закреплённую ревизию 
 
 ## Отложенные Эксперименты И Происхождение
 
+Из [PR #79](https://github.com/Qweasd123tg/proteus-modules-dot/pull/79),
+ревизия `450238e59688980180b22154706e1543f24c84df`, перенесено извлечение owned
+Responses `response/output` и восстановленных streamed items через move.
+Это убирает глубокие копии JSON при завершении ответа OpenAI-адаптера;
+borrowed fallback, порядок, metadata и usage сохраняют прежнее поведение.
+Уменьшение постоянного RSS/PSS этим изменением не измерялось.
+
 [research/dcp](research/dcp/README.md) — отложенный эксперимент с отдельным
 Node executable и hook/tool exports. Он исключён из штатных профилей,
 поставки и общего test gate; npm запускается только вручную в его каталоге.

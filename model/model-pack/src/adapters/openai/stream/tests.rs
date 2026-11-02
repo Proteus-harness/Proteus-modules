@@ -38,14 +38,19 @@ fn authoritative_terminal_or_completed_items_do_not_build_streamed_items() {
         json!({"id":"item", "type":"custom_tool_call", "call_id":"call", "name":"apply_patch",
             "input":"*** Begin Patch\n*** End Patch"}),
     ] {
-        for completed_fallback in [false, true] {
-            let parsed = terminal(if completed_fallback {
+        for (completed_fallback, wrapped) in
+            [(false, true), (true, true), (false, false), (true, false)]
+        {
+            let mut parsed = terminal(if completed_fallback {
                 json!([])
             } else {
                 json!([item])
             });
             let mut expected = parsed["response"].clone();
             expected["output"] = json!([item]);
+            if !wrapped {
+                parsed = parsed["response"].take();
+            }
             let fallback = if completed_fallback {
                 vec![item.clone()]
             } else {
