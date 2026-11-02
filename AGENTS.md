@@ -28,6 +28,11 @@ process adapters принадлежат [Proteus-core](https://github.com/Proteu
 
 ## Стоимость Runtime
 
+Для новых и изменяемых затратных путей применяйте общий стандарт
+[расхода ОЗУ](https://github.com/Proteus-harness/Proteus-core/blob/main/docs/development/memory.md):
+ownership/lifetime, совокупные бюджеты, ленивую подготовку, очереди и замеры.
+При соседних checkout документ находится в `../Proteus-core/docs/development/memory.md`.
+
 Следуйте [правилам стоимости runtime](docs/reference.md#стоимость-реализаций):
 
 - Большие owned данные передавайте move/borrow; snapshot/clone требует
