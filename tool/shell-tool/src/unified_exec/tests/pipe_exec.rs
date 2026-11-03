@@ -1,5 +1,7 @@
 //! Pinned Codex terminal branches exercised with real local processes.
 use super::*;
+#[cfg(target_os = "linux")]
+use crate::process_test::{Cleanup as TestProcessCleanup, state as test_process_state};
 use std::sync::atomic::AtomicUsize;
 
 struct ObservedHost {
@@ -105,6 +107,42 @@ fn pipes_are_default_and_stdin_is_eof_while_tty_is_explicit() {
         } else {
             "pipes-eof"
         }));
+    }
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn exited_pipe_leader_cleans_up_its_group_and_preserves_nonzero_exit_and_tail() {
+    let root = tempfile::tempdir().unwrap();
+    let result = exec_command(
+        root.path(),
+        json!({"cmd": "sleep 20 & child=$!; echo $child > child.pid; cat /proc/$child/stat > child.stat; printf tail; exit 111", "yield_time_ms": 1000}),
+    );
+    let pid: u32 = std::fs::read_to_string(root.path().join("child.pid"))
+        .unwrap()
+        .trim()
+        .parse()
+        .unwrap();
+    // Record identity inside the still-owned group, before the leader exits.
+    // By the time invoke returns the PID can already have been reaped/reused.
+    let identity = crate::process_test::recorded_state(
+        &std::fs::read_to_string(root.path().join("child.stat")).unwrap(),
+    )
+    .unwrap()
+    .0;
+    let _cleanup = TestProcessCleanup(vec![(pid, identity)]);
+    assert_eq!(result["ok"], true);
+    assert_eq!(result["metadata"]["exited"], true);
+    assert_eq!(result["metadata"]["exit_code"], 111);
+    assert_eq!(result["metadata"]["session_id"], Value::Null);
+    assert!(result["output"].as_str().unwrap().contains("tail"));
+    let deadline = Instant::now() + Duration::from_secs(2);
+    while test_process_state(pid).is_some_and(|(_, running)| running) {
+        assert!(
+            Instant::now() < deadline,
+            "descendant survived its pipe session"
+        );
+        std::thread::sleep(Duration::from_millis(5));
     }
 }
 
@@ -331,37 +369,4 @@ fn cancel_poll_kills_process_group(tty: bool) {
         std::thread::sleep(Duration::from_millis(10));
     }
     assert!(!root.path().join("late-marker").exists());
-}
-
-#[cfg(target_os = "linux")]
-fn test_process_state(pid: u32) -> Option<(String, bool)> {
-    let stat = std::fs::read_to_string(format!("/proc/{pid}/stat")).ok()?;
-    let fields = stat
-        .rsplit_once(") ")?
-        .1
-        .split_whitespace()
-        .collect::<Vec<_>>();
-    Some((
-        fields.get(19)?.to_string(),
-        !fields[0].starts_with(['Z', 'X']),
-    ))
-}
-
-#[cfg(target_os = "linux")]
-struct TestProcessCleanup(Vec<(u32, String)>);
-
-#[cfg(target_os = "linux")]
-impl Drop for TestProcessCleanup {
-    fn drop(&mut self) {
-        // A failing regression must not leave its HUP-resistant processes alive.
-        for (pid, start_ticks) in &self.0 {
-            if test_process_state(*pid)
-                .is_some_and(|(current, running)| running && &current == start_ticks)
-            {
-                unsafe {
-                    let _ = libc::kill(*pid as libc::pid_t, libc::SIGKILL);
-                }
-            }
-        }
-    }
 }

@@ -1,13 +1,15 @@
 //! Bounded output collection and one-shot child process lifecycle.
 
 use std::{
-    io::Read,
     process::{Child, ExitStatus},
-    thread::JoinHandle,
     time::{Duration, Instant},
 };
 
 use super::{HEAD_LIMIT_BYTES, TAIL_LIMIT_BYTES};
+
+#[path = "execution/readers.rs"]
+mod readers;
+use readers::OutputReaders;
 
 /// Head+tail буфер с жёстким потолком памяти: первые `HEAD_LIMIT_BYTES` и
 /// последние `TAIL_LIMIT_BYTES` байта, середина дропается.
@@ -109,20 +111,23 @@ pub(super) fn wait_with_timeout_and_cancel(
 ) -> std::io::Result<(ShellOutput, bool)> {
     let stdout = child.stdout.take();
     let stderr = child.stderr.take();
-    let stdout_reader = spawn_bounded_reader(stdout);
-    let stderr_reader = spawn_bounded_reader(stderr);
+    let readers = match OutputReaders::new(stdout, stderr) {
+        Ok(readers) => readers,
+        Err(error) => {
+            kill_child_tree(&mut child);
+            let _ = child.wait();
+            return Err(error);
+        }
+    };
     let started = Instant::now();
 
     let mut exited = None;
-    let (status, timed_out) = loop {
+    let mut can_signal = true;
+    let result = loop {
         match is_cancelled() {
             Ok(false) => {}
             result => {
-                kill_child_tree(&mut child);
-                let _ = child.wait();
-                let _ = join_reader(stdout_reader);
-                let _ = join_reader(stderr_reader);
-                return match result {
+                break match result {
                     Ok(true) => Err(std::io::Error::new(
                         std::io::ErrorKind::Interrupted,
                         "shell invocation canceled",
@@ -135,77 +140,60 @@ pub(super) fn wait_with_timeout_and_cancel(
         if exited.is_none() {
             #[cfg(unix)]
             {
-                exited = crate::child_status::observe_exit(child.id())?;
+                match crate::child_status::observe_exit(child.id()) {
+                    Ok(status) => exited = status,
+                    Err(error) => {
+                        // Lost child ownership must not leave a recycled PID
+                        // available to numeric process-group cleanup.
+                        can_signal = false;
+                        break Err(error);
+                    }
+                }
             }
             #[cfg(not(unix))]
             {
-                exited = child.try_wait()?;
+                match child.try_wait() {
+                    Ok(status) => exited = status,
+                    Err(error) => break Err(error),
+                }
             }
         }
         if let Some(status) = exited
-            && stdout_reader.is_finished()
-            && stderr_reader.is_finished()
+            && readers.is_finished()
         {
             // Reap only after inherited pipes have drained. Until now the
             // process-group number is reserved even if the leader exited.
-            let _ = child.wait()?;
-            break (status, false);
+            can_signal = false;
+            break child.wait().map(|_| (status, false));
         }
         if started.elapsed() >= timeout {
             kill_child_tree(&mut child);
-            break (
-                match exited {
-                    Some(status) => {
-                        let _ = child.wait()?;
-                        status
-                    }
-                    None => child.wait()?,
-                },
-                true,
-            );
+            can_signal = false;
+            break child.wait().map(|status| (exited.unwrap_or(status), true));
         }
         std::thread::sleep(Duration::from_millis(10));
     };
 
-    let stdout = join_reader(stdout_reader)?;
-    let stderr = join_reader(stderr_reader)?;
+    if result.is_err() && can_signal {
+        kill_child_tree(&mut child);
+        let _ = child.wait();
+    }
+    if !matches!(result, Ok((_, false))) {
+        // A setsid descendant can keep inherited pipes open after group kill.
+        // Nonblocking readers drain briefly, close their own fds, and are joined;
+        // no detached blocking threads remain after timeout/cancel/error.
+        readers.stop_after_grace();
+    }
+    let (stdout, stderr) = readers.join();
+    let (status, timed_out) = result?;
     Ok((
         ShellOutput {
             status,
-            stdout,
-            stderr,
+            stdout: stdout?,
+            stderr: stderr?,
         },
         timed_out,
     ))
-}
-
-fn spawn_bounded_reader<R>(reader: Option<R>) -> JoinHandle<std::io::Result<BoundedBuffer>>
-where
-    R: Read + Send + 'static,
-{
-    std::thread::spawn(move || {
-        let mut buffer = BoundedBuffer::new();
-        let Some(mut reader) = reader else {
-            return Ok(buffer);
-        };
-        let mut buf = [0u8; 8192];
-        loop {
-            let read = reader.read(&mut buf)?;
-            if read == 0 {
-                break;
-            }
-            buffer.push(&buf[..read]);
-        }
-        Ok(buffer)
-    })
-}
-
-fn join_reader(
-    handle: JoinHandle<std::io::Result<BoundedBuffer>>,
-) -> std::io::Result<BoundedBuffer> {
-    handle
-        .join()
-        .map_err(|_| std::io::Error::other("shell output reader thread panicked"))?
 }
 
 #[cfg(unix)]

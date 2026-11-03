@@ -69,3 +69,92 @@ fn successful_leader_with_inherited_pipes_reports_timeout_as_failure() {
     assert_eq!(result["error"], "process timed out after 100ms");
     assert_eq!(result["output"], "leader-finished");
 }
+
+#[cfg(target_os = "linux")]
+fn detached_pipe_fixture() -> (
+    tempfile::TempDir,
+    std::process::Child,
+    crate::process_test::Cleanup,
+) {
+    let dir = tempfile::tempdir().unwrap();
+    let cwd = dir.path().to_str().unwrap();
+    let child = crate::spawn_shell(
+        "setsid sh -c 'echo $$ > detached.pid; exec sleep 20' & printf leader-finished; printf error-tail >&2; exit 111",
+        cwd,
+        cwd,
+        None,
+    )
+    .unwrap();
+    let deadline = Instant::now() + Duration::from_secs(3);
+    while !dir.path().join("detached.pid").exists() {
+        assert!(Instant::now() < deadline, "detached fixture did not start");
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    let pid = loop {
+        if let Ok(text) = std::fs::read_to_string(dir.path().join("detached.pid"))
+            && let Ok(pid) = text.trim().parse::<u32>()
+        {
+            break pid;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "detached fixture PID is unavailable"
+        );
+        std::thread::sleep(Duration::from_millis(5));
+    };
+    let cleanup = crate::process_test::Cleanup(vec![(
+        pid,
+        crate::process_test::state(pid)
+            .expect("detached fixture alive")
+            .0,
+    )]);
+    while crate::child_status::observe_exit(child.id())
+        .unwrap()
+        .is_none()
+    {
+        assert!(Instant::now() < deadline, "fixture leader did not exit");
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    (dir, child, cleanup)
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn timeout_joins_readers_while_a_detached_descendant_keeps_pipes_open() {
+    let (_dir, child, cleanup) = detached_pipe_fixture();
+    let started = Instant::now();
+    let (output, timed_out) = wait_with_timeout(child, Duration::from_millis(100)).unwrap();
+    assert!(started.elapsed() < Duration::from_secs(2));
+    assert!(timed_out);
+    assert_eq!(output.status.code(), Some(111));
+    assert_eq!(output.stdout.to_text(), "leader-finished");
+    assert_eq!(output.stderr.to_text(), "error-tail");
+    assert!(crate::process_test::state(cleanup.0[0].0).is_some_and(|(_, running)| running));
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn cancel_and_host_error_join_readers_with_detached_inherited_pipes() {
+    for host_error in [false, true] {
+        let (_dir, child, cleanup) = detached_pipe_fixture();
+        let started = Instant::now();
+        let error = wait_with_timeout_and_cancel(child, Duration::from_secs(5), &mut || {
+            if started.elapsed() < Duration::from_millis(100) {
+                Ok(false)
+            } else if host_error {
+                Err(std::io::Error::other("fixture cancellation channel failed"))
+            } else {
+                Ok(true)
+            }
+        })
+        .err()
+        .expect("interrupted invocation");
+        assert!(started.elapsed() < Duration::from_secs(2));
+        if host_error {
+            assert_eq!(error.to_string(), "fixture cancellation channel failed");
+        } else {
+            assert_eq!(error.kind(), std::io::ErrorKind::Interrupted);
+        }
+        assert!(crate::process_test::state(cleanup.0[0].0).is_some_and(|(_, running)| running));
+    }
+}

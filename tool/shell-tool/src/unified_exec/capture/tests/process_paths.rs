@@ -86,3 +86,43 @@ fn cancellation_after_spawn_preserves_started_fact_and_does_not_rerun_command() 
     // No assertion turns cancellation request into a confirmed exit code.
     assert_eq!(store.quota.used.load(Ordering::Acquire), 1);
 }
+
+#[cfg(target_os = "linux")]
+#[test]
+fn pipe_exit_with_inherited_output_settles_capture_and_stops_descendants() {
+    let (dir, store, context) = fixture(1024, 1);
+    let _sessions = OwnedSessionsCleanup(owner(&context));
+    let call = json!({"id":"pipe_exit","name":"exec_command","args":{
+        "cmd":"sleep 20 & child=$!; echo $child > child.pid; cat /proc/$child/stat > child.stat; printf captured-tail; exit 111",
+        "yield_time_ms":1000,"with_escalated_permissions":true}});
+    let result = exec_command_impl(
+        &call.to_string(),
+        &serde_json::to_string(&context).unwrap(),
+        Some(&store),
+        &mut Host { cancelled: false },
+    )
+    .unwrap();
+    let result: Value = serde_json::from_str(&result).unwrap();
+    let pid: u32 = std::fs::read_to_string(dir.path().join("child.pid"))
+        .unwrap()
+        .trim()
+        .parse()
+        .unwrap();
+    let identity = crate::process_test::recorded_state(
+        &std::fs::read_to_string(dir.path().join("child.stat")).unwrap(),
+    )
+    .unwrap()
+    .0;
+    let _processes = crate::process_test::Cleanup(vec![(pid, identity)]);
+    assert_eq!(result["ok"], true);
+    assert_eq!(result["metadata"]["exit_code"], 111);
+    assert!(result["metadata"]["session_id"].is_null());
+    let record = store.find(1).unwrap();
+    sealed(&record);
+    let handle = result["metadata"]["source_capture"]["handle"]
+        .as_str()
+        .unwrap();
+    let captured = read(&store, &context, json!({"handle":handle})).unwrap();
+    assert_eq!(captured["envelope"]["text"], "captured-tail");
+    wait_for(|| !crate::process_test::state(pid).is_some_and(|(_, running)| running));
+}

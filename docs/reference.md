@@ -79,6 +79,18 @@ Exit code, cancellation и bounded head/tail
 preview сохраняют прежнюю semantics. Этот внутренний учёт сам по себе не
 включает capture на диск и не выдаёт artifact receipt.
 
+На Unix PTY и pipes сохраняют identity вышедшего лидера до окончания drain;
+оставшаяся process group останавливается до reap. После reap старый session
+handle уже не имеет права сигналить по сохранённому PID. Число `111`, как и
+другие ненулевые exit codes, не имеет специальной lifecycle-семантики.
+
+One-shot `shell` на Unix читает stdout/stderr неблокирующе. После timeout,
+cancel или ошибки канала отмены даётся короткий drain, затем оба reader threads
+закрывают свои pipes и присоединяются. Тихие readers ждут readiness; отмена
+будит их через общий wake fd, без периодического опроса. Потомок, ушедший через `setsid` и
+сохранивший эти fd, не может бесконечно продлить ожидание EOF; это не обещание
+остановить процесс, который покинул принадлежащую вызову process group.
+
 ### Явный Source Capture Для Exec
 
 Опциональный объект `source_capture` в существующем module config export

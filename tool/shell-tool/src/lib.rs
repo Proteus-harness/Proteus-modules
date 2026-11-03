@@ -33,6 +33,10 @@ mod capture_config;
 #[cfg(unix)]
 mod child_status;
 mod execution;
+#[cfg(unix)]
+mod pipe_io;
+#[cfg(all(test, target_os = "linux"))]
+mod process_test;
 mod ptyxis;
 mod result;
 mod sandbox;
