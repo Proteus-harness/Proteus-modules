@@ -36,6 +36,11 @@ mod sanitize;
 mod stream;
 mod usage;
 
+const REDACTED_THINKING_FORMAT: &str = "anthropic.messages.redacted_thinking";
+
+#[cfg(test)]
+mod opaque_tests;
+
 #[cfg(test)]
 use request::to_anthropic_request;
 use request::to_anthropic_request_with_cache;

@@ -178,6 +178,9 @@ fn invoke_impl(call: &ToolCallDto, cwd: &Path, command_kind: GitCommand) -> Resu
     }
 
     let mut command = Command::new("git");
+    command.current_dir(cwd_path);
+    proteus_contracts::git_support::protect_readonly_git(&mut command)
+        .map_err(|error| error.to_string())?;
     command
         .current_dir(cwd_path)
         .args([

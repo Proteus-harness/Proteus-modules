@@ -1,13 +1,13 @@
 //! `write_file` tool: создаёт или перезаписывает файл внутри workspace.
 
-use std::path::Path;
+use std::{io::Write, path::Path};
 
 use proteus_contracts::process_module::{ProcessModuleError, ToolModule, ToolModuleHostMut};
 use serde_json::json;
 
 use crate::util::{
     err_result, module_error, ok_result, parse_call, parse_invocation_context, required_string,
-    workspace_path_for_write,
+    workspace_file_for_write,
 };
 
 pub struct WriteFileTool;
@@ -65,28 +65,28 @@ impl ToolModule for WriteFileTool {
             Err(e) => return err_result(&call.id, &call.name, e),
         };
         let cwd_path = context.cwd.as_path();
-        let target_path = match workspace_path_for_write(cwd_path, Path::new(path_str)) {
+        let mut target = match workspace_file_for_write(cwd_path, Path::new(path_str)) {
             Ok(p) => p,
             Err(e) => return err_result(&call.id, &call.name, e),
         };
 
         let bytes_written = content.len();
-        if let Err(e) = std::fs::write(&target_path, content) {
+        if let Err(e) = target.write_all(content.as_bytes()) {
             return err_result(
                 &call.id,
                 &call.name,
-                format!("failed to write {}: {e}", target_path.display()),
+                format!("failed to write {}: {e}", target.path().display()),
             );
         }
 
         let metadata = json!({
-            "path": target_path.display().to_string(),
+            "path": target.path().display().to_string(),
             "bytes_written": bytes_written,
         });
         ok_result(
             &call.id,
             &call.name,
-            format!("Wrote {bytes_written} bytes to {}", target_path.display()),
+            format!("Wrote {bytes_written} bytes to {}", target.path().display()),
             metadata,
         )
     }

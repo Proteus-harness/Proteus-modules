@@ -21,7 +21,7 @@ fn optional_model_features_are_intersected_with_the_offer_without_rejecting_futu
         let mut input = child.stdin.take().unwrap();
         writeln!(input, "{}", json!({"jsonrpc":"2.0","id":"h:1:0","method":"initialize", "params":{
             "protocol_version":"v3","component_id":"probe", "_meta":{"org.example/build":{"future":true}},
-            "exports":[{"slot":"model","module_id":"fake","contract_version":"v12","composition":"select_one",
+            "exports":[{"slot":"model","module_id":"fake","contract_version":"v13","composition":"select_one",
                 "module_config":{"implementation":"fake"},"host_features":offered}]
         }})).unwrap();
         let mut line = String::new();

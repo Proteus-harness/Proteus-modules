@@ -2,6 +2,31 @@ use super::*;
 use crate::model_standard::{InstructionBlock, InstructionKind};
 
 #[test]
+fn request_rejects_opaque_parts_instead_of_silently_dropping_them() {
+    for format in [
+        "anthropic.messages.redacted_thinking",
+        "other.provider.block",
+    ] {
+        let request = CanonicalModelRequest::new(
+            ModelRef::new("openai", "fixture"),
+            vec![CanonicalMessage::new(
+                MessageRole::Assistant,
+                vec![ContentPart::Opaque {
+                    format: format.to_owned(),
+                    data: json!({"type": "redacted_thinking", "data": "opaque+/="}),
+                }],
+            )],
+        );
+        let error = to_openai_request(&request).unwrap_err().to_string();
+        assert!(
+            error.contains("openai.responses does not support opaque format"),
+            "{error}"
+        );
+        assert!(error.contains(format), "{error}");
+    }
+}
+
+#[test]
 fn moved_input_array_preserves_provider_json_bytes_and_order() {
     let mut request = CanonicalModelRequest::new(
         ModelRef::new("openai", "fixture"),

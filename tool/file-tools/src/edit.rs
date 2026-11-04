@@ -1,14 +1,14 @@
 //! `edit_file` tool: точечная замена текста в существующем файле
 //! (opencode edit shape: old_string → new_string, опционально replace_all).
 
-use std::path::Path;
+use std::{io::Write, path::Path};
 
 use proteus_contracts::process_module::{ProcessModuleError, ToolModule, ToolModuleHostMut};
 use serde_json::json;
 
 use crate::util::{
     err_result, module_error, ok_result, parse_call, parse_invocation_context, required_string,
-    workspace_path,
+    workspace_file_for_write, workspace_path,
 };
 
 const MAX_EDIT_FILE_BYTES: u64 = 2 * 1024 * 1024;
@@ -162,7 +162,11 @@ impl ToolModule for EditFileTool {
             (content.replacen(old_string, new_string, 1), 1)
         };
 
-        if let Err(e) = std::fs::write(&target_path, &updated) {
+        let mut target = match workspace_file_for_write(cwd_path, &target_path) {
+            Ok(file) => file,
+            Err(error) => return err_result(&call.id, &call.name, error),
+        };
+        if let Err(e) = target.write_all(updated.as_bytes()) {
             return err_result(
                 &call.id,
                 &call.name,

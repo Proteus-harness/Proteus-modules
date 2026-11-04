@@ -422,6 +422,9 @@ fn to_openai_input(messages: &[CanonicalMessage]) -> Result<Vec<Value>> {
                 ContentPart::Reasoning { text, signature } => {
                     input.push(openai_reasoning_item(text, signature.as_deref()))
                 }
+                ContentPart::Opaque { format, .. } => {
+                    return Err(anyhow!("openai.responses does not support opaque format '{format}'"));
+                }
                 ContentPart::Image { image } => {
                     let block = json!({ "type": "input_image", "image_url": super::super::images::data_url(image)?, "detail": "auto" });
                     if let Some(index) = text_message_index {

@@ -2,7 +2,7 @@
 
 use std::{
     fs::File,
-    io::{BufRead, BufReader},
+    io::{BufRead, BufReader, Read},
     path::Path,
 };
 
@@ -15,6 +15,8 @@ use crate::util::{
 };
 
 pub(crate) const MAX_READ_FILE_BYTES: u64 = 2 * 1024 * 1024;
+// Range selection may skip a prefix, but it cannot scan an unbounded log.
+const MAX_RANGE_SCAN_BYTES: u64 = 16 * 1024 * 1024;
 
 pub struct ReadFileTool;
 
@@ -22,7 +24,7 @@ impl ToolModule for ReadFileTool {
     fn spec_json(&self) -> String {
         let spec = json!({
             "name": "read_file",
-            "description": "Read a UTF-8 file inside the current workspace, optionally by line range",
+            "description": "Read a UTF-8 file inside the current workspace, optionally by line range. Output and each line are limited to 2 MiB; ranged reads scan at most 16 MiB. Truncated ranges report total_lines as unknown.",
             "input_schema": {
                 "type": "object",
                 "properties": {
@@ -121,7 +123,7 @@ impl ToolModule for ReadFileTool {
                     ),
                 );
             }
-            let content = match std::fs::read_to_string(&path) {
+            let content = match read_full(&path) {
                 Ok(c) => c,
                 Err(e) => {
                     return err_result(
@@ -131,7 +133,16 @@ impl ToolModule for ReadFileTool {
                     );
                 }
             };
-            render_read_output(&content, &path, options)
+            let total_lines = content.lines().count();
+            (
+                content,
+                json!({
+                    "path": path.display().to_string(),
+                    "total_lines": total_lines,
+                    "returned_lines": total_lines,
+                    "truncated": false,
+                }),
+            )
         } else {
             match render_read_output_streaming(&path, options) {
                 Ok(rendered) => rendered,
@@ -166,57 +177,16 @@ impl ReadOptions {
     }
 }
 
-fn render_read_output(
-    content: &str,
-    path: &Path,
-    options: ReadOptions,
-) -> (String, serde_json::Value) {
-    let total_lines = content.lines().count();
-    if options.is_default() {
-        return (
-            content.to_owned(),
-            json!({
-                "path": path.display().to_string(),
-                "total_lines": total_lines,
-                "returned_lines": total_lines,
-                "truncated": false,
-            }),
-        );
+fn read_full(path: &Path) -> Result<String, String> {
+    let file = File::open(path).map_err(|e| e.to_string())?;
+    let mut bytes = Vec::new();
+    file.take(MAX_READ_FILE_BYTES + 1)
+        .read_to_end(&mut bytes)
+        .map_err(|e| e.to_string())?;
+    if bytes.len() as u64 > MAX_READ_FILE_BYTES {
+        return Err("file grew beyond the 2 MiB read budget; use start_line and limit".into());
     }
-
-    let start_line = options.start_line.unwrap_or(1);
-    let limit = options.limit.unwrap_or(usize::MAX);
-    let start_index = start_line.saturating_sub(1);
-    let mut returned = 0usize;
-    let mut rendered = Vec::new();
-    for (index, line) in content.lines().enumerate().skip(start_index).take(limit) {
-        returned += 1;
-        if options.line_numbers {
-            rendered.push(format!("{}\t{}", index + 1, line));
-        } else {
-            rendered.push(line.to_owned());
-        }
-    }
-    let end_line = if returned == 0 {
-        None
-    } else {
-        Some(start_line + returned - 1)
-    };
-    let truncated = start_index + returned < total_lines;
-
-    (
-        rendered.join("\n"),
-        json!({
-            "path": path.display().to_string(),
-            "start_line": start_line,
-            "end_line": end_line,
-            "limit": options.limit,
-            "line_numbers": options.line_numbers,
-            "total_lines": total_lines,
-            "returned_lines": returned,
-            "truncated": truncated,
-        }),
-    )
+    String::from_utf8(bytes).map_err(|e| e.to_string())
 }
 
 fn render_read_output_streaming(
@@ -224,25 +194,96 @@ fn render_read_output_streaming(
     options: ReadOptions,
 ) -> Result<(String, serde_json::Value), String> {
     let file = File::open(path).map_err(|e| format!("failed to open {}: {e}", path.display()))?;
-    let reader = BufReader::new(file);
+    render_range(BufReader::new(file), path, options)
+}
+
+fn render_range(
+    mut reader: impl BufRead,
+    path: &Path,
+    options: ReadOptions,
+) -> Result<(String, serde_json::Value), String> {
     let start_line = options.start_line.unwrap_or(1);
     let limit = options.limit.unwrap_or(usize::MAX);
-    let mut total_lines = 0usize;
+    let mut scanned_lines = 0usize;
+    let mut scanned_bytes = 0u64;
     let mut returned = 0usize;
-    let mut rendered = Vec::new();
-
-    for line in reader.lines() {
-        let line =
-            line.map_err(|e| format!("failed to read UTF-8 line from {}: {e}", path.display()))?;
-        total_lines += 1;
-        if total_lines < start_line || returned >= limit {
+    let mut output = String::new();
+    let mut line = Vec::new();
+    let mut eof = false;
+    let mut reason = None;
+    loop {
+        if returned >= limit {
+            // Do not read a new buffer merely to discover a total after the
+            // requested range. Without observing EOF the remainder is unknown.
+            reason = Some("line_limit");
+            break;
+        }
+        let remaining_scan = MAX_RANGE_SCAN_BYTES - scanned_bytes;
+        if remaining_scan == 0 {
+            reason = Some("scan_budget");
+            break;
+        }
+        line.clear();
+        let allowance = remaining_scan.min(MAX_READ_FILE_BYTES + 1);
+        let read = reader
+            .by_ref()
+            .take(allowance)
+            .read_until(b'\n', &mut line)
+            .map_err(|e| format!("failed to read {}: {e}", path.display()))?;
+        scanned_bytes += read as u64;
+        if read == 0 {
+            eof = true;
+            break;
+        }
+        scanned_lines += 1;
+        let complete = line.ends_with(b"\n") || read < allowance as usize;
+        if line.ends_with(b"\n") {
+            line.pop();
+            if line.ends_with(b"\r") {
+                line.pop();
+            }
+        }
+        if scanned_lines < start_line {
+            if !complete {
+                reason = Some("line_budget");
+                break;
+            }
             continue;
         }
-        returned += 1;
-        if options.line_numbers {
-            rendered.push(format!("{}\t{}", total_lines, line));
+        let prefix = if options.line_numbers {
+            format!("{scanned_lines}\t")
         } else {
-            rendered.push(line);
+            String::new()
+        };
+        let separator = usize::from(returned != 0);
+        let available =
+            (MAX_READ_FILE_BYTES as usize).saturating_sub(output.len() + prefix.len() + separator);
+        if available == 0 {
+            reason = Some("output_budget");
+            break;
+        }
+        let mut end = line.len().min(available);
+        let text = match std::str::from_utf8(&line[..end]) {
+            Ok(text) => text,
+            Err(error) if error.error_len().is_none() && (end < line.len() || !complete) => {
+                end = error.valid_up_to();
+                std::str::from_utf8(&line[..end]).expect("validated UTF-8 prefix")
+            }
+            Err(error) => return Err(format!("invalid UTF-8 in {}: {error}", path.display())),
+        };
+        if separator != 0 {
+            output.push('\n');
+        }
+        output.push_str(&prefix);
+        output.push_str(text);
+        returned += 1;
+        if end < line.len() || !complete {
+            reason = Some("output_budget");
+            break;
+        }
+        if output.len() == MAX_READ_FILE_BYTES as usize {
+            reason = Some("output_budget");
+            break;
         }
     }
 
@@ -251,20 +292,23 @@ fn render_read_output_streaming(
     } else {
         Some(start_line + returned - 1)
     };
-    let start_index = start_line.saturating_sub(1);
-    let truncated = start_index + returned < total_lines;
-
     Ok((
-        rendered.join("\n"),
+        output,
         json!({
             "path": path.display().to_string(),
             "start_line": start_line,
             "end_line": end_line,
             "limit": options.limit,
             "line_numbers": options.line_numbers,
-            "total_lines": total_lines,
+            "total_lines": eof.then_some(scanned_lines),
             "returned_lines": returned,
-            "truncated": truncated,
+            "truncated": !eof,
+            "truncation_reason": reason,
+            "scanned_bytes": scanned_bytes,
         }),
     ))
 }
+
+#[cfg(test)]
+#[path = "read_budget_tests.rs"]
+mod budget_tests;

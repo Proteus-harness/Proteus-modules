@@ -1,19 +1,36 @@
 use super::*;
+use proteus_contracts::{
+    contracts::ExecutionAttribution, domain::new_execution_id, process_module::ToolModuleHost,
+};
 
 const _: () = assert!(TIMEOUT_MS >= 60_000);
 
 fn invoke(tool_name: &str, cwd: &Path, args: Value) -> Value {
-    let command = if tool_name == "git_status" {
-        GitCommand::Status
+    let tool: &dyn ToolModule = if tool_name == "git_status" {
+        &GitStatusTool
     } else {
-        GitCommand::Diff
+        &GitDiffTool
     };
-    let call = ToolCallDto {
-        id: "call_test".to_owned(),
-        name: tool_name.to_owned(),
-        args,
+    let call = json!({"id": "call_test", "name": tool_name, "args": args});
+    let context = ToolModuleInvocationContext {
+        cwd: cwd.to_path_buf(),
+        skills: Default::default(),
+        attribution: ExecutionAttribution::detached(new_execution_id()),
+        config: json!({}),
     };
-    let result = invoke_impl(&call, cwd, command).expect("tool result json");
+    struct Host;
+    impl ToolModuleHost for Host {
+        fn is_cancelled(&self) -> Result<bool, ProcessModuleError> {
+            Ok(false)
+        }
+    }
+    let result = tool
+        .invoke_json(
+            call.to_string(),
+            serde_json::to_string(&context).unwrap(),
+            &mut Host,
+        )
+        .expect("tool result json");
     serde_json::from_str(&result).expect("result json")
 }
 
@@ -108,4 +125,78 @@ fn git_diff_supports_path_filter() {
 fn pathspec_rejects_parent_escape() {
     let error = validate_relative_pathspec("../outside.txt").expect_err("reject parent");
     assert!(error.contains("parent traversal"), "{error}");
+}
+
+#[cfg(unix)]
+#[test]
+fn readonly_git_invocations_refuse_matching_clean_and_process_filters() {
+    for kind in ["clean", "process"] {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        git(root, &["init", "-q"]);
+        std::fs::write(root.join("tracked.txt"), "before\n").unwrap();
+        git(root, &["add", "tracked.txt"]);
+        std::fs::write(root.join("tracked.txt"), "different contents\n").unwrap();
+        let marker = root.join("filter-ran");
+        let script = root.join("filter.sh");
+        std::fs::write(
+            &script,
+            format!("printf called > '{}'\nexit 1\n", marker.display()),
+        )
+        .unwrap();
+        git(
+            root,
+            &[
+                "config",
+                &format!("filter.probe.{kind}"),
+                &format!("sh '{}'", script.display()),
+            ],
+        );
+        git(root, &["config", "filter.probe.required", "true"]);
+        let nested = root.join("nested");
+        std::fs::create_dir(&nested).unwrap();
+
+        // An unrelated configured executable driver must not disable ordinary reads.
+        std::fs::write(root.join(".gitattributes"), "tracked.txt filter=unknown\n").unwrap();
+        for name in ["git_status", "git_diff"] {
+            let result = invoke(name, root, json!({"path": "tracked.txt"}));
+            assert_eq!(result["ok"], true, "{name}: {result}");
+        }
+        std::fs::write(root.join(".gitattributes"), "tracked.txt filter=probe\n").unwrap();
+        for cwd in [root, nested.as_path()] {
+            for name in ["git_status", "git_diff"] {
+                // Unscoped tools can inspect repository content outside a nested cwd.
+                let result = invoke(name, cwd, json!({}));
+                assert_eq!(
+                    result["ok"],
+                    false,
+                    "{kind}/{name}/{}: {result}",
+                    cwd.display()
+                );
+                assert!(
+                    result
+                        .to_string()
+                        .contains("read-only Git refuses executable filter 'probe'"),
+                    "{result}"
+                );
+                assert!(!marker.exists(), "{kind}/{name} executed the filter");
+            }
+        }
+        // Prove that the exact fixture reaches the driver without our consumer's guard.
+        let _ = Command::new("git")
+            .current_dir(root)
+            .args([
+                "diff",
+                "--no-ext-diff",
+                "--no-textconv",
+                "--",
+                "tracked.txt",
+            ])
+            .output()
+            .unwrap();
+        assert!(
+            marker.exists(),
+            "{kind} fixture never exercised its executable driver"
+        );
+    }
 }

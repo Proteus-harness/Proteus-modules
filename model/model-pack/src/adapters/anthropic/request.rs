@@ -253,6 +253,17 @@ fn anthropic_content_blocks(message: &CanonicalMessage) -> Result<Vec<Value>> {
                 "thinking": text,
                 "signature": signature.clone().unwrap_or_default(),
             })),
+            ContentPart::Opaque { format, data } => {
+                if format != super::REDACTED_THINKING_FORMAT {
+                    return Err(anyhow!("anthropic.messages does not support opaque format '{format}'"));
+                }
+                if data.get("type").and_then(Value::as_str) != Some("redacted_thinking")
+                    || data.get("data").and_then(Value::as_str).is_none()
+                {
+                    return Err(anyhow!("invalid opaque redacted_thinking block"));
+                }
+                blocks.push(data.clone());
+            }
             ContentPart::Image { image } => blocks.push(json!({
                 "type": "image",
                 "source": { "type": "base64", "media_type": image.mime_type, "data": super::super::images::encoded(image)? }

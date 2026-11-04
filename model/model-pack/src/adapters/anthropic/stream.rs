@@ -40,6 +40,9 @@ enum AnthropicBlock {
         text: String,
         signature: Option<String>,
     },
+    Opaque {
+        data: Value,
+    },
     Text {
         text: String,
     },
@@ -84,6 +87,20 @@ impl AnthropicStreamState {
                             .and_then(Value::as_str)
                             .map(str::to_owned),
                     }),
+                    "redacted_thinking" => {
+                        let Some(block) = block
+                            .filter(|block| block.get("data").and_then(Value::as_str).is_some())
+                        else {
+                            return vec![ModelStreamEvent::Error {
+                                failure: ModelFailure::other(
+                                    "redacted_thinking missing opaque data",
+                                ),
+                            }];
+                        };
+                        Some(AnthropicBlock::Opaque {
+                            data: block.clone(),
+                        })
+                    }
                     "text" => Some(AnthropicBlock::Text {
                         text: String::new(),
                     }),
@@ -256,6 +273,10 @@ impl AnthropicStreamState {
         let mut tool_calls = Vec::new();
         for block in self.blocks.drain(..) {
             match block {
+                AnthropicBlock::Opaque { data } => parts.push(ContentPart::Opaque {
+                    format: super::REDACTED_THINKING_FORMAT.into(),
+                    data,
+                }),
                 AnthropicBlock::Thinking { text, signature } => {
                     if !text.trim().is_empty() || signature.is_some() {
                         parts.push(ContentPart::Reasoning { text, signature });

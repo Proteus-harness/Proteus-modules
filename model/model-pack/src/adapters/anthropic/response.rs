@@ -47,6 +47,15 @@ pub(super) fn from_anthropic_response(response: Value) -> Result<CanonicalModelR
                     }
                 }
             }
+            Some("redacted_thinking") => {
+                if item.get("data").and_then(Value::as_str).is_none() {
+                    return Err(anyhow!("redacted_thinking missing opaque data"));
+                }
+                parts.push(ContentPart::Opaque {
+                    format: super::REDACTED_THINKING_FORMAT.into(),
+                    data: item.clone(),
+                });
+            }
             Some("text") => {
                 if let Some(text) = item.get("text").and_then(Value::as_str) {
                     let text = sanitize_provider_text(text);
