@@ -40,11 +40,30 @@ pub(super) fn spawn_session(
     };
     let mut sessions = lock(sessions());
     register_session(&mut sessions, || {
-        if tty {
-            spawn_pty(&program, args, workdir, sandbox, owner, capture)
+        let terminal = super::terminal::Admission::prepare(owner.clone(), tty, command)?;
+        let session = if tty {
+            spawn_pty(
+                &program,
+                args,
+                workdir,
+                sandbox,
+                owner,
+                capture,
+                terminal.record(),
+            )
         } else {
-            spawn_pipes(&program, args, workdir, sandbox, owner, capture)
-        }
+            spawn_pipes(
+                &program,
+                args,
+                workdir,
+                sandbox,
+                owner,
+                capture,
+                terminal.record(),
+            )
+        }?;
+        terminal.commit(&session);
+        Ok(session)
     })
 }
 
@@ -52,7 +71,7 @@ struct PtyControl {
     writer: Mutex<Box<dyn Write + Send>>,
     lifetime: Arc<PtyLifetime>,
     // Keep the controlling terminal alive until the session is released.
-    _master: Mutex<Box<dyn MasterPty + Send>>,
+    master: Mutex<Box<dyn MasterPty + Send>>,
 }
 
 impl ProcessControl for PtyControl {
@@ -69,6 +88,17 @@ impl ProcessControl for PtyControl {
     fn kill(&self) {
         self.lifetime.kill();
     }
+
+    fn resize(&self, columns: u16, rows: u16) -> io::Result<()> {
+        lock(&self.master)
+            .resize(PtySize {
+                rows,
+                cols: columns,
+                pixel_width: 0,
+                pixel_height: 0,
+            })
+            .map_err(io::Error::other)
+    }
 }
 
 fn spawn_pty(
@@ -78,6 +108,7 @@ fn spawn_pty(
     sandbox: Option<SandboxKind>,
     owner: ExecSessionOwner,
     mut capture: Option<PreparedCapture>,
+    terminal: Arc<super::terminal::TerminalRecord>,
 ) -> Result<Arc<ExecSession>> {
     let pair = native_pty_system()
         .openpty(PtySize {
@@ -113,11 +144,14 @@ fn spawn_pty(
     let control = PtyControl {
         writer: Mutex::new(writer),
         lifetime: lifetime.clone(),
-        _master: Mutex::new(pair.master),
+        master: Mutex::new(pair.master),
     };
     drop(pair.slave);
-    let session =
-        Arc::new(ExecSession::new(Box::new(control), true, sandbox, owner).with_capture(capture));
+    let session = Arc::new(
+        ExecSession::new(Box::new(control), true, sandbox, owner)
+            .with_capture(capture)
+            .with_terminal(terminal),
+    );
     read_output(reader, session.clone());
     let wait_session = session.clone();
     std::thread::spawn(move || {
@@ -186,6 +220,7 @@ fn spawn_pipes(
     sandbox: Option<SandboxKind>,
     owner: ExecSessionOwner,
     mut capture: Option<PreparedCapture>,
+    terminal: Arc<super::terminal::TerminalRecord>,
 ) -> Result<Arc<ExecSession>> {
     let mut command = Command::new(program);
     command
@@ -219,8 +254,11 @@ fn spawn_pipes(
     let control = PipeControl {
         lifetime: lifetime.clone(),
     };
-    let session =
-        Arc::new(ExecSession::new(Box::new(control), false, sandbox, owner).with_capture(capture));
+    let session = Arc::new(
+        ExecSession::new(Box::new(control), false, sandbox, owner)
+            .with_capture(capture)
+            .with_terminal(terminal),
+    );
     read_output(stdout, session.clone());
     read_output(stderr, session.clone());
     let wait_session = session.clone();

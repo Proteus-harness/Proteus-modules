@@ -38,6 +38,7 @@ mod pty_lifetime;
 mod reader;
 mod session;
 mod spec;
+mod terminal;
 
 pub(crate) use capture::{CaptureStore, ReadCaptureTool};
 use output::*;
@@ -134,6 +135,12 @@ fn execute_command(
             prepared,
         )
     })?;
+    if host.supports_terminal_publish()
+        && let Err(error) = host.publish_terminal(session.terminal.descriptor())
+    {
+        terminate_session(session_id, &session);
+        return Err(anyhow!("failed to publish terminal: {error}"));
+    }
     let _interaction = match session.lock_interaction(host) {
         Ok(guard) => guard,
         Err(error) => {

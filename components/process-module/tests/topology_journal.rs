@@ -106,6 +106,7 @@ fn assert_separate_slot_authority(config: &AppConfig) {
     assert_eq!(
         tool.host_methods,
         &[
+            proteus_contracts::contracts::TOOL_HOST_PUBLISH_TERMINAL_METHOD,
             proteus_contracts::contracts::OPERATION_HOST_COMPLETE_MODEL_METHOD,
             proteus_contracts::contracts::OPERATION_HOST_EXECUTE_TOOL_METHOD,
             proteus_contracts::contracts::TOOL_HOST_READ_CONVERSATION_METHOD,

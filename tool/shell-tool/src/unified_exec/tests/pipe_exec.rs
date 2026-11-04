@@ -323,13 +323,26 @@ fn cancel_poll_kills_process_group(tty: bool) {
         }),
     );
     let id = first["metadata"]["session_id"].as_i64().unwrap();
-    let pids = ["leader.pid", "child.pid"].map(|file| {
-        std::fs::read_to_string(root.path().join(file))
-            .unwrap()
-            .trim()
-            .parse::<u32>()
-            .unwrap()
-    });
+    // yield reports a live handle, not readiness of the fixture's PID markers.
+    // A loaded workspace gate may schedule the child after the first 250 ms.
+    let deadline = Instant::now() + Duration::from_secs(5);
+    let pids = loop {
+        let markers = ["leader.pid", "child.pid"].map(|file| {
+            std::fs::read_to_string(root.path().join(file))
+                .ok()
+                .and_then(|text| text.trim().parse::<u32>().ok())
+        });
+        if let [Some(leader), Some(child)] = markers {
+            break [leader, child];
+        }
+        if Instant::now() >= deadline {
+            if let Ok(session) = owned_session(id, &context) {
+                terminate_session(id, &session);
+            }
+            panic!("command did not publish both PID markers: {markers:?}");
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    };
     let _cleanup = TestProcessCleanup(
         pids.iter()
             .map(|pid| (*pid, test_process_state(*pid).unwrap().0))

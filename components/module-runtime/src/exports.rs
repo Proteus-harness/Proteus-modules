@@ -2,11 +2,13 @@ use anyhow::{Result, anyhow, bail};
 use proteus_contracts::{
     contracts::{
         PROCESS_POLICY_EVALUATE_METHOD, PROCESS_POLICY_VISIBILITY_METHOD,
-        PROCESS_TOOL_INVOKE_METHOD, PROCESS_TOOL_LIST_METHOD, ProcessComponentExportInitialize,
-        ProcessComponentExportManifest, ProcessContextChunksResponse, ProcessContextInput,
-        ProcessContextResponse, ProcessPolicyEvaluateInput, ProcessPolicyResponse,
-        ProcessPolicyVisibilityInput, ProcessToolInvokeInput, ProcessToolInvokeResponse,
-        ProcessToolListResponse, ProcessWorkflowInput, ProcessWorkflowResponse, WorkflowOutput,
+        PROCESS_TOOL_INVOKE_METHOD, PROCESS_TOOL_LIST_METHOD, PROCESS_TOOL_TERMINAL_METHOD,
+        ProcessComponentExportInitialize, ProcessComponentExportManifest,
+        ProcessContextChunksResponse, ProcessContextInput, ProcessContextResponse,
+        ProcessPolicyEvaluateInput, ProcessPolicyResponse, ProcessPolicyVisibilityInput,
+        ProcessToolInvokeInput, ProcessToolInvokeResponse, ProcessToolListResponse,
+        ProcessToolTerminalInput, ProcessWorkflowInput, ProcessWorkflowResponse,
+        TOOL_TERMINAL_FEATURE, WorkflowOutput,
     },
     process_module::{
         ContextBuilderModuleInput, PolicyModuleInvocationContext, PolicyModuleVisibilityContext,
@@ -64,12 +66,19 @@ impl ModuleExport {
                 .host_features
                 .iter()
                 .filter(|feature| {
-                    self.binding.slot == "model"
-                        && matches!(
-                            feature.as_str(),
-                            proteus_contracts::contracts::MODEL_CATALOG_FEATURE
-                                | proteus_contracts::contracts::MODEL_QUOTA_FEATURE
-                        )
+                    (self.binding.slot == "tool"
+                        && feature.as_str() == TOOL_TERMINAL_FEATURE
+                        && self
+                            .modules
+                            .tools
+                            .iter()
+                            .any(|tool| tool.supports_terminal_control()))
+                        || (self.binding.slot == "model"
+                            && matches!(
+                                feature.as_str(),
+                                proteus_contracts::contracts::MODEL_CATALOG_FEATURE
+                                    | proteus_contracts::contracts::MODEL_QUOTA_FEATURE
+                            ))
                 })
                 .cloned()
                 .collect(),
@@ -130,6 +139,23 @@ impl ModuleExport {
                     self.tool_catalog.definitions()?,
                 ))
             }
+            PROCESS_TOOL_TERMINAL_METHOD => {
+                let input: ProcessToolTerminalInput = decode(params)?;
+                let mut providers = self
+                    .modules
+                    .tools
+                    .iter()
+                    .filter(|tool| tool.supports_terminal_control());
+                let tool = providers
+                    .next()
+                    .ok_or_else(|| anyhow!("tool export has no terminal provider"))?;
+                if providers.next().is_some() {
+                    bail!("tool export has multiple terminal providers");
+                }
+                let mut context = input.context;
+                context.config = self.binding.module_config.clone();
+                encode(tool.terminal_control(input.request, context)?)
+            }
             PROCESS_TOOL_INVOKE_METHOD => {
                 let input: ProcessToolInvokeInput = decode(params)?;
                 let index = self
@@ -144,7 +170,13 @@ impl ModuleExport {
                     skills: input.skills,
                     config: self.binding.module_config.clone(),
                 })?;
-                let mut host = ToolHostBridge(bridge.clone());
+                let terminal_publish = tool.supports_terminal_control()
+                    && self
+                        .binding
+                        .host_features
+                        .iter()
+                        .any(|feature| feature == TOOL_TERMINAL_FEATURE);
+                let mut host = ToolHostBridge(bridge.clone(), terminal_publish);
                 let output = tool.invoke_json(call_json, context_json, &mut host)?;
                 let result = serde_json::from_str(output.as_str())?;
                 encode(ProcessToolInvokeResponse::new(result))

@@ -7,6 +7,7 @@ publish = false
 [dependencies]
 proteus-contracts = { workspace = true }
 anyhow = "1"
+base64 = "0.22"
 libc = "0.2"
 portable-pty = "0.9"
 serde_json = "1"

@@ -39,6 +39,7 @@ pub(super) struct ExecSession {
     pub(super) sandbox: Option<SandboxKind>,
     pub(super) owner: ExecSessionOwner,
     pub(super) capture: Option<CaptureTap>,
+    pub(super) terminal: Arc<super::terminal::TerminalRecord>,
     /// Для LRU-prune: обновляется при каждом обращении к сессии.
     pub(super) last_used: Mutex<Instant>,
 }
@@ -97,6 +98,12 @@ pub(super) trait ProcessControl: Send + Sync {
     fn write(&self, bytes: &[u8]) -> std::io::Result<()>;
     fn interrupt(&self) -> std::io::Result<()>;
     fn kill(&self);
+    fn resize(&self, _columns: u16, _rows: u16) -> std::io::Result<()> {
+        Err(std::io::Error::new(
+            std::io::ErrorKind::Unsupported,
+            "terminal resize requires a PTY",
+        ))
+    }
 }
 
 impl ExecSession {
@@ -120,10 +127,20 @@ impl ExecSession {
             control,
             tty,
             sandbox,
+            terminal: Arc::new(super::terminal::TerminalRecord::new(
+                owner.clone(),
+                tty,
+                "command",
+            )),
             owner,
             capture: None,
             last_used: Mutex::new(Instant::now()),
         }
+    }
+
+    pub(super) fn with_terminal(mut self, terminal: Arc<super::terminal::TerminalRecord>) -> Self {
+        self.terminal = terminal;
+        self
     }
 
     pub(super) fn touch(&self) {
@@ -163,6 +180,7 @@ impl ExecSession {
         if let Some(capture) = &self.capture {
             capture.observe(chunk);
         }
+        self.terminal.append(chunk);
         output.buffer.extend_from_slice(chunk);
         if output.buffer.len() > SESSION_BUFFER_LIMIT {
             let excess = output.buffer.len() - SESSION_BUFFER_LIMIT;
@@ -177,6 +195,10 @@ impl ExecSession {
     pub(super) fn mark_reader_ended(&self, end: ReaderEnd) {
         let mut output = lock(&self.output);
         output.readers.record(end);
+        self.terminal.lifecycle(
+            output.exited && output.readers.is_closed(),
+            output.exit_code,
+        );
         if let Some(capture) = &self.capture {
             capture.ended(end);
         }
@@ -189,6 +211,8 @@ impl ExecSession {
         output.exited = true;
         output.exited_at = Some(Instant::now());
         output.exit_code = exit_code;
+        self.terminal
+            .lifecycle(output.readers.is_closed(), exit_code);
         drop(output);
         self.output_cond.notify_all();
     }
@@ -264,6 +288,7 @@ pub(super) fn ensure_session_janitor() -> Result<()> {
                 loop {
                     std::thread::sleep(SESSION_JANITOR_INTERVAL);
                     prune_expired_sessions(Instant::now(), SESSION_MAX_IDLE);
+                    super::terminal::prune_expired();
                 }
             })
             .map(|_| ())

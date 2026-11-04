@@ -1,7 +1,69 @@
 //! Existing runner supplies real independently packaged workers; no build/install
 //! from tests, no replacement stand-in process and no invented SDK revision.
 use super::*;
-use proteus_contracts::contracts::{ProcessToolInvokeResponse, ProcessToolListResponse};
+use proteus_contracts::contracts::{
+    ProcessToolInvokeResponse, ProcessToolListResponse, TOOL_HOST_PUBLISH_TERMINAL_METHOD,
+    ToolTerminalDescriptor,
+};
+use proteus_module_protocol::{
+    ProcessModuleRpcError,
+    v3::{AsyncHostRequestDispatcher, ComponentHostRequest, HostRequestFuture},
+};
+use std::sync::{Arc, Mutex};
+
+// The broker offers terminal publication. This test host implements exactly
+// that callback and retains its validated registration, rather than claiming
+// capabilities backed by NoAsyncHostRequests.
+struct TerminalHost {
+    target: ProcessComponentExportRef,
+    registrations: Mutex<Vec<ToolTerminalDescriptor>>,
+}
+impl AsyncHostRequestDispatcher for TerminalHost {
+    fn dispatch(&self, request: ComponentHostRequest) -> HostRequestFuture {
+        let result = (|| {
+            if request.method != TOOL_HOST_PUBLISH_TERMINAL_METHOD {
+                return Err(ProcessModuleRpcError::new(
+                    -32601,
+                    "unexpected host callback",
+                ));
+            }
+            if request.invocation.target() != &self.target {
+                return Err(ProcessModuleRpcError::new(
+                    -32602,
+                    "unexpected terminal export",
+                ));
+            }
+            let descriptor: ToolTerminalDescriptor = serde_json::from_value(request.params)
+                .map_err(|error| ProcessModuleRpcError::new(-32602, error.to_string()))?;
+            let _: proteus_contracts::domain::ExecutionId =
+                serde_json::from_value(json!(descriptor.handle))
+                    .map_err(|error| ProcessModuleRpcError::new(-32602, error.to_string()))?;
+            if descriptor.title.len() > 512
+                || !(2..=1000).contains(&descriptor.columns)
+                || !(1..=500).contains(&descriptor.rows)
+            {
+                return Err(ProcessModuleRpcError::new(
+                    -32602,
+                    "invalid terminal descriptor",
+                ));
+            }
+            let mut registrations = self.registrations.lock().unwrap();
+            if registrations.len() >= 32
+                || registrations
+                    .iter()
+                    .any(|known| known.handle == descriptor.handle)
+            {
+                return Err(ProcessModuleRpcError::new(
+                    -32602,
+                    "duplicate or excess terminal",
+                ));
+            }
+            registrations.push(descriptor);
+            Ok(Value::Null)
+        })();
+        Box::pin(async move { result })
+    }
+}
 
 fn shell_worker(binary: &Path, workspace: &Path, id: &str, config: Value) -> ComponentBroker {
     let export = ProcessExportBinding::new(
@@ -39,16 +101,26 @@ async fn call(
         attribution,
         skills: Default::default(),
     };
-    serde_json::from_value(
-        invoke(
-            worker,
+    let host = Arc::new(TerminalHost {
+        target: target.clone(),
+        registrations: Mutex::new(Vec::new()),
+    });
+    let terminal = worker
+        .invoke_with_dispatcher(
             target,
             "invoke",
             serde_json::to_value(input).unwrap(),
+            Duration::from_secs(15),
+            host.clone(),
         )
-        .await,
-    )
-    .unwrap()
+        .await
+        .unwrap();
+    let InvocationTerminal::Success(value) = terminal else {
+        panic!("{target:?}/invoke: {terminal:?}");
+    };
+    let registrations = host.registrations.lock().unwrap();
+    assert_eq!(registrations.len(), usize::from(name == "exec_command"));
+    serde_json::from_value(value).unwrap()
 }
 
 #[tokio::test]

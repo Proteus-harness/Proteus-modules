@@ -10,10 +10,23 @@ pub(crate) struct ExecCommandTool {
 }
 
 impl ToolModule for ExecCommandTool {
+    fn supports_terminal_control(&self) -> bool {
+        true
+    }
+
+    fn terminal_control(
+        &self,
+        request: proteus_contracts::contracts::ToolTerminalRequest,
+        context: proteus_contracts::process_module::ToolModuleInvocationContext,
+    ) -> Result<proteus_contracts::contracts::ToolTerminalResponse, ProcessModuleError> {
+        super::terminal::control(request, context)
+            .map_err(|error| ProcessModuleError::new(format!("{error:#}")))
+    }
+
     fn spec_json(&self) -> String {
         let mut spec = json!({
             "name": "exec_command",
-            "description": "Runs a shell command (sh -lc) with closed stdin and stdout/stderr pipes by default. Set `tty: true` for a PTY with interactive stdin. Waits up to `yield_time_ms` for output; if the process is still running, returns a Session ID for follow-up interaction via `write_stdin`. Non-escalated commands require bwrap and run with no network access, a private PID namespace, and a read-only filesystem outside the workspace; execution fails closed when bwrap is unavailable or disabled. The sandbox network is isolated per session: a localhost server started in a sandboxed session is unreachable from other tool calls and from the user's machine; start servers that must stay reachable with `with_escalated_permissions: true`. Set `with_escalated_permissions: true` with a short `justification` to request an unsandboxed run (requires user approval). Non-escalated workdirs must stay inside the workspace. Live sessions belong to the current runtime session/thread/workspace, expire after 30 minutes idle, and are killed when the invocation is cancelled. At most 16 live sessions: the least recently used one is killed to make room, so close finished sessions via write_stdin (Ctrl-C/Ctrl-D). Safety: RunsCommands.",
+            "description": "Runs a shell command (sh -lc) with closed stdin and stdout/stderr pipes by default. Set `tty: true` for a PTY with interactive stdin, including commands that ask the user for a password in the native terminal view. Waits up to `yield_time_ms` for output; if the process is still running, returns a Session ID for follow-up interaction via `write_stdin`. Non-escalated commands require bwrap and run with no network access, a private PID namespace, and a read-only filesystem outside the workspace; execution fails closed when bwrap is unavailable or disabled. The sandbox network is isolated per session: a localhost server started in a sandboxed session is unreachable from other tool calls and from the user's machine; start servers that must stay reachable with `with_escalated_permissions: true`. Set `with_escalated_permissions: true` with a short `justification` to request an unsandboxed run (requires user approval). Non-escalated workdirs must stay inside the workspace. Live sessions belong to the current runtime session/thread/workspace, expire after 30 minutes idle, and are killed when the invocation is cancelled. At most 16 live sessions: the least recently used one is killed to make room, so close finished sessions via write_stdin (Ctrl-C/Ctrl-D). Safety: RunsCommands.",
             "input_schema": {
                 "type": "object",
                 "properties": {
