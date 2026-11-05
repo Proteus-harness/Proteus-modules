@@ -20,7 +20,7 @@ impl PtyChild for NativeChild {
                 .process_id()
                 .ok_or_else(|| io::Error::other("PTY child has no PID"))?;
             crate::child_status::observe_exit(pid)
-                .map(|status| status.map(|status| status.code().unwrap_or(1)))
+                .map(|status| status.map(super::process::exit_code))
         }
         #[cfg(not(unix))]
         {

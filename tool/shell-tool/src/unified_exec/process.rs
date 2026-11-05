@@ -2,7 +2,7 @@
 use std::{
     io::{self, Read, Write},
     process::{Command, ExitStatus, Stdio},
-    sync::{Arc, Mutex},
+    sync::{Arc, Mutex, mpsc},
     time::Duration,
 };
 
@@ -41,30 +41,73 @@ pub(super) fn spawn_session(
     let mut sessions = lock(sessions());
     register_session(&mut sessions, || {
         let terminal = super::terminal::Admission::prepare(owner.clone(), tty, command)?;
-        let session = if tty {
-            spawn_pty(
-                &program,
+        let session = spawn_process(
+            tty,
+            Launch {
+                program,
                 args,
-                workdir,
+                workdir: workdir.to_owned(),
                 sandbox,
                 owner,
                 capture,
-                terminal.record(),
-            )
-        } else {
-            spawn_pipes(
-                &program,
-                args,
-                workdir,
-                sandbox,
-                owner,
-                capture,
-                terminal.record(),
-            )
-        }?;
+                terminal: terminal.record(),
+            },
+        )?;
         terminal.commit(&session);
         Ok(session)
     })
+}
+
+/// The bwrap parent-death signal follows the OS thread that creates it.
+/// Keep that thread alive through wait/drain/reap, not just invocation yield.
+struct Launch {
+    program: String,
+    args: Vec<String>,
+    workdir: String,
+    sandbox: Option<SandboxKind>,
+    owner: ExecSessionOwner,
+    capture: Option<PreparedCapture>,
+    terminal: Arc<super::terminal::TerminalRecord>,
+}
+
+const STARTUP_TIMEOUT: Duration = Duration::from_secs(10);
+type Started = mpsc::SyncSender<Result<Arc<ExecSession>>>;
+
+fn spawn_process(tty: bool, launch: Launch) -> Result<Arc<ExecSession>> {
+    // Rendezvous: a success cannot sit queued after the receiver times out.
+    let (ready, receiver) = mpsc::sync_channel(0);
+    std::thread::Builder::new()
+        .name("proteus-exec-session-owner".into())
+        .spawn(move || {
+            let result = if tty {
+                run_pty(launch, &ready)
+            } else {
+                run_pipes(launch, &ready)
+            };
+            if let Err(error) = result {
+                let _ = ready.send(Err(error));
+            }
+        })
+        .context("failed to spawn exec session owner")?;
+    receiver
+        .recv_timeout(STARTUP_TIMEOUT)
+        .context("exec session owner did not complete startup")?
+}
+
+fn publish_session(ready: &Started, session: &Arc<ExecSession>) {
+    if ready.send(Ok(session.clone())).is_err() {
+        // Startup timed out or its caller disappeared. A late child has no
+        // accepted handle; the owner must still terminate, drain and reap it.
+        session.kill();
+    }
+}
+
+/// Retain cleanup even if initialization or a reader-thread spawn unwinds.
+struct FinishOnDrop<F: Fn()>(F);
+impl<F: Fn()> Drop for FinishOnDrop<F> {
+    fn drop(&mut self) {
+        (self.0)();
+    }
 }
 
 struct PtyControl {
@@ -101,15 +144,16 @@ impl ProcessControl for PtyControl {
     }
 }
 
-fn spawn_pty(
-    program: &str,
-    args: Vec<String>,
-    workdir: &str,
-    sandbox: Option<SandboxKind>,
-    owner: ExecSessionOwner,
-    mut capture: Option<PreparedCapture>,
-    terminal: Arc<super::terminal::TerminalRecord>,
-) -> Result<Arc<ExecSession>> {
+fn run_pty(launch: Launch, ready: &Started) -> Result<()> {
+    let Launch {
+        program,
+        args,
+        workdir,
+        sandbox,
+        owner,
+        mut capture,
+        terminal,
+    } = launch;
     let pair = native_pty_system()
         .openpty(PtySize {
             rows: 24,
@@ -127,9 +171,9 @@ fn spawn_pty(
         .master
         .take_writer()
         .map_err(|error| anyhow!("failed to take PTY writer: {error}"))?;
-    let mut builder = CommandBuilder::new(program);
+    let mut builder = CommandBuilder::new(&program);
     builder.args(args);
-    builder.cwd(workdir);
+    builder.cwd(&workdir);
     for (key, value) in EXEC_COMMAND_ENV {
         builder.env(key, value);
     }
@@ -141,6 +185,7 @@ fn spawn_pty(
         capture.process_started();
     }
     let lifetime = Arc::new(PtyLifetime::new(child));
+    let _finish = FinishOnDrop(|| lifetime.finish());
     let control = PtyControl {
         writer: Mutex::new(writer),
         lifetime: lifetime.clone(),
@@ -153,33 +198,31 @@ fn spawn_pty(
             .with_terminal(terminal),
     );
     read_output(reader, session.clone());
-    let wait_session = session.clone();
-    std::thread::spawn(move || {
-        loop {
-            match lifetime.observe_exit() {
-                Ok(Some(code)) => {
-                    wait_session.mark_exited(Some(code));
-                    break;
-                }
-                Err(_) => {
-                    wait_session.mark_exited(None);
-                    break;
-                }
-                Ok(None) => std::thread::sleep(Duration::from_millis(10)),
-            }
-        }
-        // WNOWAIT retains process identity through the existing output drain
-        // budget. Cancellation/eviction can still stop actual live descendants.
-        loop {
-            let closed = lock(&wait_session.output).readers.is_closed();
-            if closed || wait_session.drain_expired() {
+    publish_session(ready, &session);
+    let wait_session = session;
+    loop {
+        match lifetime.observe_exit() {
+            Ok(Some(code)) => {
+                wait_session.mark_exited(Some(code));
                 break;
             }
-            std::thread::sleep(Duration::from_millis(5));
+            Err(_) => {
+                wait_session.mark_exited(None);
+                break;
+            }
+            Ok(None) => std::thread::sleep(Duration::from_millis(10)),
         }
-        lifetime.finish();
-    });
-    Ok(session)
+    }
+    // WNOWAIT retains process identity through the existing output drain
+    // budget. Cancellation/eviction can still stop actual live descendants.
+    loop {
+        let closed = lock(&wait_session.output).readers.is_closed();
+        if closed || wait_session.drain_expired() {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    Ok(())
 }
 
 struct PipeControl {
@@ -213,15 +256,16 @@ impl ProcessControl for PipeControl {
     }
 }
 
-fn spawn_pipes(
-    program: &str,
-    args: Vec<String>,
-    workdir: &str,
-    sandbox: Option<SandboxKind>,
-    owner: ExecSessionOwner,
-    mut capture: Option<PreparedCapture>,
-    terminal: Arc<super::terminal::TerminalRecord>,
-) -> Result<Arc<ExecSession>> {
+fn run_pipes(launch: Launch, ready: &Started) -> Result<()> {
+    let Launch {
+        program,
+        args,
+        workdir,
+        sandbox,
+        owner,
+        mut capture,
+        terminal,
+    } = launch;
     let mut command = Command::new(program);
     command
         .args(args)
@@ -246,9 +290,9 @@ fn spawn_pipes(
     let stdout = child.stdout.take().expect("piped stdout");
     let stderr = child.stderr.take().expect("piped stderr");
     let lifetime = Arc::new(PipeLifetime::new(child));
+    let _finish = FinishOnDrop(|| lifetime.finish());
     #[cfg(unix)]
     if let Err(error) = set_nonblocking(&stdout).and_then(|()| set_nonblocking(&stderr)) {
-        lifetime.finish();
         return Err(error.into());
     }
     let control = PipeControl {
@@ -261,32 +305,30 @@ fn spawn_pipes(
     );
     read_output(stdout, session.clone());
     read_output(stderr, session.clone());
-    let wait_session = session.clone();
-    std::thread::spawn(move || {
-        loop {
-            match lifetime.observe_exit() {
-                Ok(Some(status)) => {
-                    wait_session.mark_exited(Some(exit_code(status)));
-                    break;
-                }
-                Err(_) => {
-                    wait_session.mark_exited(None);
-                    break;
-                }
-                Ok(None) => {}
-            }
-            std::thread::sleep(Duration::from_millis(10));
-        }
-        loop {
-            let closed = lock(&wait_session.output).readers.is_closed();
-            if closed || wait_session.drain_expired() {
+    publish_session(ready, &session);
+    let wait_session = session;
+    loop {
+        match lifetime.observe_exit() {
+            Ok(Some(status)) => {
+                wait_session.mark_exited(Some(exit_code(status)));
                 break;
             }
-            std::thread::sleep(Duration::from_millis(5));
+            Err(_) => {
+                wait_session.mark_exited(None);
+                break;
+            }
+            Ok(None) => {}
         }
-        lifetime.finish();
-    });
-    Ok(session)
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    loop {
+        let closed = lock(&wait_session.output).readers.is_closed();
+        if closed || wait_session.drain_expired() {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    Ok(())
 }
 
 fn read_output(mut reader: impl Read + Send + 'static, session: Arc<ExecSession>) {
@@ -301,7 +343,7 @@ fn read_output(mut reader: impl Read + Send + 'static, session: Arc<ExecSession>
     });
 }
 
-fn exit_code(status: ExitStatus) -> i32 {
+pub(super) fn exit_code(status: ExitStatus) -> i32 {
     if let Some(code) = status.code() {
         return code;
     }
@@ -314,3 +356,7 @@ fn exit_code(status: ExitStatus) -> i32 {
     }
     -1
 }
+
+#[cfg(test)]
+#[path = "tests/process_owner.rs"]
+mod tests;

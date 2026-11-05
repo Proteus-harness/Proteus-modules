@@ -13,6 +13,9 @@ use serde_json::{Value, json};
 use super::*;
 use proteus_contracts::process_module::ProcessModuleError;
 
+#[cfg(target_os = "linux")]
+mod sandbox_parent;
+
 struct TestToolHost {
     cancelled: Arc<AtomicBool>,
 }
