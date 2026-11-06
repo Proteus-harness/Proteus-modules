@@ -57,5 +57,7 @@ jobs:
           restore-keys: deps-${{ runner.os }}-${{ runner.arch }}-rust1.95-node22-
       - name: Formatting
         run: cargo fmt --all -- --check
+      - name: Source catalog
+        run: python3 scripts/catalog.py --check
       - name: Workspace gate with real process fixtures
         run: python3 scripts/test.py full

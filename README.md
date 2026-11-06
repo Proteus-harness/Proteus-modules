@@ -23,9 +23,33 @@ alpha-выпусками не обещана; потребитель закре�
 каждый export имеет права своего контракта. Самостоятельные процессы и общий
 тестовый fixture описаны в [reference.md](docs/reference.md).
 
+## Каталог В Desktop
+
+Источник каталога — этот Git-репозиторий:
+`https://github.com/Proteus-harness/Proteus-modules.git`.
+В корне находится [proteus-catalog.json](proteus-catalog.json) с независимыми
+процессными пакетами, их версиями и объявленными exports. Версии, пути и
+exports берутся из тех же manifests, что использует `package.py`.
+
+Записи предлагают **скачать исходники** и показывают команду сборки выбранного
+пакета, например `python3 package.py --package shell-tool`. Скачивается весь
+workspace на выбранной Git-ревизии: одна папка `components/<id>-module` зависит
+от соседних библиотек и сама по себе недостаточна. Для сборки нужны Rust, Git
+и Python 3; для Linux x86_64 нужен также линкер LLD, выбранный в
+`.cargo/config.toml`. Каталог не запускает сборку и не подключает модуль к профилю.
+Отдельные готовые бинарники в этом индексе пока не опубликованы.
+
+После изменения package manifests обновите индекс без сборки:
+
+```bash
+python3 scripts/catalog.py --write
+python3 scripts/catalog.py --check
+python3 -m unittest discover -s tests -p 'test_catalog.py'
+```
+
 ## Сборка И Проверка
 
-Нужны Rust, Git, Python 3; gate Claude command hooks дополнительно
+Нужны Rust, Git, Python 3 и LLD на Linux x86_64; gate Claude command hooks дополнительно
 требует Node.js 22.18+.
 Контракты и test harness подключены по фиксированному Git commit в Cargo.toml;
 соседний checkout harness для обычной сборки не требуется.

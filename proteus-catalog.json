@@ -1,0 +1,468 @@
+{
+  "format": 1,
+  "title": "Proteus Modules",
+  "categories": [
+    {
+      "id": "context",
+      "title": "Контекст"
+    },
+    {
+      "id": "context-provider",
+      "title": "Поиск и память"
+    },
+    {
+      "id": "hook",
+      "title": "Hooks"
+    },
+    {
+      "id": "model",
+      "title": "Модели"
+    },
+    {
+      "id": "policy",
+      "title": "Разрешения"
+    },
+    {
+      "id": "tool",
+      "title": "Инструменты"
+    },
+    {
+      "id": "workflow",
+      "title": "Workflow"
+    }
+  ],
+  "entries": [
+    {
+      "id": "codex-context-preparation",
+      "kind": "process_module",
+      "title": "codex-context-preparation",
+      "description": "Подготовка и сжатие истории по правилам Codex. Exports: hook/codex_compact.",
+      "category": "hook",
+      "version": "0.1.0-alpha.3",
+      "path": "components/codex-context-preparation-module",
+      "source": {
+        "path": ".",
+        "build": [
+          "python3",
+          "package.py",
+          "--package",
+          "codex-context-preparation"
+        ],
+        "requirements": [
+          "Rust",
+          "Git",
+          "Python 3",
+          "LLD (Linux x86_64)"
+        ]
+      }
+    },
+    {
+      "id": "codex-patch",
+      "kind": "process_module",
+      "title": "codex-patch",
+      "description": "Применение изменений файлов в формате Codex apply_patch. Exports: tool/codex_patch.",
+      "category": "tool",
+      "version": "0.1.0-alpha.3",
+      "path": "components/codex-patch-module",
+      "source": {
+        "path": ".",
+        "build": [
+          "python3",
+          "package.py",
+          "--package",
+          "codex-patch"
+        ],
+        "requirements": [
+          "Rust",
+          "Git",
+          "Python 3",
+          "LLD (Linux x86_64)"
+        ]
+      }
+    },
+    {
+      "id": "coding-workflow",
+      "kind": "process_module",
+      "title": "coding-workflow",
+      "description": "Циклы выполнения задач, планирования и проверки кода. Exports: workflow/coding.codex_loop, workflow/coding.plan_execute_review, workflow/coding.project_check, workflow/coding.single_loop.",
+      "category": "workflow",
+      "version": "0.1.0-alpha.3",
+      "path": "components/coding-workflow-module",
+      "source": {
+        "path": ".",
+        "build": [
+          "python3",
+          "package.py",
+          "--package",
+          "coding-workflow"
+        ],
+        "requirements": [
+          "Rust",
+          "Git",
+          "Python 3",
+          "LLD (Linux x86_64)"
+        ]
+      }
+    },
+    {
+      "id": "context-pack",
+      "kind": "process_module",
+      "title": "context-pack",
+      "description": "Построение контекста задачи и рабочей области. Exports: context/codex_context, context/repo_aware, context/simple.",
+      "category": "context",
+      "version": "0.1.0-alpha.3",
+      "path": "components/context-pack-module",
+      "source": {
+        "path": ".",
+        "build": [
+          "python3",
+          "package.py",
+          "--package",
+          "context-pack"
+        ],
+        "requirements": [
+          "Rust",
+          "Git",
+          "Python 3",
+          "LLD (Linux x86_64)"
+        ]
+      }
+    },
+    {
+      "id": "direct-patch",
+      "kind": "process_module",
+      "title": "direct-patch",
+      "description": "Применение прямых изменений файлов. Exports: tool/direct_patch.",
+      "category": "tool",
+      "version": "0.1.0-alpha.3",
+      "path": "components/direct-patch-module",
+      "source": {
+        "path": ".",
+        "build": [
+          "python3",
+          "package.py",
+          "--package",
+          "direct-patch"
+        ],
+        "requirements": [
+          "Rust",
+          "Git",
+          "Python 3",
+          "LLD (Linux x86_64)"
+        ]
+      }
+    },
+    {
+      "id": "file-tools",
+      "kind": "process_module",
+      "title": "file-tools",
+      "description": "Чтение, запись и просмотр файлов рабочей области. Exports: tool/file_tools.",
+      "category": "tool",
+      "version": "0.1.0-alpha.3",
+      "path": "components/file-tools-module",
+      "source": {
+        "path": ".",
+        "build": [
+          "python3",
+          "package.py",
+          "--package",
+          "file-tools"
+        ],
+        "requirements": [
+          "Rust",
+          "Git",
+          "Python 3",
+          "LLD (Linux x86_64)"
+        ]
+      }
+    },
+    {
+      "id": "git-tools",
+      "kind": "process_module",
+      "title": "git-tools",
+      "description": "Инструменты работы с Git-репозиторием. Exports: tool/git_tools.",
+      "category": "tool",
+      "version": "0.1.0-alpha.3",
+      "path": "components/git-tools-module",
+      "source": {
+        "path": ".",
+        "build": [
+          "python3",
+          "package.py",
+          "--package",
+          "git-tools"
+        ],
+        "requirements": [
+          "Rust",
+          "Git",
+          "Python 3",
+          "LLD (Linux x86_64)"
+        ]
+      }
+    },
+    {
+      "id": "hook-pack",
+      "kind": "process_module",
+      "title": "hook-pack",
+      "description": "Инструкции и ограничение объёма результатов инструментов. Exports: hook/hook.instructions, hook/hook.output_budget.",
+      "category": "hook",
+      "version": "0.1.0-alpha.3",
+      "path": "components/hook-pack-module",
+      "source": {
+        "path": ".",
+        "build": [
+          "python3",
+          "package.py",
+          "--package",
+          "hook-pack"
+        ],
+        "requirements": [
+          "Rust",
+          "Git",
+          "Python 3",
+          "LLD (Linux x86_64)"
+        ]
+      }
+    },
+    {
+      "id": "memory-pack",
+      "kind": "process_module",
+      "title": "memory-pack",
+      "description": "Память в JSONL с инструментами и поставщиком контекста. Exports: context_provider/jsonl_memory, tool/jsonl_memory.",
+      "category": "context-provider",
+      "version": "0.1.0-alpha.3",
+      "path": "components/memory-pack-module",
+      "source": {
+        "path": ".",
+        "build": [
+          "python3",
+          "package.py",
+          "--package",
+          "memory-pack"
+        ],
+        "requirements": [
+          "Rust",
+          "Git",
+          "Python 3",
+          "LLD (Linux x86_64)"
+        ]
+      }
+    },
+    {
+      "id": "model-pack",
+      "kind": "process_module",
+      "title": "model-pack",
+      "description": "Провайдеры моделей и авторизация. Exports: model/*.",
+      "category": "model",
+      "version": "0.1.0-alpha.3",
+      "path": "components/model-pack-module",
+      "source": {
+        "path": ".",
+        "build": [
+          "python3",
+          "package.py",
+          "--package",
+          "model-pack"
+        ],
+        "requirements": [
+          "Rust",
+          "Git",
+          "Python 3",
+          "LLD (Linux x86_64)"
+        ]
+      }
+    },
+    {
+      "id": "plan-tool",
+      "kind": "process_module",
+      "title": "plan-tool",
+      "description": "План задачи и состояние его шагов. Exports: tool/plan_tool.",
+      "category": "tool",
+      "version": "0.1.0-alpha.3",
+      "path": "components/plan-tool-module",
+      "source": {
+        "path": ".",
+        "build": [
+          "python3",
+          "package.py",
+          "--package",
+          "plan-tool"
+        ],
+        "requirements": [
+          "Rust",
+          "Git",
+          "Python 3",
+          "LLD (Linux x86_64)"
+        ]
+      }
+    },
+    {
+      "id": "policy-pack",
+      "kind": "process_module",
+      "title": "policy-pack",
+      "description": "Политики разрешений и подтверждений инструментов. Exports: policy/allow_all, policy/ask_write, policy/codex_policy, policy/opencode_policy, tool/policy_tools.",
+      "category": "policy",
+      "version": "0.1.0-alpha.3",
+      "path": "components/policy-pack-module",
+      "source": {
+        "path": ".",
+        "build": [
+          "python3",
+          "package.py",
+          "--package",
+          "policy-pack"
+        ],
+        "requirements": [
+          "Rust",
+          "Git",
+          "Python 3",
+          "LLD (Linux x86_64)"
+        ]
+      }
+    },
+    {
+      "id": "rg-search",
+      "kind": "process_module",
+      "title": "rg-search",
+      "description": "Поиск по рабочей области через ripgrep. Exports: context_provider/rg_search, tool/rg_search.",
+      "category": "context-provider",
+      "version": "0.1.0-alpha.3",
+      "path": "components/rg-search-module",
+      "source": {
+        "path": ".",
+        "build": [
+          "python3",
+          "package.py",
+          "--package",
+          "rg-search"
+        ],
+        "requirements": [
+          "Rust",
+          "Git",
+          "Python 3",
+          "LLD (Linux x86_64)"
+        ]
+      }
+    },
+    {
+      "id": "rust-lsp",
+      "kind": "process_module",
+      "title": "rust-lsp",
+      "description": "Инструменты работы с Rust language server. Exports: tool/rust_lsp.",
+      "category": "tool",
+      "version": "0.1.0-alpha.3",
+      "path": "components/rust-lsp-module",
+      "source": {
+        "path": ".",
+        "build": [
+          "python3",
+          "package.py",
+          "--package",
+          "rust-lsp"
+        ],
+        "requirements": [
+          "Rust",
+          "Git",
+          "Python 3",
+          "LLD (Linux x86_64)"
+        ]
+      }
+    },
+    {
+      "id": "shell-tool",
+      "kind": "process_module",
+      "title": "shell-tool",
+      "description": "Запуск команд и интерактивный терминал. Exports: tool/shell_tools.",
+      "category": "tool",
+      "version": "0.1.0-alpha.3",
+      "path": "components/shell-tool-module",
+      "source": {
+        "path": ".",
+        "build": [
+          "python3",
+          "package.py",
+          "--package",
+          "shell-tool"
+        ],
+        "requirements": [
+          "Rust",
+          "Git",
+          "Python 3",
+          "LLD (Linux x86_64)"
+        ]
+      }
+    },
+    {
+      "id": "skill-pack",
+      "kind": "process_module",
+      "title": "skill-pack",
+      "description": "Обнаружение и чтение навыков агента. Exports: context_provider/skills, tool/skill_tool.",
+      "category": "tool",
+      "version": "0.1.0-alpha.3",
+      "path": "components/skill-pack-module",
+      "source": {
+        "path": ".",
+        "build": [
+          "python3",
+          "package.py",
+          "--package",
+          "skill-pack"
+        ],
+        "requirements": [
+          "Rust",
+          "Git",
+          "Python 3",
+          "LLD (Linux x86_64)"
+        ]
+      }
+    },
+    {
+      "id": "sqlite-memory",
+      "kind": "process_module",
+      "title": "sqlite-memory",
+      "description": "Память в SQLite с инструментами и поставщиком контекста. Exports: context_provider/sqlite_memory, tool/sqlite_memory.",
+      "category": "context-provider",
+      "version": "0.1.0-alpha.3",
+      "path": "components/sqlite-memory-module",
+      "source": {
+        "path": ".",
+        "build": [
+          "python3",
+          "package.py",
+          "--package",
+          "sqlite-memory"
+        ],
+        "requirements": [
+          "Rust",
+          "Git",
+          "Python 3",
+          "LLD (Linux x86_64)"
+        ]
+      }
+    },
+    {
+      "id": "tool-selection-hook",
+      "kind": "process_module",
+      "title": "tool-selection-hook",
+      "description": "Динамический отбор доступных инструментов. Exports: hook/tool_selection.dynamic.",
+      "category": "hook",
+      "version": "0.1.0-alpha.3",
+      "path": "components/tool-selection-hook-module",
+      "source": {
+        "path": ".",
+        "build": [
+          "python3",
+          "package.py",
+          "--package",
+          "tool-selection-hook"
+        ],
+        "requirements": [
+          "Rust",
+          "Git",
+          "Python 3",
+          "LLD (Linux x86_64)"
+        ]
+      }
+    }
+  ]
+}
