@@ -48,6 +48,7 @@
           "--package",
           "codex-context-preparation"
         ],
+        "artifact": "dist/codex-context-preparation.zip",
         "requirements": [
           "Rust",
           "Git",
@@ -72,6 +73,7 @@
           "--package",
           "codex-patch"
         ],
+        "artifact": "dist/codex-patch.zip",
         "requirements": [
           "Rust",
           "Git",
@@ -96,6 +98,7 @@
           "--package",
           "coding-workflow"
         ],
+        "artifact": "dist/coding-workflow.zip",
         "requirements": [
           "Rust",
           "Git",
@@ -120,6 +123,7 @@
           "--package",
           "context-pack"
         ],
+        "artifact": "dist/context-pack.zip",
         "requirements": [
           "Rust",
           "Git",
@@ -144,6 +148,7 @@
           "--package",
           "direct-patch"
         ],
+        "artifact": "dist/direct-patch.zip",
         "requirements": [
           "Rust",
           "Git",
@@ -168,6 +173,7 @@
           "--package",
           "file-tools"
         ],
+        "artifact": "dist/file-tools.zip",
         "requirements": [
           "Rust",
           "Git",
@@ -192,6 +198,7 @@
           "--package",
           "git-tools"
         ],
+        "artifact": "dist/git-tools.zip",
         "requirements": [
           "Rust",
           "Git",
@@ -216,6 +223,7 @@
           "--package",
           "hook-pack"
         ],
+        "artifact": "dist/hook-pack.zip",
         "requirements": [
           "Rust",
           "Git",
@@ -240,6 +248,7 @@
           "--package",
           "memory-pack"
         ],
+        "artifact": "dist/memory-pack.zip",
         "requirements": [
           "Rust",
           "Git",
@@ -264,6 +273,7 @@
           "--package",
           "model-pack"
         ],
+        "artifact": "dist/model-pack.zip",
         "requirements": [
           "Rust",
           "Git",
@@ -288,6 +298,7 @@
           "--package",
           "plan-tool"
         ],
+        "artifact": "dist/plan-tool.zip",
         "requirements": [
           "Rust",
           "Git",
@@ -312,6 +323,7 @@
           "--package",
           "policy-pack"
         ],
+        "artifact": "dist/policy-pack.zip",
         "requirements": [
           "Rust",
           "Git",
@@ -336,6 +348,7 @@
           "--package",
           "rg-search"
         ],
+        "artifact": "dist/rg-search.zip",
         "requirements": [
           "Rust",
           "Git",
@@ -360,6 +373,7 @@
           "--package",
           "rust-lsp"
         ],
+        "artifact": "dist/rust-lsp.zip",
         "requirements": [
           "Rust",
           "Git",
@@ -384,6 +398,7 @@
           "--package",
           "shell-tool"
         ],
+        "artifact": "dist/shell-tool.zip",
         "requirements": [
           "Rust",
           "Git",
@@ -408,6 +423,7 @@
           "--package",
           "skill-pack"
         ],
+        "artifact": "dist/skill-pack.zip",
         "requirements": [
           "Rust",
           "Git",
@@ -432,6 +448,7 @@
           "--package",
           "sqlite-memory"
         ],
+        "artifact": "dist/sqlite-memory.zip",
         "requirements": [
           "Rust",
           "Git",
@@ -456,6 +473,7 @@
           "--package",
           "tool-selection-hook"
         ],
+        "artifact": "dist/tool-selection-hook.zip",
         "requirements": [
           "Rust",
           "Git",

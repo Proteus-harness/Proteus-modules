@@ -48,6 +48,7 @@ class CatalogTests(unittest.TestCase):
                 self.assertEqual(entry["source"]["requirements"],
                                  ["Rust", "Git", "Python 3", "LLD (Linux x86_64)"])
                 self.assertNotIn("artifacts", entry)
+                self.assertEqual(entry["source"]["artifact"], f'dist/{entry["id"]}.zip')
 
     def test_new_multi_export_package_uses_metadata_without_editorial_registration(self):
         component = self.add_package("new-package", slot="context_provider", version="2.0.0",
