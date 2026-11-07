@@ -833,3 +833,21 @@ fn stream_missing_or_unknown_finish_is_not_success() {
         ModelStreamEvent::Error { .. }
     ));
 }
+
+#[test]
+fn truncated_stream_discards_partial_tool_arguments_without_hiding_length() {
+    let mut state = AnthropicStreamState::default();
+    state.translate("content_block_start", &json!({"index":0,"content_block":{"type":"tool_use","id":"call","name":"shell","input":{}}}).to_string());
+    state.translate(
+        "content_block_delta",
+        &json!({"index":0,"delta":{"type":"input_json_delta","partial_json":"{"}}).to_string(),
+    );
+    state.translate(
+        "message_delta",
+        &json!({"delta":{"stop_reason":"max_tokens"}}).to_string(),
+    );
+    let events = state.translate("message_stop", "{}");
+    assert!(
+        matches!(&events[0], ModelStreamEvent::Response { response } if response.finish_reason == FinishReason::Length && response.tool_calls.is_empty())
+    );
+}

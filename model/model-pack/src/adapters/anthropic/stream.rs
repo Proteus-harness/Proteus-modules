@@ -273,6 +273,7 @@ impl AnthropicStreamState {
 
         let mut parts = Vec::new();
         let mut tool_calls = Vec::new();
+        let accept_tool_calls = self.stop_reason.as_deref() == Some("tool_use");
         for block in self.blocks.drain(..) {
             match block {
                 AnthropicBlock::Opaque { data } => parts.push(ContentPart::Opaque {
@@ -296,6 +297,9 @@ impl AnthropicStreamState {
                     name,
                     input_json,
                 } => {
+                    if !accept_tool_calls {
+                        continue;
+                    }
                     let args = if input_json.is_empty() {
                         Value::Null
                     } else {
