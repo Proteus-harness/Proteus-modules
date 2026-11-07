@@ -217,8 +217,6 @@ impl AnthropicMessagesClient {
         // множество content_block_delta расширяют его, content_block_stop
         // закрывает. Для tool_use input_json_delta приходит инкрементально;
         // собираем всё в state и на message_stop отдаём Response.
-        let client = self.clone();
-        let fallback_request = request;
         let state = Arc::new(Mutex::new(AnthropicStreamState::default()));
         let mut sse = response.bytes_stream().eventsource();
         let events = async_stream::stream! {
@@ -244,14 +242,9 @@ impl AnthropicMessagesClient {
                         }
                     }
                     Err(error) => {
-                        match client.complete_response(fallback_request).await {
-                            Ok(response) => yield Ok(ModelStreamEvent::Response { response }),
-                            Err(fallback_error) => yield Ok(ModelStreamEvent::Error {
-                                failure: ModelFailure::other(format!(
-                                    "sse transport error: {error}; non-stream fallback failed: {fallback_error}"
-                                )),
-                            }),
-                        }
+                        yield Ok(ModelStreamEvent::Error {
+                            failure: ModelFailure::other(format!("sse transport error: {error}")),
+                        });
                         saw_terminal_event = true;
                         break;
                     }

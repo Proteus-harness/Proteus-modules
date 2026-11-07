@@ -8,7 +8,7 @@ use serde_json::json;
 
 use crate::util::{
     err_result, module_error, ok_result, parse_call, parse_invocation_context, required_string,
-    workspace_file_for_write, workspace_path,
+    workspace_file_for_atomic_write, workspace_path,
 };
 
 const MAX_EDIT_FILE_BYTES: u64 = 2 * 1024 * 1024;
@@ -162,7 +162,7 @@ impl ToolModule for EditFileTool {
             (content.replacen(old_string, new_string, 1), 1)
         };
 
-        let mut target = match workspace_file_for_write(cwd_path, &target_path) {
+        let mut target = match workspace_file_for_atomic_write(cwd_path, &target_path) {
             Ok(file) => file,
             Err(error) => return err_result(&call.id, &call.name, error),
         };
@@ -172,6 +172,10 @@ impl ToolModule for EditFileTool {
                 &call.name,
                 format!("failed to write {}: {e}", target_path.display()),
             );
+        }
+
+        if let Err(error) = target.commit() {
+            return err_result(&call.id, &call.name, error);
         }
 
         let metadata = json!({

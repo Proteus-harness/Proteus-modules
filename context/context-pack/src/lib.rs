@@ -1,14 +1,12 @@
 //! Context-builder reference process modules.
 
-use std::{
-    path::{Component, Path, PathBuf},
-    process::Command,
-};
+use std::path::{Component, Path, PathBuf};
 
 mod budget;
 mod codex;
 mod config;
 mod config_schema;
+mod git;
 pub use config_schema::config_schema;
 mod retrieval;
 mod search_queries;
@@ -197,7 +195,7 @@ fn project_instruction_chunks(
 
 fn project_instruction_root(cwd: &Path) -> anyhow::Result<PathBuf> {
     let cwd = cwd.canonicalize()?;
-    if let Some(root) = git_output(&cwd, &["rev-parse", "--show-toplevel"])?
+    if let Some(root) = git::output(&cwd, &["rev-parse", "--show-toplevel"], 4096)?
         && let Ok(root) = PathBuf::from(root).canonicalize()
         && cwd.starts_with(&root)
     {
@@ -318,21 +316,10 @@ fn environment_chunks(input: &ContextBuilderModuleInput) -> Vec<ContextChunk> {
 }
 
 fn git_status_chunks(input: &ContextBuilderModuleInput) -> anyhow::Result<Vec<ContextChunk>> {
-    let output = match Command::new("git")
-        .args(["status", "--short", "--branch"])
-        .current_dir(&input.task.cwd)
-        .output()
-    {
-        Ok(output) => output,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
-        Err(error) => return Err(error.into()),
-    };
-
-    if !output.status.success() {
+    let Some(content) = git::output(&input.task.cwd, &["status", "--short", "--branch"], 65536)?
+    else {
         return Ok(Vec::new());
-    }
-
-    let content = String::from_utf8_lossy(&output.stdout).trim().to_owned();
+    };
     if content.is_empty() {
         return Ok(Vec::new());
     }
@@ -352,16 +339,38 @@ fn git_diff_chunks(
     config: &CodexContextConfig,
 ) -> anyhow::Result<Vec<ContextChunk>> {
     let mut sections = Vec::new();
-    if let Some(stat) = git_output(&input.task.cwd, &["diff", "--stat"])? {
+    if let Some(stat) = git::output(
+        &input.task.cwd,
+        &["diff", "--no-ext-diff", "--no-textconv", "--stat"],
+        config.git_diff_max_bytes,
+    )? {
         sections.push(format!("Unstaged diff stat:\n{stat}"));
     }
-    if let Some(diff) = git_output(&input.task.cwd, &["diff"])? {
+    if let Some(diff) = git::output(
+        &input.task.cwd,
+        &["diff", "--no-ext-diff", "--no-textconv"],
+        config.git_diff_max_bytes,
+    )? {
         sections.push(format!("Unstaged diff:\n{diff}"));
     }
-    if let Some(stat) = git_output(&input.task.cwd, &["diff", "--cached", "--stat"])? {
+    if let Some(stat) = git::output(
+        &input.task.cwd,
+        &[
+            "diff",
+            "--no-ext-diff",
+            "--no-textconv",
+            "--cached",
+            "--stat",
+        ],
+        config.git_diff_max_bytes,
+    )? {
         sections.push(format!("Staged diff stat:\n{stat}"));
     }
-    if let Some(diff) = git_output(&input.task.cwd, &["diff", "--cached"])? {
+    if let Some(diff) = git::output(
+        &input.task.cwd,
+        &["diff", "--no-ext-diff", "--no-textconv", "--cached"],
+        config.git_diff_max_bytes,
+    )? {
         sections.push(format!("Staged diff:\n{diff}"));
     }
 
@@ -377,23 +386,6 @@ fn git_diff_chunks(
         "git_diff",
         "current git diff",
     )])
-}
-
-fn git_output(cwd: &Path, args: &[&str]) -> anyhow::Result<Option<String>> {
-    let output = match Command::new("git").args(args).current_dir(cwd).output() {
-        Ok(output) => output,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
-        Err(error) => return Err(error.into()),
-    };
-    if !output.status.success() {
-        return Ok(None);
-    }
-    let content = String::from_utf8_lossy(&output.stdout).trim().to_owned();
-    if content.is_empty() {
-        Ok(None)
-    } else {
-        Ok(Some(content))
-    }
 }
 
 fn repo_tree_chunks(

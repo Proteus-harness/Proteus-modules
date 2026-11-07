@@ -26,7 +26,8 @@ pub(super) fn translate_non_message_event(
         }
         "response.function_call_arguments.delta" => {
             let call_id = parsed
-                .get("item_id")
+                .get("call_id")
+                .or_else(|| parsed.get("item_id"))
                 .and_then(Value::as_str)
                 .unwrap_or("")
                 .to_owned();
@@ -46,8 +47,8 @@ pub(super) fn translate_non_message_event(
         }
         "response.custom_tool_call_input.delta" => {
             let call_id = parsed
-                .get("item_id")
-                .or_else(|| parsed.get("call_id"))
+                .get("call_id")
+                .or_else(|| parsed.get("item_id"))
                 .and_then(Value::as_str)
                 .unwrap_or("")
                 .to_owned();

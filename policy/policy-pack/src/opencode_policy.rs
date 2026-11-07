@@ -243,15 +243,28 @@ fn split_command(command: &str) -> Vec<String> {
 }
 
 fn relativize(value: &str, cwd: &str) -> String {
-    let normalized = value.replace('\\', "/");
-    let cwd = cwd.trim_end_matches('/');
-    if cwd.is_empty() {
-        return normalized;
+    fn normalize(value: &str) -> std::path::PathBuf {
+        let value = value.replace('\\', "/");
+        let mut result = std::path::PathBuf::new();
+        for component in std::path::Path::new(&value).components() {
+            match component {
+                std::path::Component::CurDir => {}
+                std::path::Component::ParentDir
+                    if result.file_name().is_some_and(|name| name != "..") =>
+                {
+                    result.pop();
+                }
+                _ => result.push(component.as_os_str()),
+            }
+        }
+        result
     }
-    match normalized.strip_prefix(cwd) {
-        Some(rest) => rest.trim_start_matches('/').to_owned(),
-        None => normalized,
-    }
+    let path = normalize(value);
+    let cwd = normalize(cwd);
+    path.strip_prefix(&cwd)
+        .unwrap_or(&path)
+        .to_string_lossy()
+        .replace('\\', "/")
 }
 
 /// Порт upstream `Wildcard.match`: `*` — любая подстрока, `?` — один символ,
@@ -535,5 +548,22 @@ mod tests {
         let error = OpencodePolicyConfig::from_value(&json!({ "rules": "nope" }))
             .expect_err("invalid config");
         assert!(error.contains("invalid opencode_policy config"));
+    }
+}
+
+#[cfg(test)]
+mod path_regressions {
+    #[test]
+    fn file_aliases_have_one_policy_spelling() {
+        for path in [
+            "src/main.rs",
+            "./src/main.rs",
+            "/ws/src/main.rs",
+            "src/../src/main.rs",
+        ] {
+            assert_eq!(super::relativize(path, "/ws"), "src/main.rs");
+        }
+        assert_eq!(super::relativize("/ws-other/file", "/ws"), "/ws-other/file");
+        assert_eq!(super::relativize("../outside", "/ws"), "../outside");
     }
 }

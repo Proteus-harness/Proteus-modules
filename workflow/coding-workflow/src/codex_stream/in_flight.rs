@@ -17,6 +17,8 @@ use crate::{codex_tools::CodexToolBatch, host::ensure_not_cancelled};
 #[derive(Default)]
 pub(super) struct InFlight<'scope> {
     gate: Arc<Gate>,
+    next_ticket: usize,
+    completed: Vec<Result<Vec<ToolResult>, ProcessModuleError>>,
     tasks: Vec<ScopedJoinHandle<'scope, Result<Vec<ToolResult>, ProcessModuleError>>>,
 }
 
@@ -29,7 +31,18 @@ impl<'scope> InFlight<'scope> {
         batch: CodexToolBatch,
         parallel: bool,
     ) -> Result<(), ProcessModuleError> {
-        let ticket = self.tasks.len();
+        // Backpressure before spawning: completed join handles also retain
+        // native thread resources until joined. Keep both bounded.
+        if self.tasks.len() == 8 {
+            self.completed.push(
+                self.tasks
+                    .remove(0)
+                    .join()
+                    .unwrap_or_else(|_| Err(ProcessModuleError::new("tool task panicked"))),
+            );
+        }
+        let ticket = self.next_ticket;
+        self.next_ticket += 1;
         let gate = self.gate.clone();
         let task = std::thread::Builder::new()
             .name("codex-tool".into())
@@ -49,10 +62,11 @@ impl<'scope> InFlight<'scope> {
         let mut failure = None;
         // Join every task, even after a model/tool error. Completion order must
         // not reorder the prompt or discard another already committed result.
-        for task in self.tasks {
-            let result = task
-                .join()
-                .unwrap_or_else(|_| Err(ProcessModuleError::new("tool task panicked")));
+        let pending = self.tasks.into_iter().map(|task| {
+            task.join()
+                .unwrap_or_else(|_| Err(ProcessModuleError::new("tool task panicked")))
+        });
+        for result in self.completed.into_iter().chain(pending) {
             match result {
                 Ok(output) => results.extend(output),
                 Err(error) => {

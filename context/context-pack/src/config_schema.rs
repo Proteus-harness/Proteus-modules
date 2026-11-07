@@ -30,34 +30,14 @@ pub fn config_schema(id: &str) -> ModuleConfigSchema {
         ));
     }
     if id != "simple" {
-        let providers = if id == "codex_context" {
-            vec![
-                ("project_instructions", "Инструкции проекта"),
-                ("environment", "Окружение"),
-                ("git_status", "Состояние Git"),
-                ("git_diff", "Изменения Git"),
-                ("repo_tree", "Дерево проекта"),
-                ("manifest", "Файлы проекта"),
-                ("search", "Поиск"),
-            ]
-        } else {
-            vec![
-                ("project_instructions", "Инструкции проекта"),
-                ("manifest", "Файлы проекта"),
-                ("git_status", "Состояние Git"),
-                ("repo_tree", "Дерево проекта"),
-                ("memory", "Память"),
-                ("search", "Поиск"),
-            ]
-        };
         fields.insert(
             0,
             Field::new(
                 "providers",
                 "Источники контекста",
-                "Фрагменты собираются в указанном порядке.",
+                "Id встроенных или внешних context_provider exports; фрагменты собираются в указанном порядке.",
                 Kind::Array {
-                    items: Box::new(Kind::choices(&providers)),
+                    items: Box::new(Kind::text()),
                 },
             ),
         );

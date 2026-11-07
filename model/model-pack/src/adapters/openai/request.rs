@@ -78,6 +78,12 @@ pub(super) fn to_openai_request_with_cache(
         }
     }
 
+    if let Some(temperature) = request.sampling.temperature {
+        body["temperature"] = json!(temperature);
+    }
+    if let Some(top_p) = request.sampling.top_p {
+        body["top_p"] = json!(top_p);
+    }
     if let Some(max_output_tokens) = request.limits.max_output_tokens {
         body["max_output_tokens"] = json!(max_output_tokens);
     }

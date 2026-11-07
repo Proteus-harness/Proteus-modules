@@ -144,6 +144,22 @@ fn joined_instructions(request: &CanonicalModelRequest) -> Option<String> {
         .filter(|text| !text.trim().is_empty())
         .collect::<Vec<_>>()
         .join("\n\n");
+    let systems = request
+        .messages
+        .iter()
+        .filter(|message| message.role == MessageRole::System)
+        .flat_map(|message| message.parts.iter())
+        .filter_map(|part| match &part.payload {
+            ContentPart::Text { text } => Some(text.as_str()),
+            _ => None,
+        })
+        .collect::<Vec<_>>()
+        .join("\n\n");
+    let text = [text, systems]
+        .into_iter()
+        .filter(|text| !text.is_empty())
+        .collect::<Vec<_>>()
+        .join("\n\n");
     if text.is_empty() { None } else { Some(text) }
 }
 
@@ -176,6 +192,9 @@ fn to_anthropic_messages(messages: &[CanonicalMessage]) -> Result<Vec<Value>> {
     let mut pending_tool_results = Vec::new();
 
     for message in messages {
+        if message.role == MessageRole::System {
+            continue;
+        }
         if message.role == MessageRole::Tool {
             pending_tool_results.extend(tool_result_blocks(message));
             continue;

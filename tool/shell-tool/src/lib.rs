@@ -277,6 +277,7 @@ fn spawn_shell(
     };
     command_builder
         .current_dir(workdir)
+        .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
     for (key, value) in EXEC_COMMAND_ENV {
@@ -797,5 +798,19 @@ mod tests {
         // Память ограничена head+tail, середина ушла.
         assert_eq!(buffer.original_len, HEAD_LIMIT_BYTES + 2 * TAIL_LIMIT_BYTES);
         assert_eq!(buffer.head.len() + buffer.tail.len(), OUTPUT_LIMIT_BYTES);
+    }
+}
+
+#[cfg(all(test, target_os = "linux"))]
+mod stdin_regression {
+    #[test]
+    fn one_shot_child_does_not_inherit_protocol_input() {
+        let dir = tempfile::tempdir().unwrap();
+        let cwd = dir.path().to_str().unwrap();
+        let mut child = super::spawn_shell("exec sleep 10", cwd, cwd, None).unwrap();
+        let input = std::fs::read_link(format!("/proc/{}/fd/0", child.id()));
+        let _ = child.kill();
+        let _ = child.wait();
+        assert_eq!(input.unwrap(), std::path::Path::new("/dev/null"));
     }
 }

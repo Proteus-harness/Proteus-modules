@@ -115,6 +115,18 @@ fn run_loop(
         let should_run_tools = plan_response.finish_reason == FinishReason::ToolCalls
             && !plan_response.tool_calls.is_empty();
         if forced_text_round || !should_run_tools {
+            // The private plan must survive canonical durable ACK replacement,
+            // without becoming public conversation history.
+            for message in turn
+                .model_messages
+                .iter_mut()
+                .rev()
+                .take(plan_messages.len())
+            {
+                for part in &mut message.parts {
+                    part.scope = proteus_contracts::model_standard::PartScope::Request;
+                }
+            }
             break;
         }
         plan_tool_rounds_used += 1;

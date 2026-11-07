@@ -539,6 +539,8 @@ fn request_serializes_tools_tool_choice_reasoning_and_json_format() {
     );
     assert_eq!(body["include"], json!(["reasoning.encrypted_content"]));
     assert_eq!(body["max_output_tokens"], 123);
+    assert_eq!(body["temperature"], json!(0.2f32));
+    assert_eq!(body["top_p"], json!(0.9f32));
     assert_eq!(body["input"][0]["content"][0]["type"], "input_text");
 }
 
@@ -1032,7 +1034,7 @@ fn translate_sse_custom_tool_input_delta() {
                 args_delta,
             },
         ] => {
-            assert_eq!(call_id, "item_1");
+            assert_eq!(call_id, "call_1");
             assert_eq!(name, &None);
             assert_eq!(args_delta, "*** Begin");
         }

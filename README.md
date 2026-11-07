@@ -36,7 +36,7 @@ exports берутся из тех же manifests, что использует `
 `source.artifact` (`dist/shell-tool.zip`). Desktop получает весь workspace
 на выбранной Git-ревизии, собирает выбранный пакет и устанавливает проверенный
 ZIP. Одна папка `components/<id>-module` зависит от соседних библиотек и сама
-по себе недостаточна. Для сборки нужны Rust, Git и Python 3; для Linux x86_64
+по себе недостаточна. Для сборки нужны Rust, Git и Python 3.11+; для Linux x86_64
 нужен также линкер LLD, выбранный в `.cargo/config.toml`. Чтение индекса само
 по себе не запускает сборку. Отдельные готовые бинарники в этом индексе пока
 не опубликованы.
@@ -51,7 +51,7 @@ python3 -m unittest discover -s tests -p 'test_catalog.py'
 
 ## Сборка И Проверка
 
-Нужны Rust, Git, Python 3 и LLD на Linux x86_64; gate Claude command hooks дополнительно
+Нужны Rust, Git, Python 3.11+ и LLD на Linux x86_64; gate Claude command hooks дополнительно
 требует Node.js 22.18+.
 Контракты и test harness подключены по фиксированному Git commit в Cargo.toml;
 соседний checkout harness для обычной сборки не требуется.
@@ -138,3 +138,5 @@ Node entry для явно выбранного `strict_subset` Claude command h
 
 История implementations перенесена из `Proteus-agent` (ныне Proteus-core),
 авторы и коммиты сохранены. После выделения исходники размещены по слотам.
+
+Внешний Ptyxis сохраняет полный вывод во временные capture-файлы на диске до завершения/закрытия. Preview читает только ограниченные head/tail; этот режим не предоставляет дисковую квоту. Для неограниченного вывода используйте обычный exec/source_capture с его квотой.

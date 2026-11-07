@@ -24,13 +24,19 @@ fn optional_model_features_are_intersected_with_the_offer_without_rejecting_futu
             "exports":[{"slot":"model","module_id":"fake","contract_version":"v13","composition":"select_one",
                 "module_config":{"implementation":"fake"},"host_features":offered}]
         }})).unwrap();
-        let mut line = String::new();
-        BufReader::new(child.stdout.take().unwrap())
-            .read_line(&mut line)
-            .unwrap();
+        let stdout = child.stdout.take().unwrap();
+        let (send, receive) = std::sync::mpsc::channel();
+        let reader = std::thread::spawn(move || {
+            let mut line = String::new();
+            let result = BufReader::new(stdout).read_line(&mut line).map(|_| line);
+            let _ = send.send(result);
+        });
+        let result = receive.recv_timeout(std::time::Duration::from_secs(5));
         drop(input);
         child.kill().ok();
         child.wait().unwrap();
+        reader.join().unwrap();
+        let line = result.expect("module handshake deadline exceeded").unwrap();
         let response: serde_json::Value = serde_json::from_str(&line).unwrap();
         assert_eq!(
             response["result"]["exports"][0]["module_features"], expected,

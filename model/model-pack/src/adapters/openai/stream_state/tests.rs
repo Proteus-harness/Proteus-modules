@@ -209,3 +209,16 @@ async fn empty_reasoning_does_not_create_a_phantom_completed_prefix_through_boun
         }
     }
 }
+
+#[test]
+fn delta_uses_same_call_identity_as_completed_item() {
+    let mut state = OpenAiStreamState::default();
+    state.translate(&json!({"type":"response.output_item.added", "item":{"type":"function_call", "id":"fc_1", "call_id":"call_1", "name":"shell", "arguments":""}}).to_string());
+    let events = state.translate(
+        &json!({"type":"response.function_call_arguments.delta", "item_id":"fc_1", "delta":"{}"})
+            .to_string(),
+    );
+    assert!(
+        matches!(&events[0], ModelStreamEvent::ToolCallDelta { call_id, .. } if call_id == "call_1")
+    );
+}

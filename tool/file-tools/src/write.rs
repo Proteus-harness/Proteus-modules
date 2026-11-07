@@ -7,7 +7,7 @@ use serde_json::json;
 
 use crate::util::{
     err_result, module_error, ok_result, parse_call, parse_invocation_context, required_string,
-    workspace_file_for_write,
+    workspace_file_for_atomic_write,
 };
 
 pub struct WriteFileTool;
@@ -65,28 +65,33 @@ impl ToolModule for WriteFileTool {
             Err(e) => return err_result(&call.id, &call.name, e),
         };
         let cwd_path = context.cwd.as_path();
-        let mut target = match workspace_file_for_write(cwd_path, Path::new(path_str)) {
+        let mut target = match workspace_file_for_atomic_write(cwd_path, Path::new(path_str)) {
             Ok(p) => p,
             Err(e) => return err_result(&call.id, &call.name, e),
         };
 
+        let written_path = target.path().to_path_buf();
         let bytes_written = content.len();
         if let Err(e) = target.write_all(content.as_bytes()) {
             return err_result(
                 &call.id,
                 &call.name,
-                format!("failed to write {}: {e}", target.path().display()),
+                format!("failed to write {}: {e}", written_path.display()),
             );
         }
 
+        if let Err(error) = target.commit() {
+            return err_result(&call.id, &call.name, error);
+        }
+
         let metadata = json!({
-            "path": target.path().display().to_string(),
+            "path": written_path.display().to_string(),
             "bytes_written": bytes_written,
         });
         ok_result(
             &call.id,
             &call.name,
-            format!("Wrote {bytes_written} bytes to {}", target.path().display()),
+            format!("Wrote {bytes_written} bytes to {}", written_path.display()),
             metadata,
         )
     }

@@ -56,7 +56,9 @@ enum AnthropicBlock {
 impl AnthropicStreamState {
     pub(super) fn translate(&mut self, event_type: &str, data: &str) -> Vec<ModelStreamEvent> {
         let Ok(parsed) = serde_json::from_str::<Value>(data) else {
-            return Vec::new();
+            return vec![ModelStreamEvent::Error {
+                failure: ModelFailure::other("malformed Anthropic SSE JSON"),
+            }];
         };
         match event_type {
             "message_start" => {
@@ -297,7 +299,16 @@ impl AnthropicStreamState {
                     let args = if input_json.is_empty() {
                         Value::Null
                     } else {
-                        serde_json::from_str(&input_json).unwrap_or(Value::Null)
+                        match serde_json::from_str(&input_json) {
+                            Ok(args) => args,
+                            Err(error) => {
+                                return ModelStreamEvent::Error {
+                                    failure: ModelFailure::other(format!(
+                                        "invalid Anthropic tool arguments: {error}"
+                                    )),
+                                };
+                            }
+                        }
                     };
                     let call = ToolCall::new(id, name, args);
                     parts.push(ContentPart::ToolCall { call: call.clone() });
@@ -310,9 +321,12 @@ impl AnthropicStreamState {
             Some("end_turn") | Some("stop_sequence") => FinishReason::Stop,
             Some("max_tokens") | Some("model_context_window_exceeded") => FinishReason::Length,
             Some("tool_use") if !tool_calls.is_empty() => FinishReason::ToolCalls,
-            _ if !tool_calls.is_empty() => FinishReason::ToolCalls,
-            _ => FinishReason::Stop,
+            _ => FinishReason::Unknown,
         };
+        if finish_reason != FinishReason::ToolCalls {
+            tool_calls.clear();
+            parts.retain(|part| !matches!(part, ContentPart::ToolCall { .. }));
+        }
         let mut message = CanonicalMessage::new(MessageRole::Assistant, parts);
         message.id = self.message_id;
         let mut resp = CanonicalModelResponse::new(message, tool_calls, finish_reason);

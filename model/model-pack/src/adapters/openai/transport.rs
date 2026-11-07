@@ -80,6 +80,8 @@ impl OpenAiResponsesClient {
             body["stream"] = json!(true);
         }
         if self.codex_auth.is_some() {
+            body.as_object_mut().unwrap().remove("temperature");
+            body.as_object_mut().unwrap().remove("top_p");
             // Codex's subscription Responses endpoint is streaming-only and
             // doesn't accept max_output_tokens. Match its request surface,
             // including internal complete calls (collected from the same SSE).

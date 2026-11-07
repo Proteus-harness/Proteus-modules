@@ -61,6 +61,7 @@ fn moved_input_array_preserves_provider_json_bytes_and_order() {
         "tool_choice": "none",
         "parallel_tool_calls": true,
         "store": false,
+        "temperature": 0.0,
         "include": [],
     });
     let body = to_openai_request(&request).unwrap();

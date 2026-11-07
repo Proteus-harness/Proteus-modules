@@ -297,3 +297,56 @@ fn plan_execute_review_stops_plan_tool_loop_at_round_limit() {
     assert_eq!(output.output.metadata["plan_tool_rounds_used"], json!(3));
     assert_eq!(output.output.text, "final");
 }
+
+#[test]
+fn private_plan_survives_a_durable_tool_checkpoint() {
+    use proteus_contracts::contracts::{WorkflowCheckpointAck, WorkflowHistoryUpdate};
+    let input = workflow_input("change code");
+    let tool = ToolSpec::new(
+        "read_file",
+        "Read",
+        json!({"type":"object"}),
+        ToolSafety::ReadOnly,
+    );
+    let call = ToolCall::new(new_call_id(), "read_file", json!({"path":"src/lib.rs"}));
+    let mut host = FakeHost::with_responses(vec![
+        CanonicalModelResponse::new(
+            CanonicalMessage::text(MessageRole::Assistant, "private plan sentinel"),
+            vec![],
+            FinishReason::Stop,
+        ),
+        tool_call_response(call),
+        CanonicalModelResponse::new(
+            CanonicalMessage::text(MessageRole::Assistant, "draft"),
+            vec![],
+            FinishReason::Stop,
+        ),
+        CanonicalModelResponse::new(
+            CanonicalMessage::text(MessageRole::Assistant, "final"),
+            vec![],
+            FinishReason::Stop,
+        ),
+    ])
+    .with_tools(vec![tool.clone()], vec![tool]);
+    *host.checkpoint_ack.lock().unwrap() = Some(WorkflowCheckpointAck {
+        messages: input.history.clone(),
+        history: WorkflowHistoryUpdate::new(Vec::new()),
+        revision: Some(1),
+    });
+    CodingPlanExecuteReviewWorkflow
+        .run_json(serde_json::to_string(&input).unwrap(), &mut host)
+        .unwrap();
+    let requests = host.requests.lock().unwrap();
+    assert!(
+        requests[2]
+            .messages
+            .iter()
+            .any(|message| message.display_text() == "private plan sentinel")
+    );
+    assert!(
+        requests[3]
+            .messages
+            .iter()
+            .any(|message| message.display_text() == "private plan sentinel")
+    );
+}

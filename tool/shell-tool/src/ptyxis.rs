@@ -266,12 +266,29 @@ fn read_ptyxis_output(paths: &PtyxisCapturePaths, code: i32) -> Result<ShellOutp
 }
 
 fn read_bounded_file(path: &Path) -> Result<BoundedBuffer> {
-    let bytes = match fs::read(path) {
-        Ok(bytes) => bytes,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Vec::new(),
+    use std::io::{Read, Seek, SeekFrom};
+    let mut file = match fs::File::open(path) {
+        Ok(file) => file,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            return Ok(BoundedBuffer::new());
+        }
         Err(error) => return Err(error.into()),
     };
-    Ok(BoundedBuffer::from_bytes(&bytes))
+    let length = file.metadata()?.len();
+    let mut buffer = BoundedBuffer::new();
+    let mut head = vec![0; crate::HEAD_LIMIT_BYTES];
+    let count = file.read(&mut head)?;
+    buffer.push(&head[..count]);
+    if length > count as u64 {
+        let start = (count as u64).max(length.saturating_sub(crate::TAIL_LIMIT_BYTES as u64));
+        file.seek(SeekFrom::Start(start))?;
+        let mut tail = Vec::new();
+        file.take(crate::TAIL_LIMIT_BYTES as u64)
+            .read_to_end(&mut tail)?;
+        buffer.push(&tail);
+    }
+    buffer.original_len = usize::try_from(length).unwrap_or(usize::MAX);
+    Ok(buffer)
 }
 
 #[cfg(unix)]
@@ -291,3 +308,23 @@ fn exit_status_from_code(code: i32) -> ExitStatus {
 #[cfg(test)]
 #[path = "ptyxis/tests.rs"]
 mod tests;
+
+#[cfg(test)]
+mod bounded_preview_tests {
+    #[test]
+    fn sparse_capture_reads_only_head_and_tail() {
+        use std::io::{Seek, SeekFrom, Write};
+        let mut file = tempfile::NamedTempFile::new().unwrap();
+        file.write_all(b"head sentinel").unwrap();
+        file.seek(SeekFrom::Start(128 * 1024 * 1024)).unwrap();
+        file.write_all(b"tail sentinel").unwrap();
+        let output = super::read_bounded_file(file.path()).unwrap();
+        assert!(output.truncated());
+        assert!(output.to_text().starts_with("head sentinel"));
+        assert!(output.to_text().ends_with("tail sentinel"));
+        assert!(
+            output.head.len() + output.tail.len()
+                <= crate::HEAD_LIMIT_BYTES + crate::TAIL_LIMIT_BYTES
+        );
+    }
+}

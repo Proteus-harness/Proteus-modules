@@ -797,3 +797,39 @@ fn stream_trace_unknown_events_are_ignored() {
     let events = run_trace(&[("ping", json!({}))]);
     assert!(events.is_empty());
 }
+
+#[test]
+fn system_messages_keep_system_authority() {
+    let request = CanonicalModelRequest::new(
+        ModelRef::new("anthropic", "test"),
+        vec![
+            CanonicalMessage::text(MessageRole::System, "system sentinel"),
+            CanonicalMessage::text(MessageRole::User, "question"),
+        ],
+    );
+    let body = to_anthropic_request(&request).unwrap();
+    assert_eq!(body["system"], "system sentinel");
+    assert_eq!(body["messages"].as_array().unwrap().len(), 1);
+    assert_eq!(body["messages"][0]["content"][0]["text"], "question");
+}
+
+#[test]
+fn stream_missing_or_unknown_finish_is_not_success() {
+    for reason in [None, Some("future_reason")] {
+        let mut state = AnthropicStreamState::default();
+        if let Some(reason) = reason {
+            state.translate(
+                "message_delta",
+                &json!({"delta":{"stop_reason":reason}}).to_string(),
+            );
+        }
+        let events = state.translate("message_stop", "{}");
+        assert!(
+            matches!(&events[0], ModelStreamEvent::Response { response } if response.finish_reason == FinishReason::Unknown)
+        );
+    }
+    assert!(matches!(
+        &AnthropicStreamState::default().translate("message_delta", "bad JSON")[0],
+        ModelStreamEvent::Error { .. }
+    ));
+}

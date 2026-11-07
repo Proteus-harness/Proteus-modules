@@ -16,6 +16,7 @@ mod tests;
 
 #[derive(Default)]
 pub(super) struct OpenAiStreamState {
+    call_ids: HashMap<String, String>,
     ids: HashMap<String, MessageId>,
     phases: HashMap<String, Option<MessagePhase>>,
     text_parts: HashMap<String, u64>,
@@ -57,6 +58,12 @@ impl OpenAiStreamState {
                     )
                 ) {
                     return Vec::new();
+                }
+                if let (Some(id), Some(call_id)) = (
+                    item.get("id").and_then(Value::as_str),
+                    item.get("call_id").and_then(Value::as_str),
+                ) {
+                    self.call_ids.insert(id.to_owned(), call_id.to_owned());
                 }
                 let key = item_key(item, index);
                 self.ids.entry(key.clone()).or_insert_with(new_message_id);
@@ -151,7 +158,19 @@ impl OpenAiStreamState {
                 };
                 finalize_completed_event(parsed, &self.completed_items, streamed_items, &self.ids)
             }
-            _ => translate_non_message_event(event_type, &parsed),
+            _ => {
+                let event_type = event_type.to_owned();
+                let mut parsed = parsed;
+                if let Some(call_id) = parsed
+                    .get("item_id")
+                    .and_then(Value::as_str)
+                    .and_then(|id| self.call_ids.get(id))
+                    .cloned()
+                {
+                    parsed["call_id"] = Value::String(call_id);
+                }
+                translate_non_message_event(&event_type, &parsed)
+            }
         }
     }
 }

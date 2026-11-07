@@ -1,5 +1,6 @@
 use super::*;
 use crate::search_queries::extract_search_queries;
+use std::process::Command;
 
 #[test]
 fn context_configs_reject_unknown_keys_and_keep_known_limits() {

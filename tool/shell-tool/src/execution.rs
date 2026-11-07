@@ -28,12 +28,6 @@ impl BoundedBuffer {
         }
     }
 
-    pub(super) fn from_bytes(bytes: &[u8]) -> Self {
-        let mut buffer = Self::new();
-        buffer.push(bytes);
-        buffer
-    }
-
     pub(super) fn push(&mut self, data: &[u8]) {
         self.original_len += data.len();
         let mut rest = data;

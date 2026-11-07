@@ -13,7 +13,7 @@ use tokio::{io::AsyncWriteExt, net::TcpListener};
 
 #[tokio::test]
 async fn transport_fallback_preserves_the_owned_request_for_each_provider() {
-    for anthropic in [false, true] {
+    for anthropic in [false] {
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let endpoint = format!("http://{}", listener.local_addr().unwrap());
         let server = tokio::spawn(async move {
@@ -77,4 +77,45 @@ async fn transport_fallback_preserves_the_owned_request_for_each_provider() {
         fallback.as_object_mut().unwrap().remove("stream");
         assert_eq!(streaming, fallback);
     }
+}
+
+#[tokio::test]
+async fn anthropic_stream_failure_does_not_start_another_inference() {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let endpoint = format!("http://{}", listener.local_addr().unwrap());
+    let server = tokio::spawn(async move {
+        let (mut socket, _) = listener.accept().await.unwrap();
+        test_http::read(&mut socket).await;
+        socket.write_all(b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nContent-Length: 999\r\nConnection: close\r\n\r\nevent: content_block_delta\ndata: {\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"partial\"}}\n\n").await.unwrap();
+        drop(socket);
+        assert!(
+            tokio::time::timeout(std::time::Duration::from_millis(300), listener.accept())
+                .await
+                .is_err()
+        );
+    });
+    let client = AnthropicMessagesClient::from_provider_config(
+        json!({"base_url":endpoint,"api_key":"fixture","http1_only":true,"stream":true}),
+    )
+    .unwrap();
+    let events = client
+        .stream(CanonicalModelRequest::new(
+            ModelRef::new("fixture", "model"),
+            vec![CanonicalMessage::text(MessageRole::User, "hello")],
+        ))
+        .await
+        .unwrap()
+        .collect::<Vec<_>>()
+        .await;
+    assert!(
+        events
+            .iter()
+            .any(|event| matches!(event, Ok(ModelStreamEvent::Error { .. })))
+    );
+    assert!(
+        !events
+            .iter()
+            .any(|event| matches!(event, Ok(ModelStreamEvent::Response { .. })))
+    );
+    server.await.unwrap();
 }
