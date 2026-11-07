@@ -123,7 +123,14 @@ fn run_loop(
                 .rev()
                 .take(plan_messages.len())
             {
+                // The provider response is already a durable canonical record.
+                // A differently scoped private projection needs its own identity.
+                let source = message.id;
+                message.id = proteus_contracts::domain::new_message_id();
+                message.metadata["workflow_private_source_message"] = json!(source);
                 for part in &mut message.parts {
+                    part.part_id = proteus_contracts::domain::new_part_id();
+                    part.provenance = proteus_contracts::model_standard::PartProvenance::Runtime;
                     part.scope = proteus_contracts::model_standard::PartScope::Request;
                 }
             }
