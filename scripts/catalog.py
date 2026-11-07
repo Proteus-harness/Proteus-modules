@@ -78,7 +78,7 @@ def catalog(root=ROOT):
                 "path": ".",
                 "build": ["python3", "package.py", "--package", identity],
                 "artifact": f"dist/{identity}.zip",
-                "requirements": ["Rust", "Git", "Python 3", "LLD (Linux x86_64)"],
+                "requirements": ["Rust", "Git", "Python 3.11+", "LLD (Linux x86_64)"],
             },
         })
     return {

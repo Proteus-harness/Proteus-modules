@@ -46,7 +46,7 @@ class CatalogTests(unittest.TestCase):
                 self.assertEqual(entry["source"]["build"],
                                  ["python3", "package.py", "--package", selected.identity])
                 self.assertEqual(entry["source"]["requirements"],
-                                 ["Rust", "Git", "Python 3", "LLD (Linux x86_64)"])
+                                 ["Rust", "Git", "Python 3.11+", "LLD (Linux x86_64)"])
                 self.assertNotIn("artifacts", entry)
                 self.assertEqual(entry["source"]["artifact"], f'dist/{entry["id"]}.zip')
 
