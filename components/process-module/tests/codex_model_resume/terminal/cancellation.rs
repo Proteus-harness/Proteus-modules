@@ -179,13 +179,28 @@ async fn cancel_one_shot_shell_kills_descendants_and_records_canceled_turn() {
             "call_shell",
             "shell",
             json!({
-                "command": "printf started > started; sleep 1; printf late > late-marker",
+                // One leaf process owns readiness, waiting and the late marker.
+                // A killed parent cannot suppress its marker; HUP is ignored.
+                // Its one-second lifetime also bounds cleanup on test failure.
+                "command": r#"python3 -c 'import pathlib, signal, time
+signal.signal(signal.SIGHUP, signal.SIG_IGN)
+pathlib.Path("child.stat").write_text(pathlib.Path("/proc/self/stat").read_text())
+pathlib.Path("started").write_text("ready")
+time.sleep(1)
+pathlib.Path("late-marker").write_text("late")
+' & wait"#,
                 "with_escalated_permissions": true
             })
         )]),
     )
     .await;
     wait_for_file(&root.path().join("started")).await;
+    let child = process_identity(&std::fs::read_to_string(root.path().join("child.stat")).unwrap());
+    assert!(!matches!(child.2, 'Z' | 'X'));
+    let child_path = format!("/proc/{}/stat", child.0);
+    let live = process_identity(&std::fs::read_to_string(&child_path).unwrap());
+    assert_eq!((live.0, live.1), (child.0, child.1));
+    assert!(!matches!(live.2, 'Z' | 'X'));
     cancel.cancel();
     assert!(
         tokio::time::timeout(Duration::from_secs(5), run)
@@ -194,10 +209,27 @@ async fn cancel_one_shot_shell_kills_descendants_and_records_canceled_turn() {
             .unwrap()
             .is_err()
     );
-    tokio::time::sleep(Duration::from_millis(1200)).await;
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(3);
+    loop {
+        match std::fs::read_to_string(&child_path) {
+            Ok(stat) => {
+                let current = process_identity(&stat);
+                if current.1 != child.1 || matches!(current.2, 'Z' | 'X') {
+                    break;
+                }
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => break,
+            Err(error) => panic!("cannot inspect descendant: {error}"),
+        }
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "canceled descendant with matching start time is still alive"
+        );
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
     assert!(
         !root.path().join("late-marker").exists(),
-        "canceled descendant survived"
+        "descendant survived cancellation and wrote its own late marker"
     );
     let projection = SessionStore::open(session.clone())
         .unwrap()
@@ -230,4 +262,15 @@ async fn cancel_one_shot_shell_kills_descendants_and_records_canceled_turn() {
             .filter_map(|item| item.tool.as_ref())
             .any(|tool| tool.call_id == "call_shell" && tool.status == "done")
     );
+}
+
+#[cfg(target_os = "linux")]
+fn process_identity(stat: &str) -> (u32, u64, char) {
+    let (pid, _) = stat.split_once(" (").unwrap();
+    let (_, fields) = stat.rsplit_once(") ").unwrap();
+    let mut fields = fields.split_whitespace();
+    let state = fields.next().unwrap().chars().next().unwrap();
+    // starttime is field 22; the consumed state is field 3.
+    let start_ticks = fields.nth(18).unwrap().parse().unwrap();
+    (pid.parse().unwrap(), start_ticks, state)
 }
