@@ -2,6 +2,25 @@ use super::*;
 use crate::model_standard::{InstructionBlock, InstructionKind};
 
 #[test]
+fn shaped_output_limits_keep_required_anthropic_max_tokens() {
+    let adapter = AnthropicMessagesClient::from_provider_config(json!({})).unwrap();
+    for (requested, expected) in [(None, 64_000), (Some(1_024), 1_024)] {
+        let mut request = CanonicalModelRequest::new(
+            ModelRef::new("anthropic", "fixture"),
+            vec![CanonicalMessage::text(MessageRole::User, "answer")],
+        );
+        assert_eq!(request.limits.max_output_tokens, None);
+        request.limits.max_output_tokens = requested;
+        let capabilities = adapter.capabilities(&request.model).unwrap();
+        let shaped = crate::model_standard::RequestShaper
+            .shape(request, &capabilities)
+            .unwrap();
+        let body = to_anthropic_request(&shaped).unwrap();
+        assert_eq!(body["max_tokens"], expected);
+    }
+}
+
+#[test]
 fn moved_message_arrays_preserve_provider_json_bytes_and_merged_roles() {
     let mut request = CanonicalModelRequest::new(
         ModelRef::new("anthropic", "fixture"),

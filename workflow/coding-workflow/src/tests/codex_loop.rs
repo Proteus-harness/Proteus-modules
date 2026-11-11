@@ -141,6 +141,11 @@ fn codex_loop_runs_tool_round_then_stops_on_non_tool_response() {
 
     let requests = host.requests.lock().expect("requests");
     assert_eq!(requests.len(), 2);
+    assert!(
+        requests
+            .iter()
+            .all(|request| request.limits.max_output_tokens.is_none())
+    );
     assert_eq!(
         requests[0]
             .instructions

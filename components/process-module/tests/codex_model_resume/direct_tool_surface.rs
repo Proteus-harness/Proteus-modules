@@ -161,6 +161,19 @@ pub(super) async fn fixture_config(endpoint: &str) -> AppConfig {
         }),
     );
 
+    // These recovery fixtures use function-call patches and file tools with
+    // scripted provider responses. Declare that assembly explicitly instead of
+    // inheriting the native profile's custom patch surface and five-tool set.
+    config
+        .module_config
+        .get_mut("tool")
+        .unwrap()
+        .get_mut("codex_patch")
+        .unwrap()["freeform"] = json!(false);
+    for name in ["read_file", "write_file", "grep", "git_diff", "shell"] {
+        config.tools.enabled.push(name.to_owned());
+    }
+
     // Keep the existing context baseline for recovery/replay tests.
     config
         .module_config
@@ -265,7 +278,98 @@ fn request_tool_names(request: &Value) -> HashSet<&str> {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn tracked_codex_profile_exposes_and_executes_policy_visible_tools_directly() {
+async fn standalone_codex_profile_sends_five_native_tools_with_freeform_patch() {
+    let profile = AppConfig::load(Some(&workspace_file("configs/codex.config.toml")))
+        .await
+        .unwrap();
+    assert_eq!(
+        profile.module_config["model"]["openai_codex"]["capabilities"]["supports_freeform_tools"],
+        true
+    );
+    assert_eq!(
+        profile.module_config["tool"]["codex_patch"]["freeform"],
+        true
+    );
+    assert_eq!(
+        profile.tools.enabled,
+        [
+            "exec_command",
+            "write_stdin",
+            "apply_patch",
+            "update_plan",
+            "request_user_input"
+        ]
+    );
+
+    let root = tempfile::tempdir().unwrap();
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let mut config = fixture_config(&format!("http://{}", listener.local_addr().unwrap())).await;
+    config.agent_control.surface = proteus_core::core::AgentControlSurface::None;
+    config.tools.enabled = profile.tools.enabled;
+    config.module_config.get_mut("tool").unwrap().insert(
+        "codex_patch".to_owned(),
+        profile.module_config["tool"]["codex_patch"].clone(),
+    );
+    config
+        .module_config
+        .get_mut("model")
+        .unwrap()
+        .get_mut("openai")
+        .unwrap()["capabilities"]["supports_freeform_tools"] = json!(true);
+    super::use_subscription(&mut config, root.path());
+    let server = tokio::spawn(async move {
+        let (mut socket, _) = listener.accept().await.unwrap();
+        let request = super::read_json_request(&mut socket).await;
+        let body = super::sse_body(&response(
+            json!([super::message(
+                "final_answer",
+                &["Native tool surface checked."]
+            )]),
+            0,
+        ));
+        socket.write_all(format!(
+            "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+            body.len()
+        ).as_bytes()).await.unwrap();
+        request
+    });
+    let runtime = AgentRuntime::builder(config, root.path().to_path_buf())
+        .with_approval(Arc::new(ApprovingTransport))
+        .build_async()
+        .await
+        .unwrap();
+    runtime
+        .run("Check the supplied tool surface.".to_owned())
+        .await
+        .unwrap();
+    let request = tokio::time::timeout(Duration::from_secs(5), server)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        request_tool_names(&request),
+        HashSet::from([
+            "exec_command",
+            "write_stdin",
+            "apply_patch",
+            "update_plan",
+            "request_user_input"
+        ])
+    );
+    let patch = request["tools"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|tool| tool["name"] == "apply_patch")
+        .unwrap();
+    assert_eq!(patch["type"], "custom");
+    assert_eq!(patch["format"]["type"], "grammar");
+    assert_eq!(patch["format"]["syntax"], "lark");
+    assert!(request.get("max_output_tokens").is_none());
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn extended_codex_profile_exposes_and_executes_policy_visible_tools_directly() {
     let root = tempfile::tempdir().unwrap();
     std::fs::create_dir(root.path().join("workspace")).unwrap();
     std::fs::write(
