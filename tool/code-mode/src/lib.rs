@@ -27,19 +27,23 @@ struct Arguments {
 impl ToolModule for CodeModeTool {
     fn spec_json(&self) -> String {
         serde_json::to_string(&ToolSpec::new("code_mode", concat!(
-            "Run JavaScript to orchestrate registered Proteus tools. Top-level await, loops and Promise.all are supported. ",
-            "Prefer this tool for multi-call workflows, filtering many results, and deterministic loops; print only a useful summary. ",
-            "Use await tools.call(name, args) to receive the full ToolResult; inspect .ok and .error before using .output. ",
-            "Only text(value) and console.log(...values) enter model context; child results remain in the execution journal. ",
-            "Example: const r = await tools.call('read_file', {path:'README.md'}); if (!r.ok) throw Error(r.error); text(r.output). ",
+            "Run JavaScript for multi-call workflows with top-level await, loops and Promise.all. ",
+            "tools.call(name, args) takes exactly two arguments and returns a raw ToolResult: .output is a string; .content and .metadata are separate fields. ",
+            "Check .ok on EVERY result; stop on failure unless an explicit recovery handles and verifies it. Parse .output as JSON only when the tool contract says it contains JSON. ",
+            "Before automating an unfamiliar response, make one small read-only probe and print a bounded sample; use the observed shape in the next script. ",
+            "Assert required fields, types, item identities and pagination cursors before looping or causing effects. Never guess alternate field names or turn missing fields/parse errors into empty arrays or a successful end of pagination. ",
+            "When changing a selected set, enumerate and validate that selection before writes; stop on incomplete coverage, duplicates, cursor loops or unexpected data. ",
+            "After writes, read back and verify task-required postconditions before any final submit/send/publish. Make one-time finalization the last effect, after coverage and verification pass; do not submit a placeholder or incomplete success report. ",
+            "Exceptions do not roll back earlier effects: inspect current state before retrying mutations. Script success alone does not prove task completion. ",
+            "Only text(value) and console.log(...values) enter model context; print a concise coverage/verification summary. Child results remain in the execution journal. ",
             "Use existing tool descriptions; workflow-owned discovery tools cannot be called from this script. ",
-            "Pass the registered argument object, e.g. tools.call('apply_patch', {patch:patchText}); tools.call accepts exactly two arguments. ",
+            "Pass registered argument objects, e.g. tools.call('apply_patch', {patch:patchText}). ",
             "No filesystem, network, process, imports, timers, persistent state or background jobs are available in JavaScript. ",
             "Every delegated tool goes through normal policy/approval. Await every delegated operation. ",
             "Default limits: 30s, 32 MiB JS heap, 256 calls, 4 concurrent callbacks, 32 KiB printed output."
         ), json!({"type":"object","properties":{
-            "code":{"type":"string","description":"JavaScript program; top-level await is supported.","maxLength":65536},
-            "timeout_ms":{"type":"integer","minimum":1,"maximum":60000,"description":"Optional script budget, no greater than configured timeout_ms."}
+            "code":{"type":"string","description":"JavaScript program. Probe unfamiliar results first; validate shape and complete selection before effects, and verify postconditions before finalization.","maxLength":65536},
+            "timeout_ms":{"type":"integer","minimum":1,"maximum":60000,"description":"Optional script budget in ms. Omit to use the configured default (normally 30000). A supplied value must not exceed that configured ceiling; 60000 is accepted only when explicitly configured."}
         },"required":["code"],"additionalProperties":false}), ToolSafety::ReadOnly)
             .with_timeout(65_000)
             .with_metadata(json!({"category":"orchestration","hot":true,"tags":["code","script","batch","javascript"],"aliases":["codemode","programmatic tool calling"]})))
