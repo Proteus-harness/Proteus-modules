@@ -2,7 +2,10 @@
 import { randomUUID } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { ModelRuntime } from "../../tool/pi-tools/node_modules/@earendil-works/pi-coding-agent/dist/core/model-runtime.js";
-import { normalizeContext } from "../../tool/pi-tools/node_modules/@earendil-works/pi-ai/dist/index.js";
+import {
+    normalizeContext,
+    isRetryableAssistantError,
+} from "../../tool/pi-tools/node_modules/@earendil-works/pi-ai/dist/index.js";
 import { DEFAULT_AGENT_IDENTITY } from "../../tool/pi-tools/node_modules/@earendil-works/pi-agent-core/dist/agent-loop.js";
 import { piMessages } from "../../components/pi-runtime-js/messages.mjs";
 
@@ -135,6 +138,48 @@ export function canonicalAnswer(message, id) {
     };
 }
 
+const transportCodes = new Set([
+    "UND_ERR_SOCKET",
+    "UND_ERR_CONNECT_TIMEOUT",
+    "UND_ERR_HEADERS_TIMEOUT",
+    "UND_ERR_BODY_TIMEOUT",
+    "ECONNRESET",
+    "ECONNREFUSED",
+    "ETIMEDOUT",
+    "EPIPE",
+    "EAI_AGAIN",
+    "ERR_STREAM_PREMATURE_CLOSE",
+]);
+
+export function modelFailure(error, { signal, started = false, nativeMessage } = {}) {
+    const message = String(nativeMessage?.errorMessage ?? error?.message ?? error);
+    let kind = "other";
+    if (signal?.aborted || nativeMessage?.stopReason === "aborted" || error?.name === "AbortError") {
+        kind = "interrupted";
+    } else {
+        // Pi preserves the deepest transport cause code in the native display
+        // message. Its classifier first rejects known subscription/quota errors.
+        const retryable = isRetryableAssistantError({ stopReason: "error", errorMessage: message });
+        const terminal = /\b(?:401|403|authentication|unauthorized|forbidden|invalid[_ ]api[_ ]key)\b/i.test(
+            message,
+        );
+        const codes = message.match(/\b(?:UND_ERR_[A-Z_]+|E[A-Z_]+)\b/g) ?? [];
+        let cause = error;
+        for (let depth = 0; cause && depth < 6; depth++, cause = cause.cause) {
+            if (typeof cause.code === "string") codes.push(cause.code);
+        }
+        // A socket can also close cleanly at HTTP level, leaving the provider
+        // parser without a protocol terminator and without an OS error code.
+        const prematureEnd =
+            nativeMessage?.stopReason === "error" &&
+            /^(?:stream ended without finish_reason|OpenAI Responses stream ended without a stop reason|stream ended before a terminal response event|stream disconnected before completion(?::.*)?)$/i.test(message);
+        if (retryable && !terminal && (prematureEnd || codes.some((code) => transportCodes.has(code)))) {
+            kind = started ? "stream_disconnected" : { retryable: { retry_delay_ms: null } };
+        }
+    }
+    return { kind, message, completed_messages: [] };
+}
+
 export function modelExport(binding) {
     if (
         binding.module_id !== "pi_codex" ||
@@ -163,6 +208,8 @@ export function modelExport(binding) {
             const r = params.request,
                 id = randomUUID();
             let sequence = 0;
+            let started = false;
+            let nativeMessage;
             try {
                 if (!["None", "Auto"].includes(r.tool_choice)) throw new Error("Unsupported Pi tool choice");
                 const stream = runtime.streamSimple(model, await context(r, model), {
@@ -171,14 +218,17 @@ export function modelExport(binding) {
                     toolChoice: r.tool_choice === "None" ? "none" : undefined,
                     temperature: r.sampling.temperature ?? undefined,
                     samplingParams: r.sampling.top_p == null ? undefined : { top_p: r.sampling.top_p },
-                    maxTokens: r.limits.max_output_tokens != null && r.limits.max_output_tokens < model.maxTokens
-                        ? r.limits.max_output_tokens : undefined,
+                    maxTokens:
+                        r.limits.max_output_tokens != null && r.limits.max_output_tokens < model.maxTokens
+                            ? r.limits.max_output_tokens
+                            : undefined,
                     transport: "auto",
                     identity: DEFAULT_AGENT_IDENTITY,
                     sessionId: r.cache.routing_key ?? undefined,
                     cacheRetention: r.cache.cache_context ? undefined : "none",
                 });
                 for await (const e of stream) {
+                    if (e.type === "start") started = true;
                     if (params.stream && e.type === "text_delta")
                         await hostCall("host.model.emit", {
                             sequence: sequence++,
@@ -186,6 +236,7 @@ export function modelExport(binding) {
                         });
                 }
                 const message = await stream.result();
+                nativeMessage = message;
                 if (message.stopReason === "error" || message.stopReason === "aborted")
                     throw new Error(message.errorMessage ?? message.stopReason);
                 return {
@@ -197,11 +248,7 @@ export function modelExport(binding) {
                     event_count: sequence,
                     terminal: {
                         kind: "stream_error",
-                        failure: {
-                            kind: signal.aborted ? "interrupted" : "other",
-                            message: String(error.message ?? error),
-                            completed_messages: [],
-                        },
+                        failure: modelFailure(error, { signal, started, nativeMessage }),
                     },
                 };
             }

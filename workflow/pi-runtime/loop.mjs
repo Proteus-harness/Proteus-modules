@@ -1,8 +1,17 @@
 import { randomUUID } from "node:crypto";
-import { runAgentLoop, convertToLlm, buildSystemPrompt, estimateContextTokens, resolveModel, createCodingToolDefinitions } from "./upstream.mjs";
+import { runAgentLoop, convertToLlm, buildSystemPrompt, estimateContextTokens, resolveModel, createCodingToolDefinitions, SETTINGS_DEFAULTS, retryDelayMs } from "./upstream.mjs";
 import { executionCall } from "./tool-arguments.mjs";
 import { canonical } from "../../components/module-runtime-js/canonical.mjs";
 import { assistant, finishedStream, piContent, piMessages } from "../../components/pi-runtime-js/messages.mjs";
+
+import { receiveModelResponse } from "../../components/module-runtime-js/model-stream.mjs";
+
+function piRetryDelay(failure, attempt) {
+    const policy = SETTINGS_DEFAULTS.retry;
+    if (!policy.enabled || attempt > policy.maxRetries) return undefined;
+    const advice = failure.kind?.retryable?.retry_delay_ms ?? 0;
+    return Math.min(policy.maxAgentDelayMs, Math.max(retryDelayMs(policy, attempt), advice));
+}
 
 export async function workflow({ task, runtime, history }, { hostCall, signal, catalogProvider }) {
     let progress = runtime.continuation?.history ?? {
@@ -144,17 +153,7 @@ export async function workflow({ task, runtime, history }, { hostCall, signal, c
                 await checkpoint([], prepared.target);
             }
             request.messages = messages;
-            await emit({ ModelRequestPrepared: { model: request.model } });
-            const cursor = await hostCall("host.model.stream.start", { request });
-            let reply;
-            while (!reply) {
-                signal.throwIfAborted();
-                const frame = await hostCall("host.model.stream.next", cursor);
-                if (frame.type === "error") throw new Error(frame.failure.message);
-                if (frame.type === "response") reply = frame.response;
-                else if (frame.type !== "message_completed")
-                    throw new Error("Unknown model stream item: " + frame.type);
-            }
+            const reply = await receiveModelResponse(request, { hostCall, signal }, piRetryDelay);
             await emit({ ModelResponseReceived: { finish_reason: reply.finish_reason } });
             const answer = assistant(reply, model);
             if (answer.stopReason === "error")
@@ -219,7 +218,7 @@ export async function workflow({ task, runtime, history }, { hostCall, signal, c
     } catch (error) {
         return {
             status: "error",
-            failure: { message: String(error.message ?? error), history: progress.new_messages.length || progress.history_replacement ? progress : null, model_failure: null },
+            failure: { message: String(error.message ?? error), history: progress.new_messages.length || progress.history_replacement ? progress : null, model_failure: error.modelFailure ?? null },
         };
     }
 }

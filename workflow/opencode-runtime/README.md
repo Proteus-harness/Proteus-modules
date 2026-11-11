@@ -42,7 +42,10 @@ handlers, общий JSON-RPC broker и canonical message helper, включая
 - `hook/opencode_compact`: настоящий `SessionCompaction.layer` и config plugin.
   Summary вызывает только Core `host.model.complete`; native threshold/split,
   prompt/nudge/retry и checkpoint/recent handling покрыты fake-host tests.
-- `workflow/opencode_loop`: native `SessionStep` для model/tool continuation,
+- `workflow/opencode_loop`: native `SessionStep` для model/tool continuation.
+  Для временных model failures используется настоящий `SessionRunnerRetry.policy`
+  с десятью повторами и native backoff/jitter. Каждый повтор создаёт отдельный
+  model exchange через Core, с прежней подтверждённой историей инструментов.
   Core checkpoints и dispatch остаются через workflow host capabilities.
 
 Core policy проверяется до tool invocation. Permission backend принимает уже
@@ -60,8 +63,11 @@ shell jobs требуют durable notification/resume host; `background=true`
 отклоняется до spawn. Native provider remote compaction не заменяется локальным
 summary, а возвращает явную ошибку. Native formatter registries пусты; extensions,
 network/MCP, skills/subagents и оставшаяся tool registry не включены. Normal
-model/tool continuation использует Native Step, но все native stream retry,
-overflow и session recovery branches не перенесены. Context initial text
+model/tool continuation использует Native Step. Native retry schedule применяется
+к типизированным временным model failures. Core передаёт только завершённые model
+items; незавершённый ответ не запускает tools и не дописывается в sampling history.
+Нативные Continue с partial assistant text, специфичный timeout budget,
+overflow и полный session recovery lifecycle остаются отдельными границами. Context initial text
 проецируется в effective request; session instruction delta lifecycle всего
 OpenCode DB не воспроизводится. Поэтому этот профиль нельзя объявлять полной
 эквивалентностью всей vanilla упряжке; это перенесённые upstream slots с явно

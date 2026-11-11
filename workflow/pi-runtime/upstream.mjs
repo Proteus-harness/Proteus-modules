@@ -28,3 +28,6 @@ export function resolveModel(ref, catalogProvider = "openai-codex") {
 
 export { validateToolArguments } from "../../tool/pi-tools/node_modules/@earendil-works/pi-ai/dist/index.js";
 export { createCodingToolDefinitions } from "../../tool/pi-tools/node_modules/@earendil-works/pi-coding-agent/dist/core/tools/index.js";
+
+export { SETTINGS_DEFAULTS } from "../../tool/pi-tools/node_modules/@earendil-works/pi-coding-agent/dist/core/settings-defaults.js";
+export { retryDelayMs } from "../../tool/pi-tools/node_modules/@earendil-works/pi-ai/dist/utils/retry.js";

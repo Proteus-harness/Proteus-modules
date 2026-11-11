@@ -12,6 +12,8 @@ import { selectNativeTools } from "./selection.mjs";
 import { repairNativeCall } from "./repair.mjs";
 import { nativeContext } from "./compaction.mjs";
 import { canonical } from "../../components/module-runtime-js/canonical.mjs";
+import { receiveModelResponse } from "../../components/module-runtime-js/model-stream.mjs";
+import { createRetryDelay } from "./retry.mjs";
 
 function withContext(messages, chunks) {
     if (!chunks.length) return messages;
@@ -187,17 +189,11 @@ export async function workflow({ task, history, runtime }, { hostCall, signal })
                 await checkpoint([], prepared.target);
             }
             request.messages = withContext(messages, context.chunks);
-            await emit({ ModelRequestPrepared: { model: ref } });
-            const cursor = await hostCall("host.model.stream.start", { request });
-            let reply;
-            while (!reply) {
-                signal.throwIfAborted();
-                const item = await hostCall("host.model.stream.next", cursor);
-                if (item.type === "error") throw new Error(item.failure.message);
-                if (item.type === "response") reply = item.response;
-                else if (item.type !== "message_completed")
-                    throw new Error("Unknown model frame " + item.type);
-            }
+            const reply = await receiveModelResponse(
+                request,
+                { hostCall, signal },
+                await createRetryDelay(runtime, signal),
+            );
             await emit({ ModelResponseReceived: { finish_reason: reply.finish_reason } });
             const events = nativeEvents(reply);
             const bindings = new Map(
@@ -295,7 +291,7 @@ export async function workflow({ task, history, runtime }, { hostCall, signal })
             failure: {
                 message: String(e.message ?? e),
                 history: progress.new_messages.length || progress.history_replacement ? progress : null,
-                model_failure: null,
+                model_failure: e.modelFailure ?? null,
             },
         };
     }

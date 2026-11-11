@@ -158,3 +158,113 @@ test("native step fan-out respects serial specs and pre-effect checkpoint identi
     }
     assert.equal(results.length,3);
 });
+
+test("reconnecting after a confirmed action retains its result and never dispatches the interrupted attempt", async () => {
+    const call = {
+        id: "append-once",
+        name: "read",
+        args: { path: "counter" },
+        surface: "function",
+        raw_arguments: null,
+    };
+    const abandoned = { ...call, id: "incomplete-append", args: { path: "must-not-execute" } };
+    const tool = {
+        name: "read",
+        description: "controlled action",
+        input_schema: definition({ name: "read", input: NativeReadInput }).inputSchema,
+    };
+    const failure = { kind: "stream_disconnected", message: "closed", completed_messages: [] };
+    const frames = [
+        [
+            {
+                type: "response",
+                response: {
+                    ...reply(""),
+                    messages: [canonical("Assistant", { ToolCall: { call } }, "model")],
+                    tool_calls: [call],
+                    finish_reason: "ToolCalls",
+                },
+            },
+        ],
+        [
+            {
+                type: "message_completed",
+                message: canonical("Assistant", { ToolCall: { call: abandoned } }, "model"),
+            },
+            { type: "error", failure },
+        ],
+        [{ type: "response", response: reply("finished after reconnect") }],
+    ];
+    let sample = -1,
+        effects = 0,
+        bound;
+    const requests = [],
+        checkpoints = [];
+    const result = await workflow(
+        {
+            task: { cwd: "/work", text: "one action" },
+            history: [message("User", "one action")],
+            runtime: {
+                instructions: [],
+                max_input_tokens: 128000,
+                model_ref: request.model,
+                reasoning: request.reasoning,
+                execution_id: "session",
+            },
+        },
+        {
+            signal: new AbortController().signal,
+            async hostCall(method, p) {
+                if (method === "host.events.emit") return {};
+                if (method === "host.context.build") return { chunks: [], token_estimate: null };
+                if (method === "host.tools.select") return { tools: [tool] };
+                if (method === "host.context.prepare")
+                    return { output: { messages: p.input.messages, changed: false }, target: null };
+                if (method === "host.model.stream.start") {
+                    sample++;
+                    requests.push(structuredClone(p.request));
+                    return { stream_id: String(sample) };
+                }
+                if (method === "host.model.stream.next") return frames[sample].shift();
+                if (method === "host.history.checkpoint") {
+                    checkpoints.push(structuredClone(p));
+                    if (p.tool_results.length) bound = p.tool_results[0];
+                    return { revision: null };
+                }
+                if (method === "host.tools.execute") {
+                    effects++;
+                    assert.equal(p.call.id, "append-once");
+                    assert.equal(bound.call_id, p.call.id);
+                    return {
+                        call_id: p.call.id,
+                        ok: true,
+                        output: "counter=1",
+                        error: null,
+                        content: [],
+                        metadata: null,
+                    };
+                }
+                throw new Error(method);
+            },
+        },
+    );
+    assert.equal(result.status, "success", JSON.stringify(result.failure));
+    assert.equal(result.result.output.text, "finished after reconnect");
+    assert.equal(effects, 1);
+    assert.equal(requests.length, 3);
+    assert.deepEqual(requests[1], requests[2]);
+    const accepted = requests[2].messages.flatMap((m) =>
+        m.parts.flatMap((p) => (p.payload.ToolResult ? [p.payload.ToolResult.result] : [])),
+    );
+    assert.equal(accepted.length, 1);
+    assert.equal(accepted[0].call_id, "append-once");
+    assert.equal(accepted[0].output, "counter=1");
+    assert.ok(
+        checkpoints.some((p) =>
+            p.history.new_messages.some((m) =>
+                m.parts.some((p) => p.payload.ToolResult?.result.call_id === "append-once"),
+            ),
+        ),
+    );
+    assert.ok(!JSON.stringify(result.result.new_messages).includes("incomplete-append"));
+});
