@@ -10,6 +10,8 @@ pub fn load(slot: &str, module_id: &str, module_config: Value) -> Result<Collect
     if slot == "hook" {
         if module_id == "codex_compact" {
             codex_context_preparation::register_modules(&mut modules)?;
+        } else if module_id == "codex_base_instructions" {
+            codex_context_preparation::register_base_instructions(&mut modules)?;
         } else if module_id == "tool_selection.dynamic" {
             tool_selection_hook::register_modules(&mut modules)?;
         } else {

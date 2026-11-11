@@ -1,0 +1,7 @@
+This component imports the unmodified npm distribution of
+@earendil-works/pi-coding-agent 1.5.2, by Mario Zechner, under the MIT License.
+Repository: https://github.com/earendil-works/pi
+The upstream MIT license is included as LICENSE.upstream. Transitive dependency
+license files supplied by npm remain in node_modules.
+The package-lock.json records the exact resolved tarballs and integrity hashes.
+The JSON-RPC bridge is Proteus adapter code, not upstream Pi code.

@@ -62,7 +62,7 @@
       "id": "codex-context-preparation",
       "kind": "process_module",
       "title": "codex-context-preparation",
-      "description": "Подготовка и сжатие истории по правилам Codex. Exports: hook/codex_compact.",
+      "description": "Подготовка и сжатие истории по правилам Codex. Exports: hook/codex_base_instructions, hook/codex_compact.",
       "category": "hook",
       "version": "0.1.0-alpha.3",
       "path": "components/codex-context-preparation-module",

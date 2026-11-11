@@ -1,0 +1,9 @@
+{
+  "name": "proteus-pi-runtime",
+  "version": "0.1.0-alpha.3",
+  "private": true,
+  "type": "module",
+  "engines": { "node": ">=22.19.0" },
+  "scripts": { "test": "node --test tests/*.test.mjs" },
+  "dependencies": { "@earendil-works/pi-coding-agent": "1.5.2" }
+}

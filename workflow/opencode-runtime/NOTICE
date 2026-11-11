@@ -1,0 +1,6 @@
+The adapters import the unchanged npm release @opencode/core 2.0.22 and its
+pinned dependencies. Upstream source pin:
+https://github.com/anomalyco/opencode/commit/527f0b931d1f9b3ebd34e106c51b31ce5db5b075
+OpenCode is copyright Anomaly Inc. and distributed under the MIT License.
+The upstream license is included as LICENSE.upstream. The npm lockfile records
+the integrity hashes of all resolved dependency tarballs.

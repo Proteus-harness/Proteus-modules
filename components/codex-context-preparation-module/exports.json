@@ -1,5 +1,6 @@
 {
   "hook": [
-    "codex_compact"
+    "codex_compact",
+    "codex_base_instructions"
   ]
 }

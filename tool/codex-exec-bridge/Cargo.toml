@@ -1,0 +1,18 @@
+[package]
+name = "codex-exec-bridge"
+version = "0.1.0"
+edition = "2024"
+publish = false
+license = "MIT"
+
+# Deliberately isolated research crate: not installed or advertised as parity.
+[workspace]
+
+[dependencies]
+proteus-contracts = { path = "../../../Proteus-core/crates/proteus-contracts" }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+[dev-dependencies]
+anyhow = "1"
+uuid = "1"

@@ -24,6 +24,8 @@ struct ApplyPatchArgs {
 struct CodexPatchConfig {
     #[serde(default)]
     reject_self_move: bool,
+    #[serde(default)]
+    freeform: bool,
 }
 
 fn apply_patch(input: &str, workspace: &Path, config: &CodexPatchConfig) -> Result<String, String> {
@@ -53,6 +55,11 @@ pub fn config_schema() -> proteus_contracts::domain::ModuleConfigSchema {
     use proteus_contracts::domain::{ConfigField, ConfigValueSchema, ModuleConfigSchema};
     ModuleConfigSchema {
         fields: vec![
+            ConfigField::new(
+                "freeform", "Свободный формат Codex",
+                "Публиковать native custom tool с Lark grammar rust-v0.167.0; требует model capability supports_freeform_tools.",
+                ConfigValueSchema::Boolean {},
+            ).with_default(false),
             ConfigField::new(
                 "reject_self_move",
                 "Запрет переноса в себя",

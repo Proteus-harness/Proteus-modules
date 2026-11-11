@@ -9,6 +9,7 @@ pub(crate) fn describe(slot: &str, id: &str, config: &Value) -> Option<ModuleCon
         "hook" if id == "tool_selection.dynamic" => tool_selection_hook::config_schema(),
         "policy" => policy_pack::config_schema(id),
         "hook" if id == "codex_compact" => codex_context_preparation::config_schema(),
+        "hook" if id == "codex_base_instructions" => ModuleConfigSchema::default(),
         "hook" => hook_pack::config_schema(id),
         "tool" | "context_provider" if id == "jsonl_memory" => memory_pack::config_schema(),
         "tool" | "context_provider" if id == "sqlite_memory" => sqlite_memory::config_schema(),

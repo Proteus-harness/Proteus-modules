@@ -4,6 +4,7 @@ mod compaction;
 mod config;
 mod config_schema;
 pub use config_schema::config_schema;
+mod base_instructions;
 mod history;
 mod recovery;
 mod summary;
@@ -53,6 +54,15 @@ fn error(error: impl std::fmt::Display) -> ProcessModuleError {
 pub fn register_modules(registry: &mut dyn ModuleRegistry) -> Result<(), ProcessModuleError> {
     let config = config::CompactorConfig::parse(registry.module_config()).map_err(error)?;
     registry.register_hook(MODULE_ID.to_owned(), Box::new(CodexPreparationHook(config)))
+}
+
+pub fn register_base_instructions(
+    registry: &mut dyn ModuleRegistry,
+) -> Result<(), ProcessModuleError> {
+    registry.register_hook(
+        "codex_base_instructions".to_owned(),
+        Box::new(base_instructions::CodexBaseInstructions),
+    )
 }
 
 #[cfg(test)]

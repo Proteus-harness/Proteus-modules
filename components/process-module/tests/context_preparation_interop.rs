@@ -32,6 +32,8 @@ use serde_json::{Value, json};
 fn strategy(module_id: &str) -> Value {
     if module_id == "codex_compact" {
         json!({"trigger_tokens": 100})
+    } else if module_id == "codex_base_instructions" {
+        json!({})
     } else {
         json!({"trigger_messages": 3, "retain_user_turns": 1})
     }
@@ -164,7 +166,7 @@ fn python_worker() -> PathBuf {
 }
 
 fn config(module_id: &str) -> AppConfig {
-    let command = if module_id == "codex_compact" {
+    let command = if matches!(module_id, "codex_compact" | "codex_base_instructions") {
         json!({"command": env!("CARGO_BIN_EXE_proteus-reference-module")})
     } else {
         json!({"command": "python3", "args": [python_worker()],
@@ -228,6 +230,71 @@ fn history() -> Vec<CanonicalMessage> {
         CanonicalMessage::text(MessageRole::Assistant, "Old answer."),
         CanonicalMessage::text(MessageRole::User, "Current task."),
     ]
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn pinned_base_instructions_cross_the_real_hook_boundary() {
+    use proteus_contracts::{
+        contracts::ModelCallOrigin,
+        model_standard::{InstructionBlock, InstructionKind},
+    };
+    let workspace = tempfile::tempdir().unwrap();
+    let cwd = workspace.path().to_path_buf();
+    let registry = tokio::task::spawn_blocking({
+        let cwd = cwd.clone();
+        move || RuntimeRegistry::from_config(&config("codex_base_instructions"), cwd)
+    })
+    .await
+    .unwrap()
+    .unwrap();
+    for (model, expected) in [
+        (
+            "gpt-6.1-sol",
+            include_str!(
+                "../../../hook/codex-context-preparation/src/upstream/0.167.0/gpt-6.1-sol.md"
+            ),
+        ),
+        (
+            "gpt-6.1-terra",
+            include_str!(
+                "../../../hook/codex-context-preparation/src/upstream/0.167.0/gpt-6.1-terra.md"
+            ),
+        ),
+    ] {
+        let messages = history();
+        let custom = InstructionBlock::new(
+            InstructionKind::UserPreference,
+            "Retain this preference.",
+            150,
+        );
+        let request = CanonicalModelRequest::new(ModelRef::new("fake", model), messages.clone())
+            .with_instructions(vec![custom.clone()]);
+        let input = HookInput {
+            event: HookEvent::BeforeModel {
+                origin: ModelCallOrigin::Direct,
+                request,
+            },
+            attribution: ExecutionAttribution::detached(new_execution_id()),
+            cwd: cwd.clone(),
+            conversation: None,
+        };
+        let response = registry.hooks[0]
+            .1
+            .invoke(input, Arc::new(NoModelHost))
+            .await
+            .unwrap();
+        let HookResponse::ModelContext {
+            messages: actual,
+            instructions,
+        } = response
+        else {
+            panic!("expected instruction preparation")
+        };
+        assert_eq!(actual, messages);
+        assert_eq!(instructions.len(), 2);
+        assert_eq!(instructions[0].text, expected);
+        assert_eq!(instructions[1], custom);
+    }
 }
 
 async fn check_names(module_id: &str) {

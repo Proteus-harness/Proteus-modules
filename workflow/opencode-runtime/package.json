@@ -1,0 +1,14 @@
+{
+  "name": "proteus-opencode-runtime",
+  "private": true,
+  "type": "module",
+  "version": "0.1.0-alpha.4",
+  "scripts": {
+    "test": "node_modules/node-linux-x64/bin/node --test tests/*.test.mjs"
+  },
+  "dependencies": {
+    "@opencode/core": "2.0.22",
+    "effect": "4.0.0-rc.112",
+    "node-linux-x64": "24.12.0"
+  }
+}

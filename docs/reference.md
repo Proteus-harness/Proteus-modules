@@ -35,6 +35,31 @@ parallel capability относятся к этой реализации и её 
 Ошибочный ToolSpec по-прежнему приводит к ошибке list; проверка schema,
 policy/approval и authority остаётся на прежних границах.
 
+## Codex Base Instructions И Patch Surface
+
+Пакет `codex-context-preparation` дополнительно экспортирует
+`hook/codex_base_instructions`. На `BeforeModel` прямого запроса он выбирает
+публичный model-specific `instructions_template` из OpenAI Codex
+`rust-v0.167.0`, commit `086ccc833bc9cf01024ad2dd6af7dbd421b6bf9a`.
+Включены `gpt-6.1-sol`, `gpt-6.1-terra`, `gpt-5.6-luna`; для остальных
+используется upstream `default.md`. Пользовательские инструкции сохраняются.
+Источники, лицензия Apache-2.0 и SHA256 находятся в
+`hook/codex-context-preparation/src/upstream/0.167.0/`.
+Auxiliary summary requests сохраняют собственную подготовку.
+
+В `codex_patch` параметр `freeform=true` публикует custom tool с точной
+upstream Lark grammar этой версии. Canonical input имеет `{input: string}`;
+проверка schema, policy и workspace выполняется до применения patch.
+Default `freeform=false` сохраняет function binding `{patch: string}`.
+Профиль Core `codex` выбирает freeform; `code-mode` явно сохраняет function
+binding для своего `tools.call` API.
+
+Публичный pinned каталог отличается от обновляемого `/models` каталога
+конкретной native CLI-сессии. Применение pinned template и grammar не закрывает
+остальные fidelity gates. Native CLI `0.167.0` по умолчанию предоставляет
+programmatic `exec` через отдельный code-mode-host; local summary compactor
+и protocol/tool/session orchestration этой сборки проверяются отдельно.
+
 ## CodeMode
 
 Самостоятельный пакет `code-mode` экспортирует `tool/code_mode` и инструмент

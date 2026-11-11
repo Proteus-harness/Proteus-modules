@@ -1,5 +1,5 @@
 use proteus_contracts::{
-    domain::{ToolCall, ToolCallSurface, ToolResult, ToolSafety, ToolSpec},
+    domain::{ToolCall, ToolCallSurface, ToolResult, ToolSafety, ToolSpec, ToolSurface},
     process_module::{
         ProcessModuleError, ToolModule, ToolModuleHostMut, ToolModuleInvocationContext,
     },
@@ -12,7 +12,7 @@ pub(super) struct ApplyPatchTool {
 
 impl ToolModule for ApplyPatchTool {
     fn spec_json(&self) -> String {
-        let spec = ToolSpec::new(
+        let mut spec = ToolSpec::new(
             "apply_patch",
             "Apply a workspace patch using the Codex format documented in the profile instructions.",
             json!({
@@ -34,6 +34,13 @@ impl ToolModule for ApplyPatchTool {
             "aliases": ["apply changes", "edit files", "modify workspace"],
             "approval": {"cache_scopes": ["workspace_write"]}
         }));
+        if self.config.freeform {
+            spec.input_schema = json!({
+                "type":"object", "properties":{"input":{"type":"string"}},
+                "required":["input"], "additionalProperties":false,
+            });
+            spec.surface = ToolSurface::freeform_lark(include_str!("upstream/apply_patch.lark"));
+        }
         serde_json::to_string(&spec).expect("serializable tool spec")
     }
 

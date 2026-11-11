@@ -2,6 +2,31 @@ use std::fs;
 
 use super::CodexPatchConfig;
 
+#[test]
+fn freeform_binding_accepts_raw_provider_input_and_rejects_function_arguments() {
+    use proteus_contracts::{
+        domain::{ToolCall, ToolCallSurface, ToolSpec, ToolSurface, validate_tool_call_args},
+        process_module::ToolModule,
+    };
+    let tool = super::tool::ApplyPatchTool {
+        config: CodexPatchConfig {
+            freeform: true,
+            ..Default::default()
+        },
+    };
+    let spec: ToolSpec = serde_json::from_str(&tool.spec_json()).unwrap();
+    assert_eq!(
+        spec.surface,
+        ToolSurface::freeform_lark(include_str!("upstream/apply_patch.lark"))
+    );
+    let input = patch("*** Add File: f\n+hello");
+    let call = ToolCall::new("test", "apply_patch", serde_json::json!({"input":input}))
+        .with_surface(ToolCallSurface::Freeform);
+    assert_eq!(validate_tool_call_args(&call, &spec), None);
+    let wrong = ToolCall::new("test", "apply_patch", serde_json::json!({"patch":input}));
+    assert!(validate_tool_call_args(&wrong, &spec).is_some());
+}
+
 fn apply_patch(input: &str, workspace: &std::path::Path) -> Result<String, String> {
     super::apply_patch(input, workspace, &CodexPatchConfig::default())
 }
@@ -18,6 +43,7 @@ fn self_move_guard_rejects_normalized_alias_before_any_write() {
         dir.path(),
         &CodexPatchConfig {
             reject_self_move: true,
+            ..Default::default()
         },
     )
     .unwrap_err();

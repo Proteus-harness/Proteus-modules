@@ -1,0 +1,2 @@
+# Preserve the pinned upstream model templates byte for byte.
+hook/codex-context-preparation/src/upstream/0.167.0/*.md -text -whitespace
