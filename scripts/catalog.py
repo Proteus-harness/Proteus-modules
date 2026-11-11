@@ -23,6 +23,7 @@ CATEGORIES = {
 # Human-facing copy only. Versions, paths, selection and exports come from
 # the same manifests used by package.py; new packages work without this map.
 DESCRIPTIONS = {
+    "code-mode": "JavaScript-сценарии с вызовами инструментов и коротким итогом для модели.",
     "codex-context-preparation": "Подготовка и сжатие истории по правилам Codex.",
     "codex-patch": "Применение изменений файлов в формате Codex apply_patch.",
     "coding-workflow": "Циклы выполнения задач, планирования и проверки кода.",
@@ -78,7 +79,8 @@ def catalog(root=ROOT):
                 "path": ".",
                 "build": ["python3", "package.py", "--package", identity],
                 "artifact": f"dist/{identity}.zip",
-                "requirements": ["Rust", "Git", "Python 3.11+", "LLD (Linux x86_64)"],
+                "requirements": ["Rust", "Git", "Python 3.11+", "LLD (Linux x86_64)",
+                                 *selected.requirements],
             },
         })
     return {

@@ -69,7 +69,19 @@ async fn every_independent_package_preserves_manifests_and_tool_catalogs() {
         .expect("run python3 scripts/test.py full to prepare independent workers");
     let index: Value = serde_json::from_slice(&std::fs::read(index).unwrap()).unwrap();
     let packages = index["packages"].as_object().unwrap();
-    assert_eq!(packages.len(), 18);
+    let catalog: Value =
+        serde_json::from_str(include_str!("../../../proteus-catalog.json")).unwrap();
+    let expected: std::collections::BTreeSet<_> = catalog["entries"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|entry| entry["id"].as_str().unwrap())
+        .collect();
+    let actual = packages.keys().map(String::as_str).collect();
+    assert_eq!(
+        expected, actual,
+        "every catalog package needs a built process fixture"
+    );
     let workspace = tempfile::tempdir().unwrap();
     let reference = Path::new(env!("CARGO_BIN_EXE_proteus-reference-module"));
     for (identity, package) in packages {

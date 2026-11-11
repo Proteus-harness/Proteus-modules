@@ -13,7 +13,7 @@ alpha-выпусками не обещана; потребитель закре�
 | `context/` | Построение контекста |
 | `policy/` | Разрешения и подтверждения |
 | `hook/` | Обработка истории, отбор инструментов |
-| `tool/` | Файлы, shell, git, patch, plan, skills, Rust LSP |
+| `tool/` | Файлы, shell, git, patch, plan, skills, Rust LSP, CodeMode |
 | `context_provider/` | Поиск и память; некоторые также экспортируют tool |
 | `components/` | Исполняемые сборки с несколькими exports |
 | `research/` | Эксперименты вне основного Cargo workspace |
@@ -51,8 +51,9 @@ python3 -m unittest discover -s tests -p 'test_catalog.py'
 
 ## Сборка И Проверка
 
-Нужны Rust, Git, Python 3.11+ и LLD на Linux x86_64; gate Claude command hooks дополнительно
-требует Node.js 22.18+.
+Нужны Rust, Git, Python 3.11+ и LLD на Linux x86_64; для сборки CodeMode
+также нужен C-компилятор. Gate Claude command hooks дополнительно требует
+Node.js 22.18+; сам CodeMode работает без Node.js.
 Контракты и test harness подключены по фиксированному Git commit в Cargo.toml;
 соседний checkout harness для обычной сборки не требуется.
 
@@ -77,12 +78,19 @@ GitHub Actions запускает этот gate только вручную. О�
 запускают проверки. Общая релизная сборка запускается тегом `v*` в
 Proteus-desktop и использует закреплённую ревизию Modules.
 
-Каждая из 18 групп реализаций имеет свой `components/<id>-module` и бинарник
+Каждая поставляемая группа реализаций имеет свой `components/<id>-module` и бинарник
 `proteus-<id>-module`. `package.py --package <id>` собирает только этот пакет
 и зависимости и создаёт `dist/<id>.zip`. `--install /path/to/Proteus` заменяет
 только его бинарник и metadata в существующей поставке; Core, Desktop и другие
 пакеты не собираются. Перезапустите backend после обновления: hot reload не
 добавлялся. Изменение общего SDK/runtime требует пересборки его потребителей.
+
+Пакет `code-mode` добавляет инструмент `code_mode`: модель пишет JavaScript,
+вызывает существующие tools через `await tools.call(name, args)` и возвращает
+короткий итог через `text()`. Установка:
+`python3 package.py --package code-mode --install /path/to/Proteus`.
+Подключение остаётся явным; текущие профили не меняются автоматически.
+API, ограничения исполнения и пример — в [CodeMode](docs/reference.md#codemode).
 
 `package.py --bundle /path/to/runtime` готовит весь набор. `--no-build` использует
 пути последней успешной сборки из `dist/.artifacts/<profile>.json` без Cargo:

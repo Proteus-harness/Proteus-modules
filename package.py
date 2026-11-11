@@ -24,6 +24,7 @@ class Package:
     manifest: Path
     implementation: Path
     exports: dict
+    requirements: tuple[str, ...] = ()
 
 
 def packages(root=ROOT):
@@ -35,8 +36,13 @@ def packages(root=ROOT):
         identity = metadata["id"]
         if identity in found:
             raise SystemExit(f"Duplicate module package: {identity}")
+        requirements = metadata.get("requirements", [])
+        if (not isinstance(requirements, list)
+                or not all(isinstance(value, str) and value.strip() for value in requirements)):
+            raise SystemExit(f"Invalid build requirements for module package: {identity}")
         found[identity] = Package(identity, spec["name"], spec["version"], manifest.resolve(),
-                                  root / metadata["implementation"], json.loads(exports.read_text()))
+                                  root / metadata["implementation"], json.loads(exports.read_text()),
+                                  tuple(dict.fromkeys(requirements)))
     if not found:
         raise SystemExit(f"No module packages in {root}")
     return found

@@ -18,6 +18,7 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 
 codex-patch = { path = "../../tool/codex-patch" }
+code-mode = { path = "../../tool/code-mode" }
 codex-context-preparation = { path = "../../hook/codex-context-preparation", default-features = false }
 tool-selection-hook = { path = "../../hook/tool-selection-hook", default-features = false }
 coding-workflow = { path = "../../workflow/coding-workflow", default-features = false }

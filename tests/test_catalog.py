@@ -46,7 +46,8 @@ class CatalogTests(unittest.TestCase):
                 self.assertEqual(entry["source"]["build"],
                                  ["python3", "package.py", "--package", selected.identity])
                 self.assertEqual(entry["source"]["requirements"],
-                                 ["Rust", "Git", "Python 3.11+", "LLD (Linux x86_64)"])
+                                 ["Rust", "Git", "Python 3.11+", "LLD (Linux x86_64)",
+                                  *selected.requirements])
                 self.assertNotIn("artifacts", entry)
                 self.assertEqual(entry["source"]["artifact"], f'dist/{entry["id"]}.zip')
 
@@ -86,6 +87,16 @@ class CatalogTests(unittest.TestCase):
     def test_invalid_exports_fail_instead_of_advertising_a_broken_module(self):
         self.add_package("broken", exports={"tool": "not-a-list"})
         with self.assertRaisesRegex(ValueError, "exports"):
+            catalog.catalog(self.root)
+
+    def test_package_build_requirements_reach_the_installation_catalog(self):
+        component = self.add_package("embedded-engine")
+        manifest = component / "Cargo.toml"
+        manifest.write_text(manifest.read_text() + 'requirements = ["C compiler"]\n')
+        entry = catalog.catalog(self.root)["entries"][0]
+        self.assertEqual(entry["source"]["requirements"][-1], "C compiler")
+        manifest.write_text(manifest.read_text().replace('["C compiler"]', '"C compiler"'))
+        with self.assertRaisesRegex(SystemExit, "Invalid build requirements"):
             catalog.catalog(self.root)
 
     def test_committed_index_is_current(self):

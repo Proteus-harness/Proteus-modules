@@ -40,6 +40,7 @@ pub fn load(slot: &str, module_id: &str, module_config: Value) -> Result<Collect
         ("tool", "git_tools") => git_tools::register_modules,
         ("tool", "shell_tools") => shell_tool::register_modules,
         ("tool", "plan_tool") => plan_tool::register_modules,
+        ("tool", "code_mode") => code_mode::register_modules,
         ("tool", "rust_lsp") => rust_lsp::register_modules,
         ("tool", "skill_tool") => skill_pack::register_modules,
         ("tool", "policy_tools") => policy_pack::register_modules,

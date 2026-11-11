@@ -33,6 +33,32 @@
   ],
   "entries": [
     {
+      "id": "code-mode",
+      "kind": "process_module",
+      "title": "code-mode",
+      "description": "JavaScript-сценарии с вызовами инструментов и коротким итогом для модели. Exports: tool/code_mode.",
+      "category": "tool",
+      "version": "0.1.0-alpha.3",
+      "path": "components/code-mode-module",
+      "source": {
+        "path": ".",
+        "build": [
+          "python3",
+          "package.py",
+          "--package",
+          "code-mode"
+        ],
+        "artifact": "dist/code-mode.zip",
+        "requirements": [
+          "Rust",
+          "Git",
+          "Python 3.11+",
+          "LLD (Linux x86_64)",
+          "C compiler"
+        ]
+      }
+    },
+    {
       "id": "codex-context-preparation",
       "kind": "process_module",
       "title": "codex-context-preparation",

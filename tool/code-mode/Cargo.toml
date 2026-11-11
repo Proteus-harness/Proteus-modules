@@ -1,0 +1,13 @@
+[package]
+name = "code-mode"
+version = "0.1.0-alpha.3"
+edition = "2024"
+license = "MIT"
+publish = false
+
+[dependencies]
+proteus-contracts = { workspace = true }
+rquickjs = { version = "0.14", default-features = false, features = ["std"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+uuid = { version = "1", features = ["v4"] }

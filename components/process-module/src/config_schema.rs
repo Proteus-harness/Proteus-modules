@@ -14,6 +14,7 @@ pub(crate) fn describe(slot: &str, id: &str, config: &Value) -> Option<ModuleCon
         "tool" | "context_provider" if id == "sqlite_memory" => sqlite_memory::config_schema(),
         "tool" | "context_provider" if id == "rg_search" => ModuleConfigSchema::default(),
         "tool" if id == "codex_patch" => codex_patch::config_schema(),
+        "tool" if id == "code_mode" => code_mode::config_schema(),
         "tool" if matches!(id, "shell_tools" | "reference.tools") => shell_tool::config_schema(),
         // These packs read no module config.
         "tool"

@@ -35,6 +35,56 @@ parallel capability относятся к этой реализации и её 
 Ошибочный ToolSpec по-прежнему приводит к ошибке list; проверка schema,
 policy/approval и authority остаётся на прежних границах.
 
+## CodeMode
+
+Самостоятельный пакет `code-mode` экспортирует `tool/code_mode` и инструмент
+`code_mode({code, timeout_ms?})`. Он исполняет JavaScript во встроенном QuickJS;
+каждый вызов получает новое состояние. `tools.call(name, args)` возвращает
+Promise с полным `ToolResult`, включая `ok`, `output`, `error` и `metadata`.
+Аргументы соответствуют зарегистрированной function-схеме: например,
+`tools.call("apply_patch", {patch: patchText})`.
+Неуспешный результат инструмента нужно проверять явно:
+
+```javascript
+const results = await Promise.all(
+  ["a.txt", "b.txt"].map(path => tools.call("read_file", {path}))
+);
+const failed = results.filter(result => !result.ok);
+text({read: results.length - failed.length, failed: failed.length});
+```
+
+`text(value)` и `console.log(...values)` печатают ограниченный вывод. В следующий
+запрос модели попадают этот вывод и служебный итог `code_mode`; сырые дочерние
+результаты остаются переменными скрипта и фактами canonical journal. Возвращаемое
+значение JavaScript само по себе не печатается. Счётчики неуспешных дочерних
+вызовов сохраняются и тогда, когда скрипт обработал ошибку. `Promise.all`
+допускает параллельную отправку, но реальное исполнение дополнительно подчиняется
+общему scheduling и `supports_parallel_tool_calls` каждого инструмента.
+
+Вызовы проходят существующий `host.tools.execute` и общий путь schema validation,
+hooks, policy/approval, cancellation и journal; новый контракт Core не требуется.
+Из JavaScript не доступны файловая система, сеть, команды ОС, загрузчик модулей
+или model callbacks. Для эффектов используются зарегистрированные инструменты.
+Лимиты ограничивают код, память и stack QuickJS, печать, число и параллелизм
+вызовов, а также время скрипта. Это граница возможностей JavaScript, а не OS
+sandbox всего worker-процесса. Уже допущенные host calls завершаются в границах
+родительского invocation Core; deadline скрипта не обещает мгновенную остановку
+или откат их эффектов. Фоновое исполнение и состояние между скриптами отсутствуют.
+
+Установка пакета: `python3 package.py --package code-mode --install /path/to/Proteus`.
+После установки укажите command `proteus-code-mode-module`, export
+`components.<id>.exports.tool.code_mode` и включите `code_mode` в `tools.enabled`.
+Самостоятельный профиль находится в
+[профиле Core `code-mode`](https://github.com/Proteus-harness/Proteus-core/blob/main/configs/code-mode.config.toml).
+При использовании `tool_selection.dynamic` добавьте `code_mode` в `always_include`.
+`tools.call` принимает настоящие registry tool names: workflow-операции
+`proteus_tool_search`, `proteus_tool_describe` и `proteus_tool_call` внутри скрипта
+недоступны. Модель выполняет discovery до вызова `code_mode`.
+
+V1 сохраняет прямые описания доступных tools и добавляет добровольно выбираемый
+скриптовый инструмент. Уменьшение числа запросов и объёма контекста зависит от
+задачи; сравнение расхода токенов на живых моделях пока не проводилось.
+
 ## Настройки Model-pack
 
 Форма подключения описывает параметры адаптера, а не автоматически

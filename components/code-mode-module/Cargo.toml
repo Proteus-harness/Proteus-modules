@@ -1,0 +1,21 @@
+[package]
+name = "proteus-code-mode-module"
+version = "0.1.0-alpha.3"
+edition = "2024"
+license = "MIT"
+publish = false
+
+[package.metadata.proteus]
+id = "code-mode"
+implementation = "tool/code-mode"
+requirements = ["C compiler"]
+
+[[bin]]
+name = "proteus-code-mode-module"
+path = "src/main.rs"
+test = false
+bench = false
+
+[dependencies]
+proteus-module-runtime = { path = "../module-runtime" }
+code-mode = { path = "../../tool/code-mode" }
