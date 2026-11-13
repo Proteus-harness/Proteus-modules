@@ -24,6 +24,7 @@ use crate::{
     model_standard::{CanonicalMessage, ContentPart, FinishReason, MessageRole},
 };
 
+mod api_identity;
 mod codex_catalog;
 #[cfg(test)]
 mod codex_catalog_tests;
@@ -70,6 +71,7 @@ use stream_state::translate_sse_event;
 #[derive(Debug, Clone)]
 pub struct OpenAiResponsesClient {
     http: reqwest::Client,
+    api_identity: api_identity::ApiIdentity,
     secret_config: Value,
     codex_auth: Option<CodexAuth>,
     catalog_cache: Arc<codex_catalog::CatalogCache>,
@@ -159,6 +161,7 @@ impl OpenAiResponsesClient {
 
         Ok(Self {
             http: http.build()?,
+            api_identity: api_identity::ApiIdentity::from_config(&config)?,
             secret_config: config,
             codex_auth: None,
             catalog_cache: Arc::default(),

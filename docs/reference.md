@@ -143,6 +143,19 @@ verbosity. Включать следует только формат, котор
 `client_version` задаёт версию в запросе каталога Codex и не меняет версию
 установленного клиента или выбранную модель.
 
+Для OpenAI API и OpenAI-совместимого Responses API можно явно задать
+`user_agent` и `session_header`. Первое значение становится HTTP User-Agent;
+второе задаёт имя заголовка, куда на каждом запросе попадает только bound
+`client_metadata.session_id` этого запроса. Для включённого `session_header`
+отсутствующая или некорректная identity завершает запрос ошибкой до HTTP;
+статические `client_metadata` из config не подменяют identity разговора.
+Например, OpenCode Go требует собственный User-Agent клиента и
+`session_header = "x-opencode-session"`; его совместимый Responses API доступен
+на `https://opencode.ai/inference/go/openai/v1`.
+Точные endpoints и требования — в
+[документации OpenCode](https://opencode.ai/docs/console/harnesses/).
+Подключение ChatGPT сохраняет собственный протокол заголовков.
+
 Anthropic Messages сохраняет `redacted_thinking` как непрозрачный canonical
 `ContentPart::Opaque` с форматом `anthropic.messages.redacted_thinking`.
 Весь исходный JSON-блок, включая зашифрованное `data`, остаётся в исходной

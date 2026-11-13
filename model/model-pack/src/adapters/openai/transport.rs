@@ -99,10 +99,10 @@ impl OpenAiResponsesClient {
         &self,
         request: &CanonicalModelRequest,
     ) -> Result<HeaderMap> {
-        let mut headers = HeaderMap::new();
         if self.codex_auth.is_none() {
-            return Ok(headers);
+            return self.api_identity.headers(request);
         }
+        let mut headers = HeaderMap::new();
         // ChatGPT cache affinity uses the conversation identity independently
         // of the body's configurable prompt_cache_key. Only the canonical
         // per-request metadata carries this identity; provider defaults must
@@ -135,7 +135,10 @@ impl OpenAiResponsesClient {
             headers.insert(AUTHORIZATION, bearer);
             return ensure_success(
                 self.request_retry
-                    .send(|| self.request_builder(&url, body, &headers))
+                    .send(|| {
+                        self.request_builder(&url, body, &headers)
+                            .headers(identity_headers.clone())
+                    })
                     .await?,
             )
             .await;

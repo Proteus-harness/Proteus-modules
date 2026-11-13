@@ -33,6 +33,72 @@ fn affinity_request(
 }
 
 #[tokio::test]
+async fn api_gateway_identity_follows_each_conversation_for_stream_and_complete() {
+    for stream in [false, true] {
+        let identities = ["session-a", "session-a", "session-b"];
+        let response = json!({"status":"completed", "output":[]});
+        let replies = identities
+            .iter()
+            .map(|_| {
+                if stream {
+                    test_http::sse(response.clone())
+                } else {
+                    (200, "application/json", response.to_string())
+                }
+            })
+            .collect();
+        let (url, server) = test_http::server(replies).await;
+        let mut client = OpenAiResponsesClient::from_provider_config(json!({
+            "base_url":url, "api_key":"fixture-api-key", "stream":stream,
+            "user_agent":"Proteus/fixture", "session_header":"x-fixture-session",
+            "client_metadata":{"session_id":"must-not-become-the-header"},
+        }))
+        .unwrap();
+        client.http = reqwest::Client::builder().no_proxy().build().unwrap();
+        for session in identities {
+            let mut events = client
+                .stream(affinity_request(Some(session), None, "turn"))
+                .await
+                .unwrap();
+            while let Some(event) = events.next().await {
+                event.unwrap();
+            }
+        }
+        for (request, session) in server.await.unwrap().iter().zip(identities) {
+            assert_eq!(request.headers["user-agent"], "Proteus/fixture");
+            assert_eq!(request.headers["x-fixture-session"], session);
+            assert_eq!(request.headers["authorization"], "Bearer fixture-api-key");
+        }
+    }
+}
+
+#[tokio::test]
+async fn api_gateway_requires_bound_identity_without_using_config_defaults_or_disclosing_values() {
+    let client = OpenAiResponsesClient::from_provider_config(json!({
+        "api_key_env":"__PROTEUS_TEST_MISSING_GATEWAY_KEY",
+        "session_header":"x-fixture-session",
+        "client_metadata":{"session_id":"configured-session"},
+    }))
+    .unwrap();
+    for session in [None, Some("private-identity\r\ninvalid")] {
+        let error = client
+            .stream(affinity_request(session, None, "turn"))
+            .await
+            .err()
+            .unwrap();
+        let message = format!("{error:#}");
+        assert!(message.contains(if session.is_some() {
+            "invalid openai session identity header"
+        } else {
+            "requires request client_metadata.session_id"
+        }));
+        assert!(!message.contains("private-identity"));
+        assert!(!message.contains("configured-session"));
+        assert!(!message.contains("environment variable"));
+    }
+}
+
+#[tokio::test]
 async fn codex_cache_affinity_is_per_request_and_independent_of_body_overrides() {
     tokio::time::timeout(Duration::from_secs(10), async {
         let root = tempfile::tempdir().unwrap();

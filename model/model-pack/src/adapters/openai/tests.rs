@@ -28,6 +28,20 @@ fn provider_config_does_not_require_secret_until_request() {
 }
 
 #[test]
+fn api_gateway_header_settings_reject_invalid_values_at_construction() {
+    for config in [
+        json!({"user_agent":"invalid\r\nheader"}),
+        json!({"user_agent":true}),
+        json!({"session_header":"invalid name"}),
+        json!({"session_header":"authorization"}),
+        json!({"session_header":"content-type"}),
+        json!({"session_header":""}),
+    ] {
+        assert!(OpenAiResponsesClient::from_provider_config(config).is_err());
+    }
+}
+
+#[test]
 fn stream_error_fallback_is_explicit_diagnostic_mode() {
     let client = OpenAiResponsesClient::from_provider_config(json!({
         "stream_error_fallback": true

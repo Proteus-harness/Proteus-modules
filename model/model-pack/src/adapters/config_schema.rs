@@ -28,6 +28,22 @@ pub fn config_schema(config: &Value) -> ModuleConfigSchema {
     }
     let codex = implementation == "openai_codex";
     let anthropic = implementation == "anthropic";
+    if !codex && !anthropic {
+        for (key, title, description) in [
+            (
+                "user_agent",
+                "Имя клиента HTTP",
+                "User-Agent, которым это подключение представляется API-серверу.",
+            ),
+            (
+                "session_header",
+                "Заголовок сессии",
+                "Имя HTTP-заголовка для идентификатора текущей сессии. При включении запрос должен иметь client_metadata.session_id; общее значение из настроек не используется.",
+            ),
+        ] {
+            fields.push(Field::new(key, title, description, Kind::text()).advanced());
+        }
+    }
     fields.push(
         Field::new(
             "base_url",

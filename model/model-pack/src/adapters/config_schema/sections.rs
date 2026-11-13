@@ -41,6 +41,8 @@ pub(super) fn group(mut fields: Vec<Field>) -> ModuleConfigSchema {
             | "http1_only"
             | "stream_error_fallback"
             | "client_metadata"
+            | "user_agent"
+            | "session_header"
             | "stream_delay_ms" => (
                 "network",
                 "Сеть и диагностика",
