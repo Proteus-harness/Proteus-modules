@@ -84,7 +84,9 @@ export function canonicalAnswer(message, id) {
         let payload;
         if (block.type === "text") payload = { Text: { text: block.text } };
         else if (block.type === "thinking")
-            payload = { Reasoning: { text: block.thinking, signature: block.thinkingSignature ?? null } };
+            payload = block.redacted
+                ? { Opaque: { format: "pi/thinking", data: structuredClone(block) } }
+                : { Reasoning: { text: block.thinking, signature: block.thinkingSignature ?? null } };
         else if (block.type === "toolCall") {
             const call = {
                 id: block.id,
@@ -108,7 +110,7 @@ export function canonicalAnswer(message, id) {
             arguments: args,
             ...providerFields
         } = block;
-        nativeParts.push(providerFields);
+        nativeParts.push(payload.Opaque ? {} : providerFields);
         parts.push({ part_id: randomUUID(), provenance: "model", scope: "conversation", payload });
     }
     const { content, ...header } = message;
@@ -233,12 +235,39 @@ export function modelExport(binding) {
                     sessionId: r.cache.routing_key ?? undefined,
                     cacheRetention: r.cache.cache_context ? undefined : "none",
                 });
+                const readableThinking = new Set();
+                const pendingThinking = new Map();
                 for await (const e of stream) {
                     if (e.type === "start") started = true;
-                    if (params.stream && e.type === "text_delta")
+                    if (!params.stream) continue;
+                    let event;
+                    if (e.type === "text_delta")
+                        event = { TextDelta: { message_id: id, phase: null, text: e.delta } };
+                    else if (e.type === "thinking_delta") {
+                        const block = e.partial?.content?.[e.contentIndex];
+                        if (block?.type === "thinking" && !block.redacted) {
+                            let text = e.delta;
+                            if (!readableThinking.has(e.contentIndex)) {
+                                const prefix = pendingThinking.get(e.contentIndex) ?? "";
+                                // Match CanonicalMessage.reasoning_text: blank
+                                // blocks disappear; readable blocks keep their
+                                // whitespace and are separated by a newline.
+                                if (!/\P{White_Space}/u.test(text)) {
+                                    pendingThinking.set(e.contentIndex, prefix + text);
+                                    continue;
+                                }
+                                text = prefix + text;
+                                pendingThinking.delete(e.contentIndex);
+                                if (readableThinking.size) text = "\n" + text;
+                                readableThinking.add(e.contentIndex);
+                            }
+                            event = { ReasoningDelta: { message_id: id, text } };
+                        }
+                    } else if (e.type === "thinking_end") pendingThinking.delete(e.contentIndex);
+                    if (event)
                         await hostCall("host.model.emit", {
                             sequence: sequence++,
-                            event: { TextDelta: { message_id: id, phase: null, text: e.delta } },
+                            event,
                         });
                 }
                 const message = await stream.result();

@@ -63,8 +63,12 @@ ${c.content}`;
                         : {}),
                 });
             } else if (payload.Opaque) {
-                // The complete opaque provider item remains in the canonical sampling history.
-                // It has no visible text for the Pi loop or summary.
+                // Redacted Pi thinking is provider replay data, not displayable
+                // reasoning. Unknown opaque formats stay outside the Pi input.
+                const { format, data } = payload.Opaque;
+                if (format === "pi/thinking" && data?.type === "thinking"
+                    && data.redacted === true && typeof data.thinking === "string")
+                    content.push(structuredClone(data));
             } else if (payload.Image?.image) {
                 content.push({
                     type: "image",

@@ -25,7 +25,7 @@ const PENDING_CALL: &str = "call_pending_write";
 const APPROVAL_FAILURE: &str = "fixture approval transport disconnected";
 const CONTINUE: &str = "Продолжай после прерывания.";
 const FINAL: &str = "Выполненный шаг сохранён.";
-const REASONING: &str = "private interrupted reasoning summary";
+const REASONING: &str = "interrupted reasoning summary";
 
 #[derive(Clone, Copy, Debug)]
 enum Interruption {
@@ -464,8 +464,16 @@ async fn check_interruption(mode: Interruption) {
     assert!(
         transcript
             .iter()
+            .filter(|message| message.role != "reasoning")
             .all(|message| !message.text.contains(REASONING))
     );
+    let reasoning: Vec<_> = transcript
+        .iter()
+        .filter(|message| message.role == "reasoning")
+        .collect();
+    assert_eq!(reasoning.len(), 1);
+    assert_eq!(reasoning[0].text, REASONING);
+    assert!(!reasoning[0].streaming);
     assert!(
         transcript
             .iter()
