@@ -1,5 +1,6 @@
 // Keep Pi's transport, authentication, GPT tool conversion and usage accounting inside model/v13.
 import { randomUUID } from "node:crypto";
+import { createGoQuotaReader } from "./go-quota.mjs";
 import { readFile } from "node:fs/promises";
 import { ModelRuntime } from "../../tool/pi-tools/node_modules/@earendil-works/pi-coding-agent/dist/core/model-runtime.js";
 import {
@@ -189,17 +190,22 @@ export function modelExport(binding) {
     )
         throw new Error("Invalid Pi model configuration");
     const ready = ModelRuntime.create({ modelsPath: null, allowModelNetwork: false });
+    const goQuota = binding.module_config.implementation === "opencode-go" ? createGoQuotaReader() : null;
     return {
         manifest: {
             slot: "model",
             module_id: "pi_codex",
             contract_version: "v13",
             composition: "select_one",
-            module_features: [],
+            module_features: goQuota ? ["model.quota.v1"] : [],
             config_schema: null,
         },
         async invoke(method, params, { signal, hostCall }) {
             const runtime = await ready;
+            if (method === "quota") {
+                if (!goQuota) throw new Error("Quota discovery is unsupported by this Pi provider");
+                return goQuota(runtime, signal);
+            }
             const ref = method === "describe" ? params.model : params.request?.model;
             const model = ref && runtime.getModel(binding.module_config.implementation, ref.model);
             if (!model) throw new Error("Pi model unavailable: " + ref?.model);

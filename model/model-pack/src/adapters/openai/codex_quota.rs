@@ -57,6 +57,7 @@ fn bucket(id: String, name: Option<String>, limit: Option<RateLimit>) -> ModelQu
         allowed: None,
         limit_reached: None,
         windows: vec![],
+        informational: false,
     };
     if let Some(limit) = limit {
         result.allowed = Some(limit.allowed);
@@ -71,6 +72,7 @@ fn bucket(id: String, name: Option<String>, limit: Option<RateLimit>) -> ModelQu
                     used_percent: window.used_percent,
                     duration_seconds: Some(window.limit_window_seconds),
                     resets_at: Some(window.reset_at),
+                    amount: None,
                 });
             }
         }
@@ -106,6 +108,7 @@ impl QuotaResponse {
                 unlimited: credits.unlimited,
                 balance: credits.balance,
             }),
+            notices: vec![],
         };
         snapshot.validate().map_err(anyhow::Error::msg)?;
         Ok(snapshot)
