@@ -1,15 +1,15 @@
 use crate::{MAX_TOOL_ROUNDS, PLAN_EXECUTE_REVIEW_MODULE_ID};
 use crate::{
-    host::{complete_model, emit_event, execute_or_handle_tool, request_from_state},
+    host::execute_or_handle_tool,
     metadata::{output_metadata_with_extra, with_workflow_phase},
     output_text::output_text,
-    scaffold::{PersistentRepair, TurnScaffold},
+    sampling::{SamplingStep, sample_step},
+    scaffold::TurnScaffold,
     token_accounting::LastModelUsage,
-    validation::{response_output_message, validate_model_response},
+    validation::response_output_message,
 };
 use proteus_contracts::{
     contracts::WorkflowFailure,
-    domain::{Event, ToolChoice},
     model_standard::FinishReason,
     process_module::{
         ProcessModuleError, WorkflowModuleHostMut, WorkflowModuleInput, WorkflowModuleOutput,
@@ -58,47 +58,20 @@ fn run_loop(
     let mut last_usage: Option<LastModelUsage> = None;
     let mut plan_tool_rounds_used = 0usize;
     for plan_round in 0..=MAX_PLAN_TOOL_ROUNDS {
-        let mut prepared = request_from_state(
+        // The last plan round must finish with text, not a pending tool call.
+        let forced_text_round = plan_round == MAX_PLAN_TOOL_ROUNDS;
+        let plan_response = sample_step(
             input,
             host,
-            &turn.model_messages,
-            PLAN_SYSTEM_INSTRUCTIONS,
-            Some(PLAN_DEVELOPER_INSTRUCTIONS),
-            "plan",
-            last_usage.as_ref(),
-        )?;
-        if turn.apply_compaction_report(
-            prepared.compaction.as_ref(),
-            prepared.preparation_target.as_ref(),
-            &prepared.request.messages,
-            PersistentRepair::Rebuild,
-        )? {
-            last_usage = None;
-            turn.checkpoint(host, &[])?;
-            prepared.request.messages = turn.model_messages.clone();
-        }
-        let mut plan_request = prepared.request;
-        // Последняя итерация принудительно без tools: plan-фаза обязана
-        // закончиться текстовым планом, а не подвисшим tool call.
-        let forced_text_round = plan_round == MAX_PLAN_TOOL_ROUNDS;
-        if forced_text_round {
-            plan_request = plan_request.with_tool_choice(ToolChoice::None);
-            plan_request.tools.clear();
-        }
-        emit_event(
-            host,
-            &Event::ModelRequestPrepared {
-                model: plan_request.model.clone(),
+            turn,
+            &mut last_usage,
+            SamplingStep {
+                phase: "plan",
+                system_instructions: PLAN_SYSTEM_INSTRUCTIONS,
+                developer_instructions: Some(PLAN_DEVELOPER_INSTRUCTIONS),
+                disable_tools: forced_text_round,
             },
         )?;
-        let plan_response = complete_model(host, &plan_request, "plan")?;
-        emit_event(
-            host,
-            &Event::ModelResponseReceived {
-                finish_reason: plan_response.finish_reason.clone(),
-            },
-        )?;
-        validate_model_response("plan", &plan_request, &plan_response)?;
         let plan_messages = plan_response
             .messages
             .into_iter()
@@ -117,23 +90,8 @@ fn run_loop(
         if forced_text_round || !should_run_tools {
             // The private plan must survive canonical durable ACK replacement,
             // without becoming public conversation history.
-            for message in turn
-                .model_messages
-                .iter_mut()
-                .rev()
-                .take(plan_messages.len())
-            {
-                // The provider response is already a durable canonical record.
-                // A differently scoped private projection needs its own identity.
-                let source = message.id;
-                message.id = proteus_contracts::domain::new_message_id();
-                message.metadata["workflow_private_source_message"] = json!(source);
-                for part in &mut message.parts {
-                    part.part_id = proteus_contracts::domain::new_part_id();
-                    part.provenance = proteus_contracts::model_standard::PartProvenance::Runtime;
-                    part.scope = proteus_contracts::model_standard::PartScope::Request;
-                }
-            }
+            let start = turn.model_messages.len() - plan_messages.len();
+            make_private_projection(&mut turn.model_messages[start..]);
             break;
         }
         plan_tool_rounds_used += 1;
@@ -149,40 +107,18 @@ fn run_loop(
     let mut draft_finish_reason = None;
     let mut tool_round_limit_reached = true;
     for _round in 0..MAX_TOOL_ROUNDS {
-        let mut prepared = request_from_state(
+        let response = sample_step(
             input,
             host,
-            &turn.model_messages,
-            PLAN_SYSTEM_INSTRUCTIONS,
-            Some(EXECUTE_DEVELOPER_INSTRUCTIONS),
-            "execute",
-            last_usage.as_ref(),
-        )?;
-        if turn.apply_compaction_report(
-            prepared.compaction.as_ref(),
-            prepared.preparation_target.as_ref(),
-            &prepared.request.messages,
-            PersistentRepair::Rebuild,
-        )? {
-            last_usage = None;
-            turn.checkpoint(host, &[])?;
-            prepared.request.messages = turn.model_messages.clone();
-        }
-        let request = prepared.request;
-        emit_event(
-            host,
-            &Event::ModelRequestPrepared {
-                model: request.model.clone(),
+            turn,
+            &mut last_usage,
+            SamplingStep {
+                phase: "execute",
+                system_instructions: PLAN_SYSTEM_INSTRUCTIONS,
+                developer_instructions: Some(EXECUTE_DEVELOPER_INSTRUCTIONS),
+                disable_tools: false,
             },
         )?;
-        let response = complete_model(host, &request, "execute")?;
-        emit_event(
-            host,
-            &Event::ModelResponseReceived {
-                finish_reason: response.finish_reason.clone(),
-            },
-        )?;
-        validate_model_response("execute", &request, &response)?;
 
         let finish_reason = response.finish_reason.clone();
         turn.model_messages
@@ -200,6 +136,9 @@ fn run_loop(
                 .extend(response.messages.iter().cloned());
         }
         if !should_run_tools {
+            // The draft is also request-only, not a durable steering anchor.
+            let start = turn.model_messages.len() - response.messages.len();
+            make_private_projection(&mut turn.model_messages[start..]);
             draft_finish_reason = Some(finish_reason);
             tool_round_limit_reached = false;
             break;
@@ -213,40 +152,18 @@ fn run_loop(
         }
     }
 
-    let mut prepared = request_from_state(
+    let final_response = sample_step(
         input,
         host,
-        &turn.model_messages,
-        PLAN_SYSTEM_INSTRUCTIONS,
-        Some(REVIEW_DEVELOPER_INSTRUCTIONS),
-        "review",
-        last_usage.as_ref(),
-    )?;
-    if turn.apply_compaction_report(
-        prepared.compaction.as_ref(),
-        prepared.preparation_target.as_ref(),
-        &prepared.request.messages,
-        PersistentRepair::Rebuild,
-    )? {
-        turn.checkpoint(host, &[])?;
-        prepared.request.messages = turn.model_messages.clone();
-    }
-    let mut review_request = prepared.request.with_tool_choice(ToolChoice::None);
-    review_request.tools.clear();
-    emit_event(
-        host,
-        &Event::ModelRequestPrepared {
-            model: review_request.model.clone(),
+        turn,
+        &mut last_usage,
+        SamplingStep {
+            phase: "review",
+            system_instructions: PLAN_SYSTEM_INSTRUCTIONS,
+            developer_instructions: Some(REVIEW_DEVELOPER_INSTRUCTIONS),
+            disable_tools: true,
         },
     )?;
-    let final_response = complete_model(host, &review_request, "review")?;
-    emit_event(
-        host,
-        &Event::ModelResponseReceived {
-            finish_reason: final_response.finish_reason.clone(),
-        },
-    )?;
-    validate_model_response("review", &review_request, &final_response)?;
 
     let final_message = response_output_message("review", &final_response)?.clone();
     turn.model_messages
@@ -274,4 +191,36 @@ fn run_loop(
         }),
     );
     turn.finish(host, text, metadata)
+}
+
+/// A private phase projection must not reuse the provider's durable identities.
+/// Empty-part messages retain the existing ACK/compaction classification limit.
+fn make_private_projection(messages: &mut [proteus_contracts::model_standard::CanonicalMessage]) {
+    use proteus_contracts::model_standard::{PartProvenance, PartScope};
+    use serde_json::Value;
+
+    for message in messages {
+        let source = message.id;
+        message.id = proteus_contracts::domain::new_message_id();
+        match &mut message.metadata {
+            Value::Object(metadata) => {
+                metadata.insert("workflow_private_source_message".to_owned(), json!(source));
+            }
+            Value::Null => {
+                message.metadata = json!({ "workflow_private_source_message": source });
+            }
+            other => {
+                let previous = std::mem::replace(other, Value::Null);
+                message.metadata = json!({
+                    "workflow_private_source_message": source,
+                    "previous_metadata": previous,
+                });
+            }
+        }
+        for part in &mut message.parts {
+            part.part_id = proteus_contracts::domain::new_part_id();
+            part.provenance = PartProvenance::Runtime;
+            part.scope = PartScope::Request;
+        }
+    }
 }

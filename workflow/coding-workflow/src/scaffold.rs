@@ -142,6 +142,7 @@ impl TurnScaffold {
         input: &WorkflowModuleInput,
     ) -> Result<Self, ProcessModuleError> {
         let mut turn = Self::begin_without_context(host, input)?;
+        crate::history::normalize_missing_tool_outputs(&mut turn.model_messages);
         turn.inject_context(host, input, 0)?;
         Ok(turn)
     }

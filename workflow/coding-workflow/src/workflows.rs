@@ -1,6 +1,8 @@
 use proteus_contracts::{
     contracts::WorkflowFailure,
-    process_module::{WorkflowModule, WorkflowModuleHostMut, WorkflowModuleInput},
+    process_module::{
+        WorkflowModule, WorkflowModuleHostMut, WorkflowModuleInput, WorkflowModuleOutput,
+    },
 };
 
 use super::{
@@ -30,18 +32,9 @@ impl WorkflowModule for CodingSingleLoopWorkflow {
         input_json: String,
         host: &mut WorkflowModuleHostMut<'_>,
     ) -> Result<String, WorkflowFailure> {
-        let input: WorkflowModuleInput = match serde_json::from_str(input_json.as_str()) {
-            Ok(input) => input,
-            Err(error) => return workflow_err(error),
-        };
-
-        match run_single_loop(input, host, self.max_tool_rounds) {
-            Ok(output) => match serde_json::to_string(&output) {
-                Ok(json) => Ok(String::from(json)),
-                Err(error) => workflow_err(error),
-            },
-            Err(error) => Err(error),
-        }
+        let input = decode_input(&input_json)?;
+        let output = run_single_loop(input, host, self.max_tool_rounds)?;
+        encode_output(&output)
     }
 }
 
@@ -51,18 +44,9 @@ impl WorkflowModule for CodingCodexLoopWorkflow {
         input_json: String,
         host: &mut WorkflowModuleHostMut<'_>,
     ) -> Result<String, WorkflowFailure> {
-        let input: WorkflowModuleInput = match serde_json::from_str(input_json.as_str()) {
-            Ok(input) => input,
-            Err(error) => return workflow_err(error),
-        };
-
-        match run_codex_loop(input, host, CODEX_LOOP_MODULE_ID) {
-            Ok(output) => match serde_json::to_string(&output) {
-                Ok(json) => Ok(String::from(json)),
-                Err(error) => workflow_err(error),
-            },
-            Err(error) => Err(error),
-        }
+        let input = decode_input(&input_json)?;
+        let output = run_codex_loop(input, host, CODEX_LOOP_MODULE_ID)?;
+        encode_output(&output)
     }
 }
 
@@ -72,18 +56,9 @@ impl WorkflowModule for CodingPlanExecuteReviewWorkflow {
         input_json: String,
         host: &mut WorkflowModuleHostMut<'_>,
     ) -> Result<String, WorkflowFailure> {
-        let input: WorkflowModuleInput = match serde_json::from_str(input_json.as_str()) {
-            Ok(input) => input,
-            Err(error) => return workflow_err(error),
-        };
-
-        match run_plan_execute_review(input, host) {
-            Ok(output) => match serde_json::to_string(&output) {
-                Ok(json) => Ok(String::from(json)),
-                Err(error) => workflow_err(error),
-            },
-            Err(error) => Err(error),
-        }
+        let input = decode_input(&input_json)?;
+        let output = run_plan_execute_review(input, host)?;
+        encode_output(&output)
     }
 }
 
@@ -93,21 +68,16 @@ impl WorkflowModule for CodingProjectCheckWorkflow {
         input_json: String,
         host: &mut WorkflowModuleHostMut<'_>,
     ) -> Result<String, WorkflowFailure> {
-        let input: WorkflowModuleInput = match serde_json::from_str(input_json.as_str()) {
-            Ok(input) => input,
-            Err(error) => return workflow_err(error),
-        };
-
-        match run_project_check(input, host) {
-            Ok(output) => match serde_json::to_string(&output) {
-                Ok(json) => Ok(json),
-                Err(error) => workflow_err(error),
-            },
-            Err(error) => Err(error.into()),
-        }
+        let input = decode_input(&input_json)?;
+        let output = run_project_check(input, host)?;
+        encode_output(&output)
     }
 }
 
-fn workflow_err<T>(error: impl ToString) -> Result<T, WorkflowFailure> {
-    Err(WorkflowFailure::new(error.to_string()))
+fn decode_input(input_json: &str) -> Result<WorkflowModuleInput, WorkflowFailure> {
+    serde_json::from_str(input_json).map_err(|error| WorkflowFailure::new(error.to_string()))
+}
+
+fn encode_output(output: &WorkflowModuleOutput) -> Result<String, WorkflowFailure> {
+    serde_json::to_string(output).map_err(|error| WorkflowFailure::new(error.to_string()))
 }

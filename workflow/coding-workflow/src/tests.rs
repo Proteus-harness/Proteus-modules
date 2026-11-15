@@ -7,12 +7,15 @@ mod codex_stream_recovery;
 mod codex_tool_dispatch;
 mod dynamic_tool_surface;
 mod failure_history;
+mod instruction_propagation;
 mod intents;
 mod output_helpers;
 mod plan_execute_review;
 mod preparation;
+mod private_projection;
 mod project_check_workflow;
 mod request_accounting;
+mod resumed_history;
 mod single_loop;
 
 use serde_json::Value;
