@@ -224,8 +224,10 @@ export function modelExport(binding) {
                     signal,
                     reasoning: r.reasoning.effort,
                     toolChoice: r.tool_choice === "None" ? "none" : undefined,
-                    temperature: r.sampling.temperature ?? undefined,
-                    samplingParams: r.sampling.top_p == null ? undefined : { top_p: r.sampling.top_p },
+                    // Core's canonical request defaults to temperature=0. Go's GPT
+                    // models reject that field; use Pi's native model defaults.
+                    temperature: goQuota ? undefined : (r.sampling.temperature ?? undefined),
+                    samplingParams: goQuota || r.sampling.top_p == null ? undefined : { top_p: r.sampling.top_p },
                     maxTokens:
                         r.limits.max_output_tokens != null && r.limits.max_output_tokens < model.maxTokens
                             ? r.limits.max_output_tokens

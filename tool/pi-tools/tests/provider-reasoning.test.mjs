@@ -21,12 +21,12 @@ const request = {
     cache: { routing_key: "fixture", cache_context: true },
 };
 
-async function invoke(produce, stream = true) {
+async function invoke(produce, stream = true, selectedModel = model, selectedRequest = request) {
     const create = ModelRuntime.create;
-    ModelRuntime.create = async () => ({ getModel: () => model, streamSimple: produce });
+    ModelRuntime.create = async () => ({ getModel: () => selectedModel, streamSimple: produce });
     try {
         const frames = [];
-        const result = await modelExport(binding).invoke("stream", { request, stream }, {
+        const result = await modelExport(binding).invoke("stream", { request: selectedRequest, stream }, {
             signal: new AbortController().signal,
             hostCall: async (method, frame) => {
                 assert.equal(method, "host.model.emit");
@@ -150,4 +150,27 @@ test("multiple readable thinking blocks stream the same text as the canonical re
     assert.deepEqual(frames.map(frame => frame.sequence), [0, 1, 2]);
     assert.equal(result.event_count, 3);
     assert.ok(frames.every(frame => frame.event.ReasoningDelta.message_id === canonical.id));
+});
+
+// Reproduce the canonical Core default through Pi's actual Responses encoder.
+test("Go Responses omits Core default sampling rejected by GPT", async () => {
+    const { streamSimple: responses } = await import("../node_modules/@earendil-works/pi-ai/dist/api/openai-responses.js");
+    const gpt = resolveModel({ model: "gpt-5.6-luna" }, "opencode-go");
+    let payload;
+    const result = await invoke((model, context, options) => responses(model, context, {
+        ...options, apiKey: "synthetic",
+        fetch: async (_url, init) => {
+            payload = JSON.parse(init.body);
+            if ("temperature" in payload || "top_p" in payload)
+                return new Response(JSON.stringify({ error: { message: "Unsupported sampling parameter" } }), { status: 400 });
+            const event = { type: "response.completed", response: { id: "fixture", status: "completed", output: [],
+                usage: { input_tokens: 1, output_tokens: 0, total_tokens: 1 } } };
+            return new Response("data: " + JSON.stringify(event) + "\n\n", { headers: { "content-type": "text/event-stream" } });
+        },
+    }), false, gpt, { ...request, model: { provider: "pi_codex", model: gpt.id },
+        sampling: { temperature: 0, top_p: 1 } });
+    assert.equal(result.result.terminal.kind, "response");
+    assert.equal(payload.model, "gpt-5.6-luna");
+    assert.ok(!("temperature" in payload));
+    assert.ok(!("top_p" in payload));
 });
