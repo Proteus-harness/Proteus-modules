@@ -26,6 +26,7 @@ mod find;
 mod list;
 mod read;
 mod read_many;
+mod read_text;
 mod search;
 mod util;
 mod write;

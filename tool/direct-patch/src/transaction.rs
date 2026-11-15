@@ -63,7 +63,7 @@ impl PatchPlan {
                 self.set_current(
                     target,
                     Some(FileVersion {
-                        content: render_text(&lines, true),
+                        content: render_text(&lines, true, "\n"),
                         permissions: None,
                     }),
                 );
@@ -244,7 +244,18 @@ fn clean_relative_path(path: &Path) -> Result<PathBuf, String> {
 }
 
 fn apply_hunks(original: &str, hunks: &[Hunk], no_newline_at_eof: bool) -> Result<String, String> {
-    let (mut lines, mut trailing_newline) = split_lines(original);
+    // Use CRLF only when every source newline is CRLF. Mixed files keep the
+    // existing LF representation rather than silently normalizing their bytes.
+    let line_ending = if original.contains("\r\n")
+        && original
+            .split_inclusive('\n')
+            .all(|line| !line.ends_with('\n') || line.ends_with("\r\n"))
+    {
+        "\r\n"
+    } else {
+        "\n"
+    };
+    let (mut lines, mut trailing_newline) = split_lines(original, line_ending);
     let mut cursor = 0;
     for hunk in hunks {
         let mut old_lines = Vec::new();
@@ -272,15 +283,17 @@ fn apply_hunks(original: &str, hunks: &[Hunk], no_newline_at_eof: bool) -> Resul
     if no_newline_at_eof {
         trailing_newline = false;
     }
-    Ok(render_text(&lines, trailing_newline))
+    Ok(render_text(&lines, trailing_newline, line_ending))
 }
 
-fn split_lines(text: &str) -> (Vec<String>, bool) {
-    let trailing_newline = text.ends_with('\n');
+fn split_lines(text: &str, line_ending: &str) -> (Vec<String>, bool) {
+    let trailing_newline = text.ends_with(line_ending);
     let lines = if text.is_empty() {
         Vec::new()
     } else {
-        text.split_terminator('\n').map(str::to_owned).collect()
+        text.split_terminator(line_ending)
+            .map(str::to_owned)
+            .collect()
     };
     (lines, trailing_newline)
 }
@@ -296,13 +309,16 @@ fn find_subsequence(lines: &[String], needle: &[String], start: usize) -> Option
     (start..=last_start).find(|&index| lines[index..index + needle.len()] == needle[..])
 }
 
-fn render_text(lines: &[String], trailing_newline: bool) -> String {
+fn render_text(lines: &[String], trailing_newline: bool, line_ending: &str) -> String {
     if lines.is_empty() {
         return String::new();
     }
-    let mut text = lines.join("\n");
+    let mut text = lines.join(line_ending);
     if trailing_newline {
-        text.push('\n');
+        text.push_str(line_ending);
     }
     text
 }
+
+#[cfg(test)]
+mod eol_tests;

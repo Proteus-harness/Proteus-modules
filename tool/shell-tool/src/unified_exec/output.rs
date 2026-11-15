@@ -57,12 +57,41 @@ pub(super) fn wait_and_collect(
             .unwrap_or_else(|poisoned| poisoned.into_inner());
         output = guard;
     }
+    let final_output = output.exited || output.readers.is_closed();
     Ok(Collected {
-        bytes: std::mem::take(&mut output.buffer),
+        bytes: take_ready_bytes(&mut output.buffer, final_output),
         dropped_bytes: std::mem::take(&mut output.dropped_bytes),
         exited: output.exited,
         exit_code: output.exit_code,
     })
+}
+
+/// Keep only an incomplete trailing UTF-8 scalar for the next live poll.
+/// Invalid bytes and final output still use the existing lossy rendering.
+fn take_ready_bytes(buffer: &mut Vec<u8>, final_output: bool) -> Vec<u8> {
+    let mut bytes = std::mem::take(buffer);
+    if final_output {
+        return bytes;
+    }
+    // An incomplete scalar has at most three bytes. Starting inside an earlier
+    // complete scalar is harmless: its continuation bytes are skipped below.
+    let mut offset = bytes.len().saturating_sub(3);
+    while offset < bytes.len() {
+        match std::str::from_utf8(&bytes[offset..]) {
+            Ok(_) => break,
+            Err(error) => {
+                offset += error.valid_up_to();
+                match error.error_len() {
+                    Some(len) => offset += len,
+                    None => {
+                        *buffer = bytes.split_off(offset);
+                        break;
+                    }
+                }
+            }
+        }
+    }
+    bytes
 }
 
 pub(super) fn render_result(
@@ -188,3 +217,6 @@ fn ceil_char_boundary(text: &str, mut index: usize) -> usize {
     }
     index
 }
+
+#[cfg(test)]
+mod tests;

@@ -5,6 +5,7 @@ use std::{io::Read, path::Path};
 use proteus_contracts::process_module::{ProcessModuleError, ToolModule, ToolModuleHostMut};
 use serde_json::{Value, json};
 
+use crate::read_text::decode_read_bytes;
 use crate::util::{
     err_result, module_error, ok_result, optional_positive_usize, parse_call,
     parse_invocation_context, workspace_path,
@@ -165,19 +166,11 @@ impl ToolModule for ReadManyFilesTool {
             };
             let rendered_truncated_by_budget = rendered.len() > content_budget;
             if rendered_truncated_by_budget {
-                rendered = match utf8_prefix(rendered.as_bytes(), content_budget) {
-                    Ok(prefix) => prefix,
-                    Err(e) => {
-                        return err_result(
-                            &call.id,
-                            &call.name,
-                            format!(
-                                "failed to truncate rendered output for {} as UTF-8: {e}",
-                                absolute.display()
-                            ),
-                        );
-                    }
-                };
+                let mut end = content_budget;
+                while !rendered.is_char_boundary(end) {
+                    end -= 1;
+                }
+                rendered.truncate(end);
             }
             let returned_bytes = rendered.len();
             let file_truncated = file_read.truncated || rendered_truncated_by_budget;
@@ -256,30 +249,19 @@ fn read_text_prefix(path: &Path, limit: usize, original_bytes: usize) -> Result<
         .take(limit.saturating_add(1) as u64)
         .read_to_end(&mut bytes)
         .map_err(|e| format!("failed to read {}: {e}", path.display()))?;
-    let truncated = bytes.len() > limit || original_bytes > bytes.len();
-    if truncated {
+    let at_budget_boundary = bytes.len() > limit;
+    let truncated = at_budget_boundary || original_bytes > bytes.len();
+    if at_budget_boundary {
         bytes.truncate(limit);
     }
-    let text = utf8_prefix(&bytes, bytes.len())
-        .map_err(|e| format!("failed to decode {} as UTF-8: {e}", path.display()))?;
+    let text = decode_read_bytes(&bytes, at_budget_boundary)
+        .map_err(|e| format!("failed to decode {} as UTF-8: {e}", path.display()))?
+        .to_owned();
     Ok(FileRead {
         text,
         original_bytes,
         truncated,
     })
-}
-
-fn utf8_prefix(bytes: &[u8], max_bytes: usize) -> Result<String, std::str::Utf8Error> {
-    let mut end = bytes.len().min(max_bytes);
-    loop {
-        match std::str::from_utf8(&bytes[..end]) {
-            Ok(text) => return Ok(text.to_owned()),
-            Err(error) if error.error_len().is_none() && end > 0 => {
-                end = error.valid_up_to();
-            }
-            Err(error) => return Err(error),
-        }
-    }
 }
 
 fn add_line_numbers(text: &str) -> String {
@@ -289,3 +271,6 @@ fn add_line_numbers(text: &str) -> String {
         .collect::<Vec<_>>()
         .join("\n")
 }
+
+#[cfg(test)]
+mod utf8_tests;

@@ -9,6 +9,7 @@ use std::{
 use proteus_contracts::process_module::{ProcessModuleError, ToolModule, ToolModuleHostMut};
 use serde_json::json;
 
+use crate::read_text::decode_read_bytes;
 use crate::util::{
     err_result, module_error, ok_result, optional_positive_usize, parse_call,
     parse_invocation_context, required_string, workspace_path,
@@ -24,7 +25,7 @@ impl ToolModule for ReadFileTool {
     fn spec_json(&self) -> String {
         let spec = json!({
             "name": "read_file",
-            "description": "Read a UTF-8 file inside the current workspace, optionally by line range. Output and each line are limited to 2 MiB; ranged reads scan at most 16 MiB. Truncated ranges report total_lines as unknown.",
+            "description": "Read a UTF-8 file inside the current workspace, optionally by line range. Unnumbered ranges preserve separators between returned lines but omit the last selected line ending; numbered output uses LF separators. Output and each line are limited to 2 MiB; ranged reads scan at most 16 MiB. Truncated ranges report total_lines as unknown.",
             "input_schema": {
                 "type": "object",
                 "properties": {
@@ -208,6 +209,7 @@ fn render_range(
     let mut scanned_bytes = 0u64;
     let mut returned = 0usize;
     let mut output = String::new();
+    let mut separator = "";
     let mut line = Vec::new();
     let mut eof = false;
     let mut reason = None;
@@ -237,12 +239,17 @@ fn render_range(
         }
         scanned_lines += 1;
         let complete = line.ends_with(b"\n") || read < allowance as usize;
-        if line.ends_with(b"\n") {
+        let line_ending = if line.ends_with(b"\n") {
             line.pop();
             if line.ends_with(b"\r") {
                 line.pop();
+                "\r\n"
+            } else {
+                "\n"
             }
-        }
+        } else {
+            ""
+        };
         if scanned_lines < start_line {
             if !complete {
                 reason = Some("line_budget");
@@ -255,28 +262,27 @@ fn render_range(
         } else {
             String::new()
         };
-        let separator = usize::from(returned != 0);
-        let available =
-            (MAX_READ_FILE_BYTES as usize).saturating_sub(output.len() + prefix.len() + separator);
+        let available = (MAX_READ_FILE_BYTES as usize)
+            .saturating_sub(output.len() + prefix.len() + separator.len());
         if available == 0 {
             reason = Some("output_budget");
             break;
         }
-        let mut end = line.len().min(available);
-        let text = match std::str::from_utf8(&line[..end]) {
-            Ok(text) => text,
-            Err(error) if error.error_len().is_none() && (end < line.len() || !complete) => {
-                end = error.valid_up_to();
-                std::str::from_utf8(&line[..end]).expect("validated UTF-8 prefix")
-            }
-            Err(error) => return Err(format!("invalid UTF-8 in {}: {error}", path.display())),
-        };
-        if separator != 0 {
-            output.push('\n');
-        }
+        let end = line.len().min(available);
+        let text = decode_read_bytes(&line[..end], end < line.len() || !complete)
+            .map_err(|error| format!("invalid UTF-8 in {}: {error}", path.display()))?;
+        let end = text.len();
+        output.push_str(separator);
         output.push_str(&prefix);
         output.push_str(text);
         returned += 1;
+        // Keep the previous selected line's delimiter, not the current one's.
+        // Delaying it preserves the existing omission of the final delimiter.
+        separator = if options.line_numbers {
+            "\n"
+        } else {
+            line_ending
+        };
         if end < line.len() || !complete {
             reason = Some("output_budget");
             break;
@@ -312,3 +318,7 @@ fn render_range(
 #[cfg(test)]
 #[path = "read_budget_tests.rs"]
 mod budget_tests;
+
+#[cfg(test)]
+#[path = "read_eol_tests.rs"]
+mod eol_tests;
