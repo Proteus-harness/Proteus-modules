@@ -24,28 +24,7 @@ pub(super) fn translate_non_message_event(
             }
             Vec::new()
         }
-        "response.function_call_arguments.delta" => {
-            let call_id = parsed
-                .get("call_id")
-                .or_else(|| parsed.get("item_id"))
-                .and_then(Value::as_str)
-                .unwrap_or("")
-                .to_owned();
-            let args_delta = parsed
-                .get("delta")
-                .and_then(Value::as_str)
-                .unwrap_or("")
-                .to_owned();
-            if call_id.is_empty() || args_delta.is_empty() {
-                return Vec::new();
-            }
-            vec![ModelStreamEvent::ToolCallDelta {
-                call_id,
-                name: None,
-                args_delta,
-            }]
-        }
-        "response.custom_tool_call_input.delta" => {
+        "response.function_call_arguments.delta" | "response.custom_tool_call_input.delta" => {
             let call_id = parsed
                 .get("call_id")
                 .or_else(|| parsed.get("item_id"))

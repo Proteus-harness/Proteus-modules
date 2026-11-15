@@ -60,6 +60,34 @@ binding для своего `tools.call` API.
 programmatic `exec` через отдельный code-mode-host; local summary compactor
 и protocol/tool/session orchestration этой сборки проверяются отдельно.
 
+## Окончания Строк В Direct Patch
+
+`direct_patch` сохраняет CRLF при update, если все имеющиеся newline исходного
+файла используют CRLF. LF/CRLF самого patch не выбирает EOL результата.
+Отсутствие final newline сохраняется; `*** End of File` убирает final newline.
+Файл без newline и `Add File` используют прежний LF формат. Bare CR остаётся
+данными. Mixed LF/CRLF source сохраняет прежний exact LF-based путь без общей
+нормализации: CRLF строки mixed-файла по-прежнему могут не совпасть с hunk.
+Это не меняет newline representation в `file-tools` ranged reads/edits.
+
+## SQLite Memory: Запрос Recall
+
+`sqlite_memory` использует одну нормализацию запроса для `recall_memory` и
+`context_provider/sqlite_memory`. Части запроса, разделённые пробелами,
+соединяются через `AND`; каждая часть передаётся как буквальная FTS5-фраза.
+Пунктуацию и диакритику внутри фразы обрабатывает tokenizer SQLite, как при
+индексировании: `src/config.rs` не превращается в `srcconfigrs`.
+Порядок и соседство слов внутри части сохраняются; prefix применяется только
+к последнему токену каждой фразы, а не ко всем её словам. Это не сравнение
+строк или точное совпадение пунктуации.
+
+Вложенные кавычки передаются буквально. NUL внутри части заменяется пробелом,
+так как parser MATCH использует NUL как конец выражения. Части без букв/цифр,
+`_` или `-` по-прежнему пропускаются. Если частей не осталось, возвращаются
+последние записи; части из одних `_`/`-` сохраняют прежнюю FTS-семантику пустой
+фразы. `limit=0` по-прежнему возвращает пустой список. Схема базы, формат
+записей, ранжирование и лимиты не меняются.
+
 ## CodeMode
 
 Самостоятельный пакет `code-mode` экспортирует `tool/code_mode` и инструмент
@@ -110,6 +138,24 @@ V1 сохраняет прямые описания доступных tools и 
 скриптовый инструмент. Уменьшение числа запросов и объёма контекста зависит от
 задачи; сравнение расхода токенов на живых моделях пока не проводилось.
 
+## История И Подготовка Workflow
+
+`coding.single_loop`, `coding.plan_execute_review` и `coding.codex_loop`
+закрывают старые вызовы без результата request-only ответом `aborted` до
+подготовки контекста. Настоящий результат сохраняется. Это нормализация
+запроса модели, а не повтор исполнения или запись вымышленного результата
+в canonical history. Compactor получает такие пары во входе для summary,
+но не возвращает отделённый request-only результат после удаления вызова.
+
+Обычный и plan/execute/review workflows передают runtime instruction blocks
+между базовыми и фазовыми инструкциями, сохраняя их порядок и приоритеты.
+Общая sampling-подготовка подтверждает замену истории через checkpoint ACK
+перед запросом модели; forced-final и review по-прежнему отключают tools.
+Непустые внутренние plan/draft projections имеют собственные message/part
+identities и остаются request-only; tool-bearing ответы и окончательный ответ
+сохраняют canonical identities и прежние правила сохранения. Сообщения без
+parts сохраняют прежнее ограничение классификации при ACK/compaction.
+
 ## Настройки Model-pack
 
 Форма подключения описывает параметры адаптера, а не автоматически
@@ -154,6 +200,21 @@ Anthropic Messages сохраняет `redacted_thinking` как непрозр�
 провайдера не может незаметно удалить их из истории. Это сохраняет
 [контракт Anthropic для redacted thinking](https://platform.claude.com/docs/en/build-with-claude/thinking#redacted-thinking-blocks).
 
+Anthropic SSE сохраняет стартовый текст блока и стартовый `tool_use.input`,
+если JSON-дельты не заменили его. Закрытие HTTP 200 SSE без terminal event
+возвращает `StreamDisconnected`; документированный overload возвращает
+`Retryable`, а HTTP 400 `prompt is too long` — `ContextWindowExceeded`.
+Тот же context failure возвращается для HTTP 200 ответа с
+`stop_reason=model_context_window_exceeded`; `max_tokens` сохраняет
+`FinishReason::Length`. Частичный текст и tool arguments не становятся
+завершённым ответом при failure. Расход failed attempts этим не восстанавливается.
+
+OpenAI Responses и Anthropic Messages передают inline images из tool results
+после прежнего текстового/error представления результата. В OpenAI это требует
+разрешённого `image_input`. Это не добавляет поддержку произвольных binary/PDF
+вложений или новых лимитов изображений и не гарантирует поддержку формата
+каждым совместимым сервером.
+
 ## Границы File-tools И ReadOnly Git
 
 `read_file` ограничивает возвращаемый текст и одну строку 2 MiB независимо от
@@ -162,6 +223,14 @@ Anthropic Messages сохраняет `redacted_thinking` как непрозр�
 подсчёта. Ответ содержит `truncated`, `truncation_reason` и `scanned_bytes`;
 `total_lines` равен `null`, если EOF не был достигнут. Полное чтение файла больше
 2 MiB требует явно выбрать диапазон, который также подчиняется этим бюджетам.
+
+Plain ranges сохраняют LF/CRLF между выбранными строками, исключая последний
+разделитель; numbered output использует LF для отображения. Неполный UTF-8
+символ допускается отбросить только при установленном byte-budget cut.
+Невалидный UTF-8 на наблюдённом EOF возвращает ошибку во всех режимах чтения;
+старый размер файла из metadata не доказывает остановку по бюджету.
+Ошибка перечисления после открытия каталога в `list_dir` тоже возвращает
+ошибку, а не успешный неполный список.
 
 `write_file` и запись результата `edit_file` используют общий
 `proteus_contracts::tool_support::workspace_file_for_write`. Он возвращает
@@ -230,6 +299,14 @@ cancel или ошибки канала отмены даётся коротки
 будит их через общий wake fd, без периодического опроса. Потомок, ушедший через `setsid` и
 сохранивший эти fd, не может бесконечно продлить ожидание EOF; это не обещание
 остановить процесс, который покинул принадлежащую вызову process group.
+
+Текстовый preview `exec_command` / `write_stdin` сохраняет до трёх trailing bytes
+незавершённого UTF-8 символа между незавершающими polls. Они выдаются вместе с
+продолжением символа, а `output_bytes` считает только bytes текущей выдачи.
+Заведомо невалидный/binary вывод по-прежнему отображается с replacement characters.
+При terminal выдаче или закрытии всех readers оставшийся incomplete suffix
+выдаётся через тот же lossy decoder; terminal status не доказывает полный EOF.
+Head/tail truncation и исходный raw capture не меняются.
 
 ### Явный Source Capture Для Exec
 

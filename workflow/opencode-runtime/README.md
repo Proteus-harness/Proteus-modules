@@ -72,3 +72,27 @@ overflow и полный session recovery lifecycle остаются отдел�
 OpenCode DB не воспроизводится. Поэтому этот профиль нельзя объявлять полной
 эквивалентностью всей vanilla упряжке; это перенесённые upstream slots с явно
 ограниченной поверхностью. Строгая OS containment задаётся launch configuration.
+
+### Граница tool-result media
+
+Общая projection `nativeContext` для workflow estimate и compaction сохраняет
+`ToolResult.output`, text blocks и inline `image/*` как native `Tool.Content`
+(text либо file с data URI). Обратная projection запроса compaction в Core
+сохраняет их как типизированный `ToolResult`, включая failed status и error
+message. В output переносится только первый блок, если он text; image-first
+content не переупорядочивается. Multi-text native content теперь возвращается
+как output + text blocks, а не JSON-строка массива. Error без native envelope
+сохраняет прежний scalar/JSON fallback.
+
+Это модельно-видимое преобразование, не exact DTO round-trip: служебные native
+names/metadata не восстанавливаются, а upstream может убрать пустой text или
+намеренно flatten/prune историю и media при уменьшении compaction request.
+Эти upstream policy не заменяются. Поддержка MIME image/* сохраняет MIME/data,
+но не обещает принятие каждого формата выбранным provider. Binary/PDF и Json
+в tool content остаются явно неподдержанными; non-inline user attachments не
+изменены. Payload не читается из внешнего URI и не превращается молча в текст.
+
+Новые targeted controls находятся в tests/{compaction,workflow,files}.test.mjs:
+оба направления text/image/error, image-first ordering, PNG continuation без
+compactor и с auto:false, и настоящий native PNG reader → projection. Они
+требуют точных штатных dependencies и не заменяют full package/Core gate.

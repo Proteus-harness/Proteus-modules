@@ -48,6 +48,47 @@ function textParts(message) {
     }).join("\n");
 }
 
+function nativeResultContent(result) {
+    return [{ type: "text", text: result.output }, ...(result.content ?? []).map(item => {
+        if (item.type === "text") return { type: "text", text: item.text };
+        if (item.type === "image" && typeof item.mime_type === "string" && /^image\//i.test(item.mime_type)
+            && typeof item.data === "string") {
+            return { type: "file", mime: item.mime_type, uri: `data:${item.mime_type};base64,${item.data}` };
+        }
+        throw new Error("Unsupported canonical OpenCode tool-result content; only text and inline images are bridged");
+    })];
+}
+
+function canonicalToolResult(part) {
+    const value = part.result.value;
+    const failed = part.result.type === "error";
+    const envelope = failed && value !== null && typeof value === "object"
+        && Object.hasOwn(value, "error") && Array.isArray(value.content);
+    const blocks = part.result.type === "content" ? value : envelope ? value.content : null;
+    let output;
+    let error = null;
+    let content = [];
+    if (blocks !== null) {
+        // Only a leading text block can become output without reordering media.
+        const leadingText = blocks[0]?.type === "text";
+        output = leadingText ? blocks[0].text : "";
+        content = (leadingText ? blocks.slice(1) : blocks).map(item => {
+            if (item.type === "text") return { type: "text", text: item.text };
+            const match = item.type === "file" && /^data:([^;]+);base64,(.*)$/s.exec(item.uri);
+            if (!match || match[1] !== item.mime || !/^image\//i.test(item.mime)) {
+                throw new Error("Unsupported native OpenCode tool-result attachment; expected an inline image");
+            }
+            return { type: "image", mime_type: item.mime, data: match[2] };
+        });
+        if (failed) error = typeof value.error?.message === "string" ? value.error.message
+            : typeof value.error === "string" ? value.error : JSON.stringify(value.error) ?? output;
+    } else {
+        output = typeof value === "string" ? value : JSON.stringify(value);
+        error = failed ? JSON.stringify(value) : null;
+    }
+    return { ToolResult: { result: { call_id: part.id, ok: !failed, output, content, error, metadata: null } } };
+}
+
 /** Canonical -> native durable message shapes. No private database or HTTP. */
 export async function nativeContext(input, messages, config = {}) {
     const request = input.request;
@@ -88,10 +129,7 @@ export async function nativeContext(input, messages, config = {}) {
                 if (payload.Opaque) return [];
                 if (!payload.ToolCall) throw new Error("Unsupported assistant part in OpenCode compaction");
                 const call = payload.ToolCall.call, result = results.get(call.id);
-                const content = result ? [{ type: "text", text: result.output }, ...(result.content ?? []).map(item => {
-                    if (item.type !== "text") throw new Error("OpenCode tool-result media needs an explicit canonical media bridge");
-                    return { type: "text", text: item.text };
-                })] : [];
+                const content = result ? nativeResultContent(result) : [];
                 return [{ type: "tool", id: call.id, name: call.name,
                     state: result ? result.ok ? { status: "completed", input: call.args, content } :
                         { status: "error", input: call.args, content, error: { message: result.error ?? result.output } } :
@@ -122,9 +160,7 @@ function canonicalPrompt(message) {
         if (part.type === "text" || part.type === "reasoning") return { Text: { text: part.text } };
         if (part.type === "tool-call") return { ToolCall: { call: { id: part.id, name: part.name,
             args: part.input, surface: "function", raw_arguments: null } } };
-        if (part.type === "tool-result") return { ToolResult: { result: { call_id: part.id,
-            ok: part.result.type !== "error", output: typeof part.result.value === "string" ? part.result.value : JSON.stringify(part.result.value),
-            content: [], error: part.result.type === "error" ? JSON.stringify(part.result.value) : null, metadata: null } } };
+        if (part.type === "tool-result") return canonicalToolResult(part);
         if (part.type === "media" && part.media.data !== undefined) return { Image: { image: {
             data: part.media.data, mime_type: part.media.mediaType } } };
         throw new Error(`Unsupported upstream compaction prompt content ${part.type}`);

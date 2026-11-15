@@ -130,3 +130,21 @@ test("actual native patch supports add/update/move/delete and verifies before ef
     assert.equal(invalid.ok,false);
     await assert.rejects(readFile(`${cwd}/must-not-exist`));
 });
+
+test("native PNG reader output has a compatible native context projection", async t => {
+    const { nativeContext } = await import("../compaction.mjs");
+    const { canonical } = await import("../../../components/module-runtime-js/canonical.mjs");
+    const cwd = await fixture(t), path = resolve(cwd, "pixel.png");
+    const data = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADElEQVR4nGNgYGAAAAAEAAH2FzhVAAAAAElFTkSuQmCC";
+    await writeFile(path, Buffer.from(data, "base64"));
+    const request = input(cwd, "read", { path }, "png-producer");
+    const result = await executeNativeFile(request);
+    assert.equal(result.ok, true, result.error);
+    assert.deepEqual(result.content, [{ type: "image", mime_type: "image/png", data }]);
+    const messages = [canonical("Assistant", { ToolCall: { call: request.call } }, "model"),
+        canonical("Tool", { ToolResult: { result } }, "tool")];
+    const context = await nativeContext({ request: { model: { provider: "openai", model: "gpt-6.1-sol" } } }, messages);
+    const tool = context.messages[0].content[0];
+    assert.deepEqual(tool.state.content, [{ type: "text", text: result.output },
+        { type: "file", mime: "image/png", uri: `data:image/png;base64,${data}` }]);
+});

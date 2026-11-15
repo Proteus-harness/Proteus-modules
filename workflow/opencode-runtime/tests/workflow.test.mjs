@@ -268,3 +268,48 @@ test("reconnecting after a confirmed action retains its result and never dispatc
     );
     assert.ok(!JSON.stringify(result.result.new_messages).includes("incomplete-append"));
 });
+
+for (const compactor of ["absent", "auto:false"]) {
+    test(`PNG tool result reaches the next sampling with compactor ${compactor}`, async () => {
+        const { createCompactionExport } = await import("../compaction.mjs");
+        const call = { id: "png-read", name: "read", args: { path: "image.png" }, surface: "function", raw_arguments: null };
+        const tool = { name: "read", description: "Read image", input_schema: definition({ name: "read", input: NativeReadInput }).inputSchema };
+        const image = { type: "image", mime_type: "image/png",
+            data: "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADElEQVR4nGNgYGAAAAAEAAH2FzhVAAAAAElFTkSuQmCC" };
+        const toolResult = { call_id: call.id, ok: true, output: "Image read successfully", content: [image], error: null, metadata: null };
+        let steps = 0, executions = 0, sampled;
+        const invocation = { signal: new AbortController().signal, async hostCall(method, params) {
+            if (method === "host.context.build") return { chunks: [], token_estimate: null };
+            if (method === "host.tools.select") return { tools: [tool] };
+            if (method === "host.context.prepare") {
+                const output = { messages: params.input.messages, changed: false };
+                if (compactor === "auto:false") {
+                    const hook = createCompactionExport({ slot: "hook", module_id: "opencode_compact", contract_version: "v6",
+                        composition: "ordered_many", module_config: { auto: false } });
+                    const skipped = await hook.invoke("hook.invoke", { event: { event: "before_context",
+                        target: null, input: params.input, output } }, invocation);
+                    assert.equal(skipped.result.action, "continue");
+                }
+                return { output, target: null };
+            }
+            if (method === "host.history.checkpoint") return { revision: null };
+            if (method === "host.events.emit") return {};
+            if (method === "host.model.stream.start") {
+                steps++;
+                if (steps === 2) assert.deepEqual(params.request.messages.at(-1).parts[0].payload.ToolResult.result, toolResult);
+                sampled = steps === 1 ? { ...reply(""), messages: [canonical("Assistant", { ToolCall: { call } }, "model")],
+                    tool_calls: [call], finish_reason: "ToolCalls" } : reply("image handled");
+                return { stream_id: "png-stream" };
+            }
+            if (method === "host.model.stream.next") return { type: "response", response: sampled };
+            if (method === "host.tools.execute") { executions++; return structuredClone(toolResult); }
+            throw new Error(method);
+        } };
+        const result = await workflow({ task: { cwd: "/work", text: "read image" }, history: [message("User", "read image")],
+            runtime: { instructions: [], max_input_tokens: 128000, model_ref: request.model, reasoning: request.reasoning } }, invocation);
+        assert.equal(result.status, "success", JSON.stringify(result.failure));
+        assert.equal(result.result.output.text, "image handled");
+        assert.equal(steps, 2);
+        assert.equal(executions, 1);
+    });
+}

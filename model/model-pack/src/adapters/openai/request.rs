@@ -8,7 +8,7 @@ use crate::{
     adapters::context_render::context_text,
     domain::{
         FileSearchHostedToolConfig, HostedToolConfig, ResponseFormat, ToolCall, ToolCallSurface,
-        ToolChoice, ToolSpec, ToolSurface, WebSearchHostedToolConfig,
+        ToolChoice, ToolContent, ToolSpec, ToolSurface, WebSearchHostedToolConfig,
     },
     model_standard::{
         CanonicalMessage, CanonicalModelRequest, ContentPart, MessagePhase, MessageRole,
@@ -47,7 +47,10 @@ pub(super) fn to_openai_request_with_cache(
     });
     // Replace the existing slot to preserve key order without reserializing
     // the already-built JSON array through json!.
-    body["input"] = Value::Array(to_openai_input(&request.messages)?);
+    body["input"] = Value::Array(to_openai_input(
+        &request.messages,
+        profile.supports_image_input,
+    )?);
 
     if let Some(instructions) = joined_instructions(request) {
         body["instructions"] = Value::String(instructions);
@@ -335,7 +338,10 @@ fn collect_hosted_tool_includes<'a>(tools: &'a [ToolSpec], include: &mut BTreeSe
     }
 }
 
-fn to_openai_input(messages: &[CanonicalMessage]) -> Result<Vec<Value>> {
+fn to_openai_input(
+    messages: &[CanonicalMessage],
+    supports_image_input: bool,
+) -> Result<Vec<Value>> {
     let mut input: Vec<Value> = Vec::new();
     let mut tool_call_surfaces = HashMap::new();
     for message in messages {
@@ -403,24 +409,23 @@ fn to_openai_input(messages: &[CanonicalMessage]) -> Result<Vec<Value>> {
                         .get(&result.call_id)
                         .copied()
                         .unwrap_or_default();
-                    match surface {
-                        ToolCallSurface::Function => input.push(json!({
-                            "type": "function_call_output",
-                            "call_id": result.call_id,
-                            "output": result.text_or_status(),
-                        })),
-                        ToolCallSurface::Freeform => input.push(json!({
-                            "type": "custom_tool_call_output",
-                            "call_id": result.call_id,
-                            "output": result.text_or_status(),
-                        })),
+                    let output_type = match surface {
+                        ToolCallSurface::Function => "function_call_output",
+                        ToolCallSurface::Freeform => "custom_tool_call_output",
                         _ => {
                             return Err(anyhow!(
                                 "tool result '{}' uses unsupported surface for openai.responses",
                                 result.call_id
                             ));
                         }
-                    }
+                    };
+                    let mut item = json!({
+                        "type": output_type,
+                        "call_id": result.call_id,
+                        "output": null,
+                    });
+                    item["output"] = openai_tool_output(result, supports_image_input)?;
+                    input.push(item);
                 }
                 ContentPart::ReasoningSummary { text } => {
                     input.push(openai_reasoning_item(text, None))
@@ -458,6 +463,39 @@ fn to_openai_input(messages: &[CanonicalMessage]) -> Result<Vec<Value>> {
         }
     }
     Ok(input)
+}
+
+fn openai_tool_output(
+    result: &crate::domain::ToolResult,
+    supports_image_input: bool,
+) -> Result<Value> {
+    let mut images = result
+        .content
+        .iter()
+        .filter_map(|content| match content {
+            ToolContent::Image { mime_type, data } => Some((mime_type, data)),
+            _ => None,
+        })
+        .peekable();
+    if images.peek().is_none() {
+        return Ok(Value::String(result.text_or_status()));
+    }
+    if !supports_image_input {
+        return Err(anyhow!(
+            "tool result '{}' contains images, but openai.responses image input is disabled",
+            result.call_id
+        ));
+    }
+    // Retain the existing text/error projection, then preserve inline images.
+    let mut text = json!({ "type": "input_text", "text": null });
+    text["text"] = Value::String(result.text_or_status());
+    let mut blocks = vec![text];
+    for (mime_type, data) in images {
+        let mut image = json!({ "type": "input_image", "image_url": null, "detail": "auto" });
+        image["image_url"] = Value::String(format!("data:{mime_type};base64,{data}"));
+        blocks.push(image);
+    }
+    Ok(Value::Array(blocks))
 }
 
 fn openai_text_message(message: &CanonicalMessage, text: &str) -> Result<Value> {

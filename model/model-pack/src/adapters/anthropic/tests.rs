@@ -456,7 +456,7 @@ fn stream_usage_merges_start_and_output_delta_like_json_response() {
 }
 
 #[test]
-fn context_window_stop_is_length_in_json_and_stream() {
+fn context_window_stop_is_typed_at_http_200_native_boundaries() {
     let json_response = from_anthropic_response(json!({
         "stop_reason": "model_context_window_exceeded",
         "content": [{ "type": "text", "text": "partial" }]
@@ -469,11 +469,23 @@ fn context_window_stop_is_length_in_json_and_stream() {
         ),
         ("message_stop", json!({})),
     ]);
-    let ModelStreamEvent::Response { response: streamed } = events.last().unwrap() else {
-        panic!("expected final response");
+    let ModelStreamEvent::Error { failure: streamed } = events.last().unwrap() else {
+        panic!("expected typed context-window failure");
     };
+    // The status-blind decoder keeps its projection; the HTTP boundary selects
+    // recovery only after decoding has succeeded and HTTP 200 is known.
     assert_eq!(json_response.finish_reason, FinishReason::Length);
-    assert_eq!(streamed.finish_reason, FinishReason::Length);
+    let decoded = errors::context_window_stop_failure(
+        reqwest::StatusCode::OK,
+        json_response
+            .provider_metadata
+            .get("stop_reason")
+            .and_then(Value::as_str),
+    )
+    .expect("HTTP 200 context-window stop");
+    assert_eq!(*streamed, decoded);
+    assert_eq!(streamed.kind, ModelFailureKind::ContextWindowExceeded);
+    assert!(streamed.completed_messages.is_empty());
 }
 
 #[test]
@@ -778,14 +790,19 @@ fn stream_trace_tool_use_accumulates_input_json() {
 }
 
 #[test]
-fn stream_trace_error_event() {
+fn stream_trace_overload_event_is_retryable() {
     let events = run_trace(&[(
         "error",
         json!({ "error": { "type": "overloaded_error", "message": "overloaded" } }),
     )]);
     match events.as_slice() {
         [ModelStreamEvent::Error { failure }] => {
-            assert_eq!(failure.kind, crate::model_standard::ModelFailureKind::Other);
+            assert_eq!(
+                failure.kind,
+                crate::model_standard::ModelFailureKind::Retryable {
+                    retry_delay_ms: None,
+                }
+            );
             assert_eq!(failure.message, "overloaded");
         }
         other => panic!("expected Error, got {other:?}"),

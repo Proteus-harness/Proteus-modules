@@ -12,8 +12,9 @@ use crate::{
 
 /// Stateful аккумулятор для Anthropic SSE-потока: копит text parts и
 /// tool_use блоки по мере прихода, на `message_stop` отдаёт финальный
-/// CanonicalModelResponse.
+/// CanonicalModelResponse или typed context-window failure.
 pub(super) struct AnthropicStreamState {
+    http_status: reqwest::StatusCode,
     message_id: crate::domain::MessageId,
     blocks: Vec<AnthropicBlock>,
     usage: AnthropicUsage,
@@ -25,6 +26,7 @@ pub(super) struct AnthropicStreamState {
 impl Default for AnthropicStreamState {
     fn default() -> Self {
         Self {
+            http_status: reqwest::StatusCode::OK,
             message_id: crate::domain::new_message_id(),
             blocks: Vec::new(),
             usage: AnthropicUsage::default(),
@@ -49,11 +51,19 @@ enum AnthropicBlock {
     ToolUse {
         id: String,
         name: String,
+        initial_input: Value,
         input_json: String,
     },
 }
 
 impl AnthropicStreamState {
+    pub(super) fn new(http_status: reqwest::StatusCode) -> Self {
+        Self {
+            http_status,
+            ..Self::default()
+        }
+    }
+
     pub(super) fn translate(&mut self, event_type: &str, data: &str) -> Vec<ModelStreamEvent> {
         let Ok(parsed) = serde_json::from_str::<Value>(data) else {
             return vec![ModelStreamEvent::Error {
@@ -120,6 +130,11 @@ impl AnthropicStreamState {
                         Some(AnthropicBlock::ToolUse {
                             id,
                             name,
+                            // SSE без JSON-байтов сохраняет input стартового блока.
+                            initial_input: block
+                                .and_then(|b| b.get("input"))
+                                .cloned()
+                                .unwrap_or(Value::Null),
                             input_json: String::new(),
                         })
                     }
@@ -135,6 +150,15 @@ impl AnthropicStreamState {
                         );
                     }
                     self.blocks[index] = block;
+                }
+                if block_type == "text" {
+                    let text = block
+                        .and_then(|b| b.get("text"))
+                        .and_then(Value::as_str)
+                        .unwrap_or("");
+                    if !text.is_empty() {
+                        return self.append_text(index, text);
+                    }
                 }
                 Vec::new()
             }
@@ -186,35 +210,29 @@ impl AnthropicStreamState {
                             .and_then(|d| d.get("text"))
                             .and_then(Value::as_str)
                             .unwrap_or("");
-                        let text = self.dsml_filter.filter(text);
-                        if let Some(AnthropicBlock::Text { text: buf }) = self.blocks.get_mut(index)
-                        {
-                            buf.push_str(&text);
-                        }
-                        if text.is_empty() {
-                            Vec::new()
-                        } else {
-                            vec![ModelStreamEvent::TextDelta {
-                                message_id: self.message_id,
-                                phase: None,
-                                text,
-                            }]
-                        }
+                        self.append_text(index, text)
                     }
                     "input_json_delta" => {
                         let partial = delta
                             .and_then(|d| d.get("partial_json"))
                             .and_then(Value::as_str)
                             .unwrap_or("");
-                        let call_id =
-                            if let Some(AnthropicBlock::ToolUse { id, input_json, .. }) =
-                                self.blocks.get_mut(index)
-                            {
-                                input_json.push_str(partial);
-                                id.clone()
-                            } else {
-                                return Vec::new();
-                            };
+                        let call_id = if let Some(AnthropicBlock::ToolUse {
+                            id,
+                            initial_input,
+                            input_json,
+                            ..
+                        }) = self.blocks.get_mut(index)
+                        {
+                            if !partial.is_empty() {
+                                // JSON-дельты заменяют input, а не дополняют его.
+                                *initial_input = Value::Null;
+                            }
+                            input_json.push_str(partial);
+                            id.clone()
+                        } else {
+                            return Vec::new();
+                        };
                         if partial.is_empty() {
                             Vec::new()
                         } else {
@@ -246,17 +264,32 @@ impl AnthropicStreamState {
                 vec![self.finalise()]
             }
             "error" => {
-                let message = parsed
-                    .get("error")
-                    .and_then(|e| e.get("message"))
-                    .and_then(Value::as_str)
-                    .map(str::to_owned)
-                    .unwrap_or_else(|| "unknown anthropic error".to_owned());
                 vec![ModelStreamEvent::Error {
-                    failure: ModelFailure::other(message),
+                    failure: super::errors::failure_from_error_value(
+                        parsed.get("error"),
+                        None,
+                        "unknown anthropic error",
+                    ),
                 }]
             }
             _ => Vec::new(),
+        }
+    }
+
+    // Стартовый text и последующие дельты используют один фильтр и один буфер.
+    fn append_text(&mut self, index: usize, text: &str) -> Vec<ModelStreamEvent> {
+        let text = self.dsml_filter.filter(text);
+        if let Some(AnthropicBlock::Text { text: buf }) = self.blocks.get_mut(index) {
+            buf.push_str(&text);
+        }
+        if text.is_empty() {
+            Vec::new()
+        } else {
+            vec![ModelStreamEvent::TextDelta {
+                message_id: self.message_id,
+                phase: None,
+                text,
+            }]
         }
     }
 
@@ -269,6 +302,13 @@ impl AnthropicStreamState {
                     .blocks
                     .push(AnthropicBlock::Text { text: pending_text }),
             }
+        }
+
+        if let Some(failure) = super::errors::context_window_stop_failure(
+            self.http_status,
+            self.stop_reason.as_deref(),
+        ) {
+            return ModelStreamEvent::Error { failure };
         }
 
         let mut parts = Vec::new();
@@ -295,13 +335,14 @@ impl AnthropicStreamState {
                 AnthropicBlock::ToolUse {
                     id,
                     name,
+                    initial_input,
                     input_json,
                 } => {
                     if !accept_tool_calls {
                         continue;
                     }
                     let args = if input_json.is_empty() {
-                        Value::Null
+                        initial_input
                     } else {
                         match serde_json::from_str(&input_json) {
                             Ok(args) => args,
@@ -340,3 +381,6 @@ impl AnthropicStreamState {
         ModelStreamEvent::Response { response: resp }
     }
 }
+
+#[cfg(test)]
+mod start_tests;
