@@ -26,6 +26,50 @@ feature не мешает обязательным describe/stream. Корнев
 описательные `_meta` с авторскими ключами `namespace/name`; данные не меняют
 slot authority.
 
+## Native OpenCode Model
+
+`model/opencode-provider` экспортирует `model/opencode` (`v13`) через
+`proteus-opencode-module`. Он вызывает pinned `ModelsDev`, `ModelResolver` и
+`LLMClient` OpenCode напрямую. Это отдельный model slot: выбор его в профиле
+Codex сохраняет выбранные workflow, context, tools, policy и compactor Codex;
+native agent prompt и OpenCode session loop не добавляются.
+
+Обязательный `module_config.model.opencode.provider` выбирает native provider
+(например, `opencode-go`). Каталог `model.catalog.v1` публикует его chat-модели,
+названия, hidden status и точные native effort variants. Каталог удерживается
+на пять минут с объединением одновременных запросов; после TTL обновляется при
+следующем обращении, без фонового refresh. Metadata snapshot имеет ограничение
+на удержание; слишком большой ответ обслуживается без помещения в кеш.
+Ошибки каталога не заменяются статическим списком aliases. Source metadata и
+capabilities берутся из ModelsDev; image/audio generators и записи без
+положительных context/output limits не входят в chat surface.
+
+API key читается из credential table OpenCode v2 в read-only режиме. По умолчанию
+это `$XDG_DATA_HOME/opencode/opencode.db`, либо
+`~/.local/share/opencode/opencode.db`, если XDG-путь не абсолютный или не задан.
+Сохранённый active/latest credential имеет приоритет перед переменными среды,
+объявленными native provider. Адаптер не создаёт и не мигрирует DB, не использует
+Pi auth и старый `auth.json`. SQLite WAL/SHM coordination sidecars допустимы:
+чтение видит committed WAL без изменения данных и checkpoint. OAuth требует native refresh и в этом ограниченном
+model export явно отклоняется. Дополнительные параметры: `database_path`,
+`models_file`, `models_url`; пример и способы проверки описаны в
+[README runtime](../workflow/opencode-runtime/README.md#model-export).
+
+`model.quota.v1` объявляется только для `opencode-go`: Go usage windows и USD
+показатели используют тот же ключ и общий stateless helper
+`components/model-runtime-js/opencode-go-quota.mjs`. Это не выбор дополнительных
+agent slots. Canonical usage сохраняет inclusive input/output totals native SDK;
+cached input и reasoning tokens передаются отдельно и повторно не прибавляются.
+
+Transport использует native SDK semantics, включая function tools с
+`strict=false` и native argument recovery. Freeform tools, provider-executed
+tools, structured response format и чужие opaque history parts не поддержаны
+и не превращаются молча в текст. Не заданный `max_output_tokens` остаётся
+не заданным на wire; скрытый cap не добавляется. Text, visible reasoning,
+tool-call history и native metadata проходят через canonical bridge; прерванный
+ответ не считается завершённым сообщением. Эти границы не означают полную
+эквивалентность всей vanilla OpenCode упряжке.
+
 Tool definitions внутри каждого процесса фиксируются один раз при загрузке
 каждого tool export: порядок каталога, точные имена, schema, visibility и
 parallel capability относятся к этой реализации и её config. Повторная загрузка

@@ -19,7 +19,7 @@ def main():
     for name in ["adapter.mjs", "worker.mjs", "package.json", "package-lock.json", "README.md", "NOTICE", "LICENSE.upstream"]:
         shutil.copy2(source / name, tools / name)
     shutil.copytree(source / "node_modules", tools / "node_modules", dirs_exist_ok=True)
-    for relative in ["workflow/pi-runtime", "components/module-runtime-js", "components/pi-runtime-js", "model/pi-provider"]:
+    for relative in ["workflow/pi-runtime", "components/module-runtime-js", "components/pi-runtime-js", "components/model-runtime-js", "model/pi-provider"]:
         source_dir = modules / relative
         target = destination / relative
         target.mkdir(parents=True, exist_ok=True)
