@@ -1,16 +1,15 @@
 use serde_json::Value;
 
 use super::errors::{failure_from_sse_error, failure_from_sse_failed};
-use super::response::{from_openai_response, from_openai_response_with_ids};
+use super::response::from_openai_response_with_ids;
 use crate::model_standard::{ModelFailure, ModelStreamEvent};
 
 #[cfg(test)]
 mod tests;
 
-/// Трансляция одного SSE event'а от OpenAI Responses API в наши
-/// `ModelStreamEvent`. Вариантов много; всё что не распознали —
-/// игнорируем (возвращаем пустой вектор), это безопасно потому что
-/// финальный `Response` приходит на `response.completed`.
+/// Остальные SSE events OpenAI Responses API после stateful dispatch.
+/// `response.completed` обрабатывает OpenAiStreamState через
+/// finalize_completed_event; неизвестные events здесь игнорируются.
 pub(super) fn translate_non_message_event(
     event_type: &str,
     parsed: &Value,
@@ -44,23 +43,6 @@ pub(super) fn translate_non_message_event(
                 name: None,
                 args_delta,
             }]
-        }
-        "response.completed" => {
-            // В payload-е объект полного `response`, парсим через
-            // существующий `from_openai_response`. Если парсинг упал —
-            // эмитим Error, чтобы drain-loop не ждал вечно.
-            let response_value = parsed
-                .get("response")
-                .cloned()
-                .unwrap_or_else(|| parsed.clone());
-            match from_openai_response(response_value) {
-                Ok(response) => vec![ModelStreamEvent::Response { response }],
-                Err(error) => vec![ModelStreamEvent::Error {
-                    failure: ModelFailure::other(format!(
-                        "failed to parse final response: {error}"
-                    )),
-                }],
-            }
         }
         "response.incomplete" => {
             let response = parsed.get("response").unwrap_or(parsed);

@@ -68,54 +68,38 @@ impl OpenAiResponsesClient {
                     return Ok(Some(catalog.clone()));
                 }
             }
-            let mut access = auth.access(None).await?;
-            let version = self.catalog_client_version();
-            for attempt in 0..2 {
-                let response = self
-                    .http
+            let response = super::transport::send_metadata_request(auth, "model catalog", || {
+                self.http
                     .get(format!("{}/models", self.base_url))
-                    .query(&[("client_version", version)])
-                    .headers(access.headers.clone())
-                    .send()
-                    .await
-                    .map_err(|error| {
-                        super::transport::metadata_request_error("model catalog", error)
-                    })?;
-                if response.status() == reqwest::StatusCode::UNAUTHORIZED && attempt == 0 {
-                    access = auth.access(Some(access.token)).await?;
-                    continue;
-                }
-                if !response.status().is_success() {
-                    bail!("ChatGPT model catalog returned HTTP {}", response.status());
-                }
-                let mut response: ModelsResponse = response
-                    .json()
-                    .await
-                    .context("invalid ChatGPT model catalog response")?;
-                response.models.sort_by_key(|model| model.priority);
-                let catalog = ModelCatalog {
-                    models: response
-                        .models
-                        .into_iter()
-                        .map(|model| ModelCatalogEntry {
-                            id: model.slug,
-                            display_name: model.display_name,
-                            description: model.description,
-                            hidden: model.visibility != "list",
-                            reasoning_efforts: model
-                                .supported_reasoning_levels
-                                .into_iter()
-                                .map(|level| level.effort)
-                                .collect(),
-                            default_reasoning_effort: model.default_reasoning_level,
-                        })
-                        .collect(),
-                };
-                catalog.validate().map_err(anyhow::Error::msg)?;
-                *cache = Some((Instant::now(), catalog.clone()));
-                return Ok(Some(catalog));
-            }
-            unreachable!()
+                    .query(&[("client_version", self.catalog_client_version())])
+            })
+            .await?;
+            let mut response: ModelsResponse = response
+                .json()
+                .await
+                .context("invalid ChatGPT model catalog response")?;
+            response.models.sort_by_key(|model| model.priority);
+            let catalog = ModelCatalog {
+                models: response
+                    .models
+                    .into_iter()
+                    .map(|model| ModelCatalogEntry {
+                        id: model.slug,
+                        display_name: model.display_name,
+                        description: model.description,
+                        hidden: model.visibility != "list",
+                        reasoning_efforts: model
+                            .supported_reasoning_levels
+                            .into_iter()
+                            .map(|level| level.effort)
+                            .collect(),
+                        default_reasoning_effort: model.default_reasoning_level,
+                    })
+                    .collect(),
+            };
+            catalog.validate().map_err(anyhow::Error::msg)?;
+            *cache = Some((Instant::now(), catalog.clone()));
+            Ok(Some(catalog))
         })
         .await
         .context("ChatGPT model catalog timed out")?

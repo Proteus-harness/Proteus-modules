@@ -18,7 +18,36 @@ use crate::{
     },
 };
 
-pub(super) fn metadata_request_error(operation: &str, error: reqwest::Error) -> anyhow::Error {
+/// Metadata reads refresh once after 401, but never use inference retries.
+/// Callers own their deadline, cache lock, response decoding and publication.
+pub(super) async fn send_metadata_request<F>(
+    auth: &CodexAuth,
+    operation: &str,
+    mut build: F,
+) -> Result<reqwest::Response>
+where
+    F: FnMut() -> reqwest::RequestBuilder,
+{
+    let mut access = auth.access(None).await?;
+    for attempt in 0..2 {
+        let response = build()
+            .headers(access.headers.clone())
+            .send()
+            .await
+            .map_err(|error| metadata_request_error(operation, error))?;
+        if response.status() == StatusCode::UNAUTHORIZED && attempt == 0 {
+            access = auth.access(Some(access.token)).await?;
+            continue;
+        }
+        if !response.status().is_success() {
+            bail!("ChatGPT {operation} returned HTTP {}", response.status());
+        }
+        return Ok(response);
+    }
+    unreachable!()
+}
+
+fn metadata_request_error(operation: &str, error: reqwest::Error) -> anyhow::Error {
     // Metadata failures cross the worker boundary as a message, not an error
     // chain. Keep the transport cause, but never its URL or response payload.
     let cause = anyhow::Error::new(error.without_url());

@@ -3,7 +3,7 @@ use serde_json::{Value, json};
 
 use super::AnthropicPromptCacheConfig;
 use crate::{
-    adapters::context_render::context_text,
+    adapters::context_render::{context_text, instruction_text},
     domain::{ToolCallSurface, ToolChoice, ToolContent, ToolSpec, ToolSurface},
     model_standard::{CanonicalMessage, CanonicalModelRequest, ContentPart, MessageRole},
 };
@@ -136,14 +136,7 @@ fn anthropic_system_value(system: String, cache_control: Option<&Value>) -> Valu
 }
 
 fn joined_instructions(request: &CanonicalModelRequest) -> Option<String> {
-    let mut instructions: Vec<_> = request.instructions.iter().collect();
-    instructions.sort_by_key(|instruction| std::cmp::Reverse(instruction.priority));
-    let text = instructions
-        .into_iter()
-        .map(|instruction| instruction.text.as_str())
-        .filter(|text| !text.trim().is_empty())
-        .collect::<Vec<_>>()
-        .join("\n\n");
+    let text = instruction_text(&request.instructions);
     let systems = request
         .messages
         .iter()

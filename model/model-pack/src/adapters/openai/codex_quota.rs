@@ -1,7 +1,7 @@
 //! ChatGPT quota HTTP/DTO details stay inside the provider implementation.
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-use anyhow::{Context, Result, bail};
+use anyhow::{Context, Result};
 use proteus_contracts::contracts::{
     ModelQuotaBucket, ModelQuotaCredits, ModelQuotaSnapshot, ModelQuotaWindow,
 };
@@ -132,31 +132,16 @@ impl OpenAiResponsesClient {
                     return Ok(Some(snapshot.clone()));
                 }
             }
-            let mut access = auth.access(None).await?;
-            for attempt in 0..2 {
-                let response = self
-                    .http
-                    .get(url)
-                    .headers(access.headers.clone())
-                    .send()
-                    .await
-                    .map_err(|error| super::transport::metadata_request_error("quota", error))?;
-                if response.status() == reqwest::StatusCode::UNAUTHORIZED && attempt == 0 {
-                    access = auth.access(Some(access.token)).await?;
-                    continue;
-                }
-                if !response.status().is_success() {
-                    bail!("ChatGPT quota returned HTTP {}", response.status());
-                }
-                let response: QuotaResponse = response
-                    .json()
-                    .await
-                    .map_err(|_| anyhow::anyhow!("invalid ChatGPT quota response"))?;
-                let snapshot = response.into_snapshot()?;
-                *cache = Some((Instant::now(), snapshot.clone()));
-                return Ok(Some(snapshot));
-            }
-            unreachable!()
+            let response =
+                super::transport::send_metadata_request(auth, "quota", || self.http.get(url))
+                    .await?;
+            let response: QuotaResponse = response
+                .json()
+                .await
+                .map_err(|_| anyhow::anyhow!("invalid ChatGPT quota response"))?;
+            let snapshot = response.into_snapshot()?;
+            *cache = Some((Instant::now(), snapshot.clone()));
+            Ok(Some(snapshot))
         })
         .await
         .context("ChatGPT quota timed out")?

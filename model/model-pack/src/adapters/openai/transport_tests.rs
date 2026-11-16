@@ -276,3 +276,87 @@ fn constructors_keep_config_validation_order_without_accessing_auth() {
     );
     assert!(!missing_auth.exists());
 }
+
+#[tokio::test]
+async fn metadata_reads_refresh_once_and_never_use_inference_retries() {
+    tokio::time::timeout(Duration::from_secs(10), async {
+        for catalog in [false, true] {
+            for status in [401, 429, 500] {
+                let root = tempfile::tempdir().unwrap();
+                let auth_file = super::super::codex_tests::auth_file(root.path());
+                let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+                let url = format!("http://{}", listener.local_addr().unwrap());
+                let mut client = OpenAiResponsesClient::from_codex_config(json!({
+                    "base_url": url, "quota_url": format!("{url}/usage"),
+                    "oauth_issuer": url, "auth_file": auth_file,
+                    "request_max_retries": 4, "client_version": "0.170.2",
+                }))
+                .unwrap();
+                client.http = reqwest::Client::builder()
+                    .no_proxy()
+                    .redirect(reqwest::redirect::Policy::none())
+                    .build()
+                    .unwrap();
+                let mut replies = Vec::new();
+                if status == 401 {
+                    replies.push((401, "not-for-errors".to_owned()));
+                    replies.push((
+                        200,
+                        json!({"access_token":"rotated", "refresh_token":"next", "expires_in":3600})
+                            .to_string(),
+                    ));
+                }
+                replies.push((status, "not-for-errors".to_owned()));
+                // Joined futures stay inside the deadline. The listener closes
+                // after the last allowed response, so an extra request cannot
+                // produce the expected final HTTP-status diagnostic.
+                let server = async move {
+                    let mut requests = Vec::new();
+                    for (status, body) in replies {
+                        let (mut socket, _) = listener.accept().await.unwrap();
+                        requests.push(test_http::read(&mut socket).await);
+                        test_http::reply(&mut socket, status, "application/json", &body).await;
+                    }
+                    requests
+                };
+                let lookup = async {
+                    if catalog {
+                        client.catalog().await.unwrap_err()
+                    } else {
+                        client.quota().await.unwrap_err()
+                    }
+                };
+                let (requests, error) = tokio::join!(server, lookup);
+                let operation = if catalog { "model catalog" } else { "quota" };
+                assert_eq!(
+                    format!("{error:#}"),
+                    format!(
+                        "ChatGPT {operation} returned HTTP {}",
+                        StatusCode::from_u16(status).unwrap(),
+                    ),
+                );
+                assert_eq!(requests.len(), if status == 401 { 3 } else { 1 });
+                let target = if catalog {
+                    "GET /models?client_version=0.170.2 HTTP/1.1"
+                } else {
+                    "GET /usage HTTP/1.1"
+                };
+                assert_eq!(requests[0].target, target);
+                assert_eq!(
+                    requests[0].headers["authorization"],
+                    "Bearer fixture-access"
+                );
+                if status == 401 {
+                    assert_eq!(requests[1].target, "POST /oauth/token HTTP/1.1");
+                    assert_eq!(requests[2].target, target);
+                    assert_eq!(requests[2].headers["authorization"], "Bearer rotated");
+                    assert_eq!(requests[2].headers["chatgpt-account-id"], "fixture-account");
+                }
+                assert!(client.catalog_cache.lock().await.is_none());
+                assert!(client.quota_cache.lock().await.is_none());
+            }
+        }
+    })
+    .await
+    .expect("metadata retry-boundary fixture timed out");
+}

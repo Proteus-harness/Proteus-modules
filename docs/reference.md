@@ -105,6 +105,11 @@ Default `freeform=false` сохраняет function binding `{patch: string}`.
 Профиль Core `codex` выбирает freeform; `code-mode` явно сохраняет function
 binding для своего `tools.call` API.
 
+Внутренний parser `codex_patch` отдаёт streaming preview заимствованным slice,
+а завершение потребляет parser и передаёт готовые hunks и `environment_id`
+одному владельцу. One-shot применение сохраняет прежние validation и ошибки;
+независимые snapshots и повторный `finish` одного parser не поддерживаются.
+
 Публичный pinned каталог отличается от обновляемого `/models` каталога
 конкретной native CLI-сессии. Применение pinned template и grammar не закрывает
 остальные fidelity gates. Native CLI `0.167.0` по умолчанию предоставляет
@@ -208,6 +213,18 @@ identities и остаются request-only; tool-bearing ответы и око
 parts сохраняют прежнее ограничение классификации при ACK/compaction.
 
 ## Настройки Model-pack
+
+OpenAI Responses и Anthropic используют общий private renderer только для
+canonical instruction prefix: stable sort по убыванию priority, пропуск
+полностью blank blocks и сохранение текста непустых blocks. Provider-specific
+обёртки остаются отдельными: legacy System messages, cache-control и wire
+serialization не нормализуются между провайдерами.
+
+Codex catalog и quota используют общий metadata HTTP-переход: один refresh
+после первого 401 и не более одного повторного GET. Второй 401, 429 и 5xx
+завершаются прежней ошибкой без inference retries. Endpoint owners сохраняют
+свои TTL, cache locks, общий deadline, decode/validation и публикацию кеша
+только после успешной проверки ответа.
 
 Форма подключения описывает параметры адаптера, а не автоматически
 определённые возможности выбранной модели. Параметры разделены на подключение,

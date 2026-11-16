@@ -5,7 +5,7 @@ use serde_json::{Value, json};
 
 use super::{OpenAiPromptCacheConfig, model_profile::OpenAiModelProfile};
 use crate::{
-    adapters::context_render::context_text,
+    adapters::context_render::{context_text, instruction_text},
     domain::{
         FileSearchHostedToolConfig, HostedToolConfig, ResponseFormat, ToolCall, ToolCallSurface,
         ToolChoice, ToolContent, ToolSpec, ToolSurface, WebSearchHostedToolConfig,
@@ -198,14 +198,7 @@ fn apply_openai_prompt_cache(
 }
 
 fn joined_instructions(request: &CanonicalModelRequest) -> Option<String> {
-    let mut instructions: Vec<_> = request.instructions.iter().collect();
-    instructions.sort_by_key(|instruction| std::cmp::Reverse(instruction.priority));
-    let text = instructions
-        .into_iter()
-        .map(|instruction| instruction.text.as_str())
-        .filter(|text| !text.trim().is_empty())
-        .collect::<Vec<_>>()
-        .join("\n\n");
+    let text = instruction_text(&request.instructions);
     if text.is_empty() { None } else { Some(text) }
 }
 
