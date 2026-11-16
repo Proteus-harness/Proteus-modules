@@ -14,13 +14,14 @@ const request = () => ({ model: { provider: 'opencode', model: 'deepseek-v4.1-fl
     instructions: [{ text: 'Exact Core instructions' }], tools: [], tool_choice: 'None', response_format: 'Text',
     limits: { max_output_tokens: 256 }, sampling: { temperature: null, top_p: null },
     cache: { cache_instructions: false, cache_context: false, routing_key: null },
+    client_metadata: { session_id: 'stable-core-session' },
     messages: [{ id: 'user', role: 'User', parts: [{ payload: { Text: { text: 'hi' } } }] }],
 });
 async function fixture(t, respond) {
-    const received = [];
+    const received = [], receivedHeaders = [];
     const server = createServer(async (req, res) => {
         let body = ''; for await (const chunk of req) body += chunk;
-        received.push(JSON.parse(body)); respond(res);
+        received.push(JSON.parse(body)); receivedHeaders.push(req.headers); respond(res);
     });
     await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
     t.after(() => new Promise(resolve => { server.closeAllConnections(); server.close(resolve); }));
@@ -29,7 +30,7 @@ async function fixture(t, respond) {
         baseURL: `http://127.0.0.1:${server.address().port}/v1` } } };
     const runtime = createNativeRuntime(binding.module_config, { loadSnapshots: async () => [selected] });
     const adapter = modelExport(binding, { runtime, credential: async () => ({ type: 'key', key: 'synthetic-key' }) });
-    return { adapter, received };
+    return { adapter, received, receivedHeaders };
 }
 function chunk(res, delta, finish_reason = null, usage) {
     res.write('data: ' + JSON.stringify({ id: 'synthetic', model: 'deepseek-v4.1-flash', object: 'chat.completion.chunk',
@@ -69,6 +70,38 @@ test('stream false returns terminal data without progress and without extra requ
     assert.equal(result.terminal.kind, 'response'); assert.equal(result.event_count, 0); assert.equal(received.length, 1);
 });
 
+test('Go routing preserves Core session affinity across tool-bearing high-effort requests and resume', async t => {
+    const { adapter, received, receivedHeaders } = await fixture(t, success);
+    for (const turn of ['first', 'resumed']) {
+        const input = request();
+        input.tools = [{ name: 'read', description: 'Read a file', input_schema: { type: 'object' } }];
+        input.tool_choice = 'Auto';
+        input.client_metadata.turn_id = turn;
+        const output = await adapter.invoke('stream', { request: input, stream: true }, {
+            signal: new AbortController().signal, hostCall: async () => {} });
+        assert.equal(output.terminal.kind, 'response');
+    }
+    assert.equal(received.length, 2);
+    for (let i = 0; i < received.length; i++) {
+        assert.equal(receivedHeaders[i]['x-opencode-session'], 'stable-core-session');
+        assert.equal(receivedHeaders[i]['x-opencode-session-id'], 'stable-core-session');
+        assert.equal(receivedHeaders[i]['x-session-affinity'], 'stable-core-session');
+        assert.equal(received[i].reasoning_effort, 'high');
+        assert.equal(received[i].stream, true);
+        assert.equal(received[i].tools[0].function.name, 'read');
+    }
+});
+
+test('Go requests without canonical session metadata fail before HTTP instead of changing affinity', async t => {
+    const { adapter, received } = await fixture(t, success);
+    const input = request(); delete input.client_metadata;
+    const output = await adapter.invoke('stream', { request: input, stream: false }, {
+        signal: new AbortController().signal, hostCall: async () => {} });
+    assert.equal(output.terminal.kind, 'request_error');
+    assert.match(output.terminal.failure.message, /client_metadata.session_id/);
+    assert.equal(received.length, 0);
+});
+
 test('unset Core output limit preserves the native SDK request default without a synthetic 4096 cap', async t => {
     const { adapter, received } = await fixture(t, success);
     const input = request(); input.limits.max_output_tokens = null;
@@ -106,6 +139,10 @@ test('EOF after visible text is a disconnected failure, not success', async t =>
 test('failure diagnostics omit native credential-bearing messages and validate config', () => {
     assert.equal(modelFailure({ reason: { _tag: 'Authentication', message: 'secret' } }).kind, 'other');
     assert.ok(!JSON.stringify(modelFailure({ message: 'secret' })).includes('secret'));
+    const failure = modelFailure({ reason: { _tag: 'InvalidRequest', message: 'secret', body: 'secret',
+        http: { status: 400, url: 'secret', headers: { secret: 'secret' } } } });
+    assert.match(failure.message, /InvalidRequest; HTTP 400/);
+    assert.ok(!JSON.stringify(failure).includes('secret'));
     assert.throws(() => modelExport({ ...binding, module_config: { provider: 'opencode-go', unknown: true } }), /Invalid/);
 });
 

@@ -19,11 +19,24 @@ export function modelFailure(error, { signal, started = false } = {}) {
         (reason?._tag === 'InvalidProviderOutput' && reason.classification === 'incomplete-stream'))
         kind = started ? 'stream_disconnected' : { retryable: { retry_delay_ms: null } };
     // Never expose native error objects: diagnostics can contain credentials or request bodies.
-    const message = reason?._tag === 'Authentication' ? 'OpenCode provider authentication failed' :
+    let message = error?.code === 'OPENCODE_MISSING_SESSION' ?
+        'OpenCode Go requires client_metadata.session_id for stable session routing' :
+        reason?._tag === 'Authentication' ? 'OpenCode provider authentication failed' :
+        reason?._tag === 'InvalidRequest' ? 'OpenCode provider rejected the model request' :
         kind === 'context_window_exceeded' ? 'OpenCode model context limit exceeded' :
         kind === 'interrupted' ? 'OpenCode model request interrupted' :
         kind === 'stream_disconnected' ? 'OpenCode model stream disconnected before completion' :
         typeof kind === 'object' ? 'OpenCode provider request can be retried' : 'OpenCode model request failed';
+    // Only schema-owned categories and numeric status are public. Native
+    // messages, bodies, URLs and response headers may contain request secrets.
+    const tags = ['Authentication', 'InvalidRequest', 'QuotaExceeded', 'RateLimit',
+        'ProviderInternal', 'Transport', 'Timeout', 'InvalidProviderOutput',
+        'UnsupportedOperation', 'ProviderConfiguration', 'NoRoute'];
+    const details = [];
+    if (tags.includes(reason?._tag)) details.push(reason._tag);
+    const status = reason?.http?.status;
+    if (Number.isInteger(status) && status >= 100 && status <= 599) details.push('HTTP ' + status);
+    if (details.length) message += ' (' + details.join('; ') + ')';
     return { kind, message, completed_messages: [] };
 }
 

@@ -34,6 +34,13 @@ slot authority.
 Codex сохраняет выбранные workflow, context, tools, policy и compactor Codex;
 native agent prompt и OpenCode session loop не добавляются.
 
+Для native routing адаптер переносит `client_metadata.session_id` в session
+headers OpenCode. Одна canonical session сохраняет affinity между модельными
+вызовами и после resume. Go требует эту identity: при её отсутствии запрос
+отклоняется явно до HTTP, без случайной подмены session на каждом retry.
+Ошибки провайдера показывают безопасную native category и HTTP status;
+исходные body, headers и credential-bearing messages не публикуются.
+
 Обязательный `module_config.model.opencode.provider` выбирает native provider
 (например, `opencode-go`). Каталог `model.catalog.v1` публикует его chat-модели,
 названия, hidden status и точные native effort variants. Каталог удерживается
