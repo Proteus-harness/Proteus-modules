@@ -108,6 +108,9 @@ API, ограничения исполнения и пример — в [CodeMod
 Авторизация ChatGPT выполняется через поставляемый пакет моделей:
 `proteus-model-pack-module auth openai_codex login`.
 Состояние локального входа: `proteus-model-pack-module auth openai_codex status`.
+Без явного `auth_file` используется
+`~/.config/Proteus-harness/secrets/chatgpt.json`; CLI принимает свой путь через
+`--auth-file`.
 
 Native OpenCode model export устанавливается отдельно от Rust-пакетов:
 `python3 workflow/opencode-runtime/install.py --prefix /absolute/ready/Proteus`.
