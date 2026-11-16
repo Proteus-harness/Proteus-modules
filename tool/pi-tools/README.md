@@ -36,6 +36,22 @@ Wire worker связывает каждую invocation с конкретным e
 authority. Для workflow/context/hook он импортирует соседний
 `workflow/pi-runtime/exports.mjs`, который предоставляет `createExport(binding)`.
 
+`context/pi_context` использует настоящий `DefaultResourceLoader` Pi: AGENTS,
+`SYSTEM.md` и `APPEND_SYSTEM.md` загружаются с native precedence и удалением BOM.
+Для SYSTEM и APPEND независимо выбирается файл `.pi/` рабочего каталога, затем
+глобальный файл из agent directory. Workflow передаёт их как `customPrompt` и
+`appendSystemPrompt` настоящему `buildSystemPrompt`, а не как дополнительные
+AGENTS. Внешние packages, extensions, skills, themes и prompt templates этой
+сборкой по-прежнему отключены; loader получает пустые in-memory settings и
+не устанавливает пользовательские пакеты.
+
+Это не перенос всего `AgentSession`: native mid-turn steering/follow-up и
+session prompt-section delta lifecycle не подключены. В текущем workflow-host
+есть только счётчик, но нет чтения/подтверждения ожидающих сообщений пользователя.
+Core сам доставляет их на model boundary; native Pi interruption между tools
+и follow-up lifecycle этим не воспроизводятся. Каталог ниже также остаётся явной
+границей, а не универсальным преобразованием любого provider.
+
 `workflow/pi_loop` и `hook/pi_compact` принимают необязательный
 `catalog_provider = "openai-codex" | "opencode-go"`; default — `openai-codex`.
 Оба используют descriptor из закреплённого Pi catalog для выбранного provider,

@@ -160,8 +160,16 @@ network/MCP, skills/subagents и оставшаяся tool registry не вкл�
 model/tool continuation использует Native Step. Native retry schedule применяется
 к типизированным временным model failures. Core передаёт только завершённые model
 items; незавершённый ответ не запускает tools и не дописывается в sampling history.
-Нативные Continue с partial assistant text, специфичный timeout budget,
-overflow и полный session recovery lifecycle остаются отдельными границами. Context initial text
+Типизированный `context_window_exceeded` до завершённого ответа запускает
+выбранную подготовку контекста с причиной overflow: штатный `SessionCompaction`
+выполняет forced compaction через Core. Повтор разрешён только при изменённой
+истории и durable checkpoint ACK; прежние подтверждённые tools не исполняются
+заново. Как в pinned `SessionRunner.runStep`, на один model step допускается
+одна такая recovery; следующий завершённый ответ вновь разрешает восстановление.
+Отключённый/отсутствующий compactor, ошибка summary/ACK и отмена не запускают
+скрытый повтор. Provider remote compaction остаётся явно неподдержанной.
+Нативные Continue с partial assistant text, специфичный timeout budget и
+полный session recovery lifecycle остаются отдельными границами. Context initial text
 проецируется в effective request; session instruction delta lifecycle всего
 OpenCode DB не воспроизводится. Поэтому этот профиль нельзя объявлять полной
 эквивалентностью всей vanilla упряжке; это перенесённые upstream slots с явно

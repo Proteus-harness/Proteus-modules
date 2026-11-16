@@ -76,13 +76,16 @@ export function component(f, config = f.config) {
     async close() { child.stdin.end(); const timer = setTimeout(() => child.kill('SIGKILL'), 5000); try { return await exit; } finally { clearTimeout(timer); } } };
 }
 
-export async function appServer(f, name) {
+export async function appServer(f, name, overrides = {}) {
     const configPath = join(f.dir, 'synthetic.json');
-    await writeFile(configPath, JSON.stringify({ active_provider: 'go',
+    const config = { active_provider: 'go',
         providers: { go: { provider: 'opencode', model: flash, stream: true, reasoning: { effort: 'high', summary: true } } },
         components: { model: { command: node, args: [...(f.preload ? ['--import', f.preload] : []), worker],
             env_allowlist: Object.keys(f.env), exports: { model: { opencode: {} } } } },
-        module_config: { model: { opencode: f.config } } }));
+        module_config: { model: { opencode: f.config } } };
+    await writeFile(configPath, JSON.stringify({ ...config, ...overrides,
+        components: { ...config.components, ...overrides.components },
+        module_config: { ...config.module_config, ...overrides.module_config } }));
     const child = spawn(core, ['--config', configPath, '--cwd', f.workspace, 'server', 'http', '--host', '127.0.0.1', '--port', '0', '--token', 'synthetic-token', '--ready-stdout'],
         { cwd: f.workspace, env: f.env, stdio: ['ignore', 'pipe', 'pipe'] });
     let stdout = '', stderr = '';

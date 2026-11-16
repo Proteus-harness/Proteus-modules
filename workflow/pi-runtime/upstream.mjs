@@ -1,7 +1,8 @@
 // These are the entry points in the locked Pi distribution installed by pi-tools.
 export { runAgentLoop } from "../../tool/pi-tools/node_modules/@earendil-works/pi-agent-core/dist/agent-loop.js";
 export { buildSystemPrompt } from "../../tool/pi-tools/node_modules/@earendil-works/pi-coding-agent/dist/core/system-prompt.js";
-export { loadProjectContextFiles } from "../../tool/pi-tools/node_modules/@earendil-works/pi-coding-agent/dist/core/resource-loader.js";
+export { DefaultResourceLoader } from "../../tool/pi-tools/node_modules/@earendil-works/pi-coding-agent/dist/core/resource-loader.js";
+export { SettingsManager } from "../../tool/pi-tools/node_modules/@earendil-works/pi-coding-agent/dist/core/settings-manager.js";
 export {
     convertToLlm,
     createCompactionSummaryMessage,
