@@ -61,6 +61,12 @@ Pi auth и старый `auth.json`. SQLite WAL/SHM coordination sidecars доп
 model export явно отклоняется. Дополнительные параметры: `database_path`,
 `models_file`, `models_url`; пример и способы проверки описаны в
 [README runtime](../workflow/opencode-runtime/README.md#model-export).
+Эти четыре поля публикуются в module-owned `config_schema`: обязательный
+`provider` — свободный ID из native каталога, остальные поля — дополнительные
+строковые overrides без навязанных значений. Раздел подключения поясняет
+авторизацию через OpenCode; отдельного ввода ключа, OAuth или параметра `route`
+этот model export не предоставляет. Schema меняет только форму настроек,
+не runtime-поведение и не выбор остальных slots.
 
 `model.quota.v1` объявляется только для `opencode-go`: Go usage windows и USD
 показатели используют тот же ключ и общий stateless helper

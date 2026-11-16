@@ -4,6 +4,7 @@ import { LLMClient } from '../../workflow/opencode-runtime/node_modules/@opencod
 import { RequestExecutor } from '../../workflow/opencode-runtime/node_modules/@opencode/ai/dist/route/executor.js';
 import { createNativeRuntime } from './runtime.mjs';
 import { createCredentialReader } from './credentials.mjs';
+import { configSchema } from './config-schema.mjs';
 import { toNativeRequest } from './messages.mjs';
 import { NativeResponseCollector } from './response.mjs';
 import { createGoQuotaReader } from '../../components/model-runtime-js/opencode-go-quota.mjs';
@@ -59,7 +60,7 @@ export function modelExport(binding, dependencies = {}) {
     });
     return {
         manifest: { slot: 'model', module_id: 'opencode', contract_version: 'v13', composition: 'select_one',
-            module_features: ['model.catalog.v1', ...(quota ? ['model.quota.v1'] : [])], config_schema: null },
+            module_features: ['model.catalog.v1', ...(quota ? ['model.quota.v1'] : [])], config_schema: configSchema },
         async invoke(method, params, { signal, hostCall }) {
             if (method === 'catalog') return runtime.catalog(signal);
             if (method === 'quota') {
