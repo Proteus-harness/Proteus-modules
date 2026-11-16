@@ -1,0 +1,105 @@
+[
+  {
+    "id": "openai-api",
+    "title": "OpenAI API",
+    "description": "Подключение по ключу API. Если поле ключа пустое, используется файл ключа или OPENAI_API_KEY. Модель задаётся отдельно.",
+    "module_id": "openai",
+    "module_config": {
+      "implementation": "openai"
+    },
+    "env_allowlist": [
+      "PATH",
+      "HOME",
+      "XDG_CONFIG_HOME",
+      "XDG_DATA_HOME",
+      "XDG_STATE_HOME",
+      "XDG_CACHE_HOME",
+      "HTTP_PROXY",
+      "HTTPS_PROXY",
+      "ALL_PROXY",
+      "NO_PROXY",
+      "http_proxy",
+      "https_proxy",
+      "all_proxy",
+      "no_proxy",
+      "OPENAI_API_KEY"
+    ]
+  },
+  {
+    "id": "anthropic-api",
+    "title": "Anthropic API",
+    "description": "Подключение по ключу API. Если поле ключа пустое, используется файл ключа или ANTHROPIC_API_KEY. Модель задаётся отдельно.",
+    "module_id": "anthropic",
+    "module_config": {
+      "implementation": "anthropic"
+    },
+    "env_allowlist": [
+      "PATH",
+      "HOME",
+      "XDG_CONFIG_HOME",
+      "XDG_DATA_HOME",
+      "XDG_STATE_HOME",
+      "XDG_CACHE_HOME",
+      "HTTP_PROXY",
+      "HTTPS_PROXY",
+      "ALL_PROXY",
+      "NO_PROXY",
+      "http_proxy",
+      "https_proxy",
+      "all_proxy",
+      "no_proxy",
+      "ANTHROPIC_API_KEY"
+    ]
+  },
+  {
+    "id": "openai-compatible",
+    "title": "OpenAI-совместимый API",
+    "description": "Свой сервер или другой сервис с совместимым Responses API. После создания задайте адрес сервера и ключ.",
+    "module_id": "custom-api",
+    "module_config": {
+      "implementation": "openai_compatible"
+    },
+    "env_allowlist": [
+      "PATH",
+      "HOME",
+      "XDG_CONFIG_HOME",
+      "XDG_DATA_HOME",
+      "XDG_STATE_HOME",
+      "XDG_CACHE_HOME",
+      "HTTP_PROXY",
+      "HTTPS_PROXY",
+      "ALL_PROXY",
+      "NO_PROXY",
+      "http_proxy",
+      "https_proxy",
+      "all_proxy",
+      "no_proxy",
+      "OPENAI_API_KEY"
+    ]
+  },
+  {
+    "id": "chatgpt-subscription",
+    "title": "Подписка ChatGPT",
+    "description": "Использует существующую авторизацию Proteus. Если вход ещё не выполнен, войдите через команду auth openai_codex login этого модуля. Создание записи не подтверждает вход.",
+    "module_id": "chatgpt",
+    "module_config": {
+      "implementation": "openai_codex"
+    },
+    "env_allowlist": [
+      "PATH",
+      "HOME",
+      "XDG_CONFIG_HOME",
+      "XDG_DATA_HOME",
+      "XDG_STATE_HOME",
+      "XDG_CACHE_HOME",
+      "HTTP_PROXY",
+      "HTTPS_PROXY",
+      "ALL_PROXY",
+      "NO_PROXY",
+      "http_proxy",
+      "https_proxy",
+      "all_proxy",
+      "no_proxy"
+    ]
+  }
+]

@@ -9,13 +9,13 @@ pub(super) fn group(mut fields: Vec<Field>) -> ModuleConfigSchema {
             | "base_url_json_key" => (
                 "connection",
                 "Подключение",
-                "Провайдер и адрес его API. Выбор модели находится в чате.",
+                "Провайдер и адрес его API. Именованные настройки моделей задаются отдельно.",
             ),
             "auth_file" | "api_key_env" | "api_key_file" | "api_key_json_key" | "api_key"
             | "auth" | "oauth_issuer" => (
                 "authentication",
                 "Авторизация",
-                "Основной источник авторизации и альтернативные способы передачи ключа.",
+                "Если явный ключ пустой, используется файл ключа или окружение. Для подписки используется существующий файл авторизации. Создание записи не подтверждает авторизацию.",
             ),
             "prompt_cache" | "prompt_cache_key" | "prompt_cache_retention" | "prompt_cache_ttl" => {
                 (

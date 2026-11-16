@@ -39,8 +39,9 @@ async fn context_search_profile_prefetches_code_and_preserves_workflow_replay() 
     for prefetch in [false, true] {
         let store_root = tempfile::tempdir().unwrap();
         let config_path = store_root.path().join("config.json");
-        // Isolate the context implementation from unrelated default-profile plugins.
-        let mut profile = json!({"include":root.join("configs/codex.config.toml")});
+        // Exercise the native context/model assembly explicitly; the default
+        // Codex profile selects Go and does not use this loopback API fixture.
+        let mut profile = json!({"include":root.join("configs/codex-subscription.config.toml")});
         profile["instructions"] = json!([{
             "kind":"System","file":root.join("configs/prompts/codex-default.md"),"priority":100
         }]);

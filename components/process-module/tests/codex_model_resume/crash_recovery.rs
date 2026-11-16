@@ -187,13 +187,17 @@ async fn crash_and_resume(after_result: bool, freeform: bool) {
     child.kill().await.unwrap();
     assert!(!child.wait().await.unwrap().success());
     drop(barrier);
+    let session_path = std::fs::read_to_string(root.path().join("session-path")).unwrap();
     for name in ["a", "b", "c"] {
         assert_eq!(
-            std::fs::read_to_string(workspace.join(format!("{name}.txt"))).unwrap(),
+            super::direct_tool_surface::read_effect(
+                &workspace.join(format!("{name}.txt")),
+                root.path(),
+                Path::new(&session_path),
+            ),
             name
         );
     }
-    let session_path = std::fs::read_to_string(root.path().join("session-path")).unwrap();
     let store = SessionStore::open(session_path.into()).unwrap();
     let projection = store.load_projection().unwrap();
     assert_eq!(projection.unsettled_turns.len(), 1);

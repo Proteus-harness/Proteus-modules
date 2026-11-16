@@ -6,6 +6,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import re
 import shutil
 import subprocess
 import sys
@@ -25,6 +26,34 @@ class Package:
     implementation: Path
     exports: dict
     requirements: tuple[str, ...] = ()
+    model_connections: tuple[dict, ...] = ()
+
+
+def model_connections(path, exports):
+    """Author-owned creation presets; packages remain independent of providers."""
+    if not path.is_file():
+        return ()
+    entries = json.loads(path.read_text())
+    if not isinstance(entries, list):
+        raise ValueError(f"Invalid model connection presets: {path}")
+    identities = set()
+    fields = {"id", "title", "description", "module_id", "module_config", "env_allowlist"}
+    for entry in entries:
+        if (not isinstance(entry, dict) or set(entry) != fields
+                or not all(isinstance(entry[key], str) and entry[key].strip()
+                           for key in ("id", "title", "description", "module_id"))
+                or any(entry[key] != entry[key].strip() or any(ord(char) < 32 or ord(char) == 127 for char in entry[key])
+                       for key in ("id", "module_id"))
+                or entry["id"] in identities or entry["module_id"] == "*"
+                or not isinstance(entry["module_config"], dict)
+                or not isinstance(entry["env_allowlist"], list)
+                or not all(isinstance(name, str) and re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", name)
+                           for name in entry["env_allowlist"])):
+            raise ValueError(f"Invalid model connection preset: {path}")
+        if not any(value in exports.get("model", []) for value in ("*", entry["module_id"])):
+            raise ValueError(f"Model connection preset is not exported: {path}")
+        identities.add(entry["id"])
+    return tuple(entries)
 
 
 def packages(root=ROOT):
@@ -40,9 +69,11 @@ def packages(root=ROOT):
         if (not isinstance(requirements, list)
                 or not all(isinstance(value, str) and value.strip() for value in requirements)):
             raise SystemExit(f"Invalid build requirements for module package: {identity}")
+        declared_exports = json.loads(exports.read_text())
         found[identity] = Package(identity, spec["name"], spec["version"], manifest.resolve(),
-                                  root / metadata["implementation"], json.loads(exports.read_text()),
-                                  tuple(dict.fromkeys(requirements)))
+                                  root / metadata["implementation"], declared_exports,
+                                  tuple(dict.fromkeys(requirements)),
+                                  model_connections(exports.with_name("model-connections.json"), declared_exports))
     if not found:
         raise SystemExit(f"No module packages in {root}")
     return found
@@ -226,9 +257,12 @@ def install(package, binary, destination, root=ROOT, *, expected_sha256=None):
                              "rebuild that package without --no-build")
         staged[metadata] = temporary_for(metadata, "stage")
         with staged[metadata].open("w") as stream:
-            json.dump({"id": package.identity, "version": package.version,
-                       "command": [f"bin/{package.binary}"], "exports": package.exports,
-                       "sha256": digest}, stream, ensure_ascii=False, indent=2)
+            manifest = {"id": package.identity, "version": package.version,
+                        "command": [f"bin/{package.binary}"], "exports": package.exports,
+                        "sha256": digest}
+            if package.model_connections:
+                manifest["model_connections"] = package.model_connections
+            json.dump(manifest, stream, ensure_ascii=False, indent=2)
             stream.write("\n")
 
         # Complete every fallible copy/serialization before changing live files.

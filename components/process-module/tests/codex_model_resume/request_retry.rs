@@ -285,7 +285,11 @@ async fn check(mode: Mode) {
         );
     }
     assert_eq!(
-        std::fs::read_to_string(workspace.join("effects.log")).unwrap(),
+        super::direct_tool_surface::read_effect(
+            &workspace.join("effects.log"),
+            root.path(),
+            runtime.session_dir().unwrap(),
+        ),
         "x"
     );
     let session_dir = runtime.session_dir().unwrap().to_owned();

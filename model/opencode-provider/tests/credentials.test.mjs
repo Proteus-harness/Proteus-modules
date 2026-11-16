@@ -88,3 +88,17 @@ test("default database follows XDG and explicit path expansion stays local to th
     for (const value of ["~/db", "$HOME/db", "${HOME}/db"]) assert.equal(credentialDatabasePath(value, { HOME: "/example" }), "/example/db");
     for (const value of [null, 1, ""]) assert.throws(() => credentialDatabasePath(value), /Invalid OpenCode database path/);
 });
+
+test("an explicit connection key is isolated and never edits the native credential database", () => fixture(async ({ path, insert }) => {
+    insert("native", "opencode-go", { type: "key", key: "native-key" }, 1, 1);
+    const before = await readFile(path), stamp = await stat(path);
+    const override = createCredentialReader({ providerID: "opencode-go", databasePath: path, apiKey: "connection-key",
+        envNames: ["KEY"], environment: { KEY: "environment-key" } });
+    assert.deepEqual(await override(signal()), { type: "key", key: "connection-key" });
+    assert.deepEqual(await readFile(path), before);
+    assert.equal((await stat(path)).mtimeMs, stamp.mtimeMs);
+    assert.equal((await createCredentialReader({ providerID: "opencode-go", databasePath: path })(signal())).key, "native-key");
+    for (const apiKey of [null, false, "", " "]) assert.throws(() => createCredentialReader({ providerID: "route", apiKey }), /nonempty text/);
+    const controller = new AbortController(); controller.abort(new Error("cancel override"));
+    await assert.rejects(override(controller.signal), /cancel override/);
+}));

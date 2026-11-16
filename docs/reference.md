@@ -28,8 +28,9 @@ slot authority.
 
 ## Native OpenCode Model
 
-`model/opencode-provider` экспортирует `model/opencode` (`v13`) через
-`proteus-opencode-module`. Он вызывает pinned `ModelsDev`, `ModelResolver` и
+`model/opencode-provider` предоставляет конкретные model exports (`v13`),
+по умолчанию `model/opencode`, через `proteus-opencode-module`.
+Он вызывает pinned `ModelsDev`, `ModelResolver` и
 `LLMClient` OpenCode напрямую. Это отдельный model slot: выбор его в профиле
 Codex сохраняет выбранные workflow, context, tools, policy и compactor Codex;
 native agent prompt и OpenCode session loop не добавляются.
@@ -41,7 +42,7 @@ headers OpenCode. Одна canonical session сохраняет affinity меж�
 Ошибки провайдера показывают безопасную native category и HTTP status;
 исходные body, headers и credential-bearing messages не публикуются.
 
-Обязательный `module_config.model.opencode.provider` выбирает native provider
+Обязательный `module_config.model.<connection>.provider` выбирает native provider
 (например, `opencode-go`). Каталог `model.catalog.v1` публикует его chat-модели,
 названия, hidden status и точные native effort variants. Каталог удерживается
 на пять минут с объединением одновременных запросов; после TTL обновляется при
@@ -58,15 +59,34 @@ API key читается из credential table OpenCode v2 в read-only режи
 объявленными native provider. Адаптер не создаёт и не мигрирует DB, не использует
 Pi auth и старый `auth.json`. SQLite WAL/SHM coordination sidecars допустимы:
 чтение видит committed WAL без изменения данных и checkpoint. OAuth требует native refresh и в этом ограниченном
-model export явно отклоняется. Дополнительные параметры: `database_path`,
+model export явно отклоняется. Явный `api_key` — отдельный opt-in override
+одного подключения; если он задан, shared OpenCode DB не читается и не меняется.
+При отсутствии override прежний порядок DB → environment сохраняется.
+Дополнительные параметры: `database_path`,
 `models_file`, `models_url`; пример и способы проверки описаны в
 [README runtime](../workflow/opencode-runtime/README.md#model-export).
-Эти четыре поля публикуются в module-owned `config_schema`: обязательный
+Эти пять полей публикуются в module-owned `config_schema`: обязательный
 `provider` — свободный ID из native каталога, остальные поля — дополнительные
 строковые overrides без навязанных значений. Раздел подключения поясняет
-авторизацию через OpenCode; отдельного ввода ключа, OAuth или параметра `route`
-этот model export не предоставляет. Schema меняет только форму настроек,
-не runtime-поведение и не выбор остальных slots.
+авторизацию через OpenCode; явный ключ — обычное секретное поле формы.
+OAuth и отдельного параметра `route` model export не предоставляет.
+Конкретный export ID произволен: несколько model exports одного worker могут
+независимо использовать Go, Zen и другие native маршруты. Именованные настройки
+моделей ссылаются на этот ID, а не на название native сервиса.
+
+`module.json.model_connections` — module-owned варианты создания подключения:
+`id`, `title`, `description`, конкретный начальный `module_id`, объект
+`module_config` и явный `env_allowlist`. Это шаблоны, а не подключённые аккаунты.
+`package.py` переносит необязательный `model-connections.json` рядом с
+`components/<package>/exports.json`; конкретные провайдеры в packager не зашиты.
+Model-pack публикует OpenAI API, Anthropic API, совместимый Responses API и
+существующую авторизацию ChatGPT. OpenCode installer публикует Go, Zen и
+произвольный native маршрут в `share/modules/opencode-runtime/module.json`.
+Клиент выбирает уникальный конкретный ID вместо wildcard и регистрирует
+его вместе с начальным config одной транзакцией Core. Создание записи не
+подтверждает ключ и не означает получение каталога: API-адаптеры без discovery
+требуют задать модель отдельно. Вход ChatGPT остаётся поддержанной CLI-командой
+`proteus-model-pack-module auth openai_codex login`, не универсальным process OAuth API.
 
 `model.quota.v1` объявляется только для `opencode-go`: Go usage windows и USD
 показатели используют тот же ключ и общий stateless helper

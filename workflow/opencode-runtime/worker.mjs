@@ -6,7 +6,7 @@ import { createContextExport } from "./context.mjs";
 import { createCompactionExport } from "./compaction.mjs";
 
 await runComponent(async binding => {
-    if (binding.slot === "model" && binding.module_id === "opencode") {
+    if (binding.slot === "model") {
         const { modelExport } = await import("../../model/opencode-provider/adapter.mjs");
         return modelExport(binding);
     }

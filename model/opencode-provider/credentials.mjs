@@ -32,11 +32,16 @@ function decodeCredential(value) {
 }
 
 /** Native precedence: saved active/latest credential first, provider environment second. */
-export function createCredentialReader({ providerID, databasePath, envNames = [], environment = process.env }) {
+export function createCredentialReader({ providerID, databasePath, apiKey, envNames = [], environment = process.env }) {
     if (typeof providerID !== "string" || !providerID.trim()) throw new Error("OpenCode provider id is required");
+    if (apiKey !== undefined && (typeof apiKey !== "string" || !apiKey.trim()))
+        throw new Error("OpenCode explicit API key must be nonempty text");
     const path = credentialDatabasePath(databasePath, environment);
     return async (signal) => {
         signal?.throwIfAborted();
+        // An explicit per-connection override never mutates the shared native
+        // credential store. Omitting it preserves native saved-key/env precedence.
+        if (apiKey !== undefined) return { type: "key", key: apiKey };
         let present = true;
         try { await access(path); }
         catch (error) {

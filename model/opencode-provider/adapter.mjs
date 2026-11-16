@@ -43,23 +43,26 @@ export function modelFailure(error, { signal, started = false } = {}) {
 
 export function modelExport(binding, dependencies = {}) {
     const config = binding.module_config;
-    if (binding.slot !== 'model' || binding.module_id !== 'opencode' || binding.contract_version !== 'v13' ||
+    if (binding.slot !== 'model' || typeof binding.module_id !== 'string' || !binding.module_id.trim() ||
+        binding.module_id !== binding.module_id.trim() || binding.module_id === '*' || /[\x00-\x1f\x7f]/.test(binding.module_id) || binding.contract_version !== 'v13' ||
         !config || typeof config.provider !== 'string' || !config.provider.trim() ||
-        Object.keys(config).some(key => !['provider', 'database_path', 'models_file', 'models_url'].includes(key)) ||
-        ['database_path', 'models_file', 'models_url'].some(key => config[key] !== undefined && typeof config[key] !== 'string'))
+        Object.keys(config).some(key => !['provider', 'api_key', 'database_path', 'models_file', 'models_url'].includes(key)) ||
+        ['api_key', 'database_path', 'models_file', 'models_url'].some(key => config[key] !== undefined && typeof config[key] !== 'string') ||
+        (config.api_key !== undefined && !config.api_key.trim()))
         throw new Error('Invalid OpenCode model configuration');
     const runtime = dependencies.runtime ?? createNativeRuntime(config);
     const quota = config.provider === 'opencode-go' ? (dependencies.quota ?? createGoQuotaReader()) : null;
     async function credential(signal) {
         return (dependencies.credential ?? createCredentialReader({ providerID: config.provider,
-            databasePath: config.database_path, envNames: await runtime.environment(signal) }))(signal);
+            databasePath: config.database_path, apiKey: config.api_key,
+            envNames: config.api_key === undefined ? await runtime.environment(signal) : [] }))(signal);
     }
     const stream = dependencies.stream ?? (async (request, signal, accept) => {
         await Effect.runPromise(Stream.runForEach(LLMClient.stream(request), event => Effect.promise(() => accept(event))).pipe(
             Effect.provide(LLMClient.layer), Effect.provide(RequestExecutor.fetchLayer)), { signal });
     });
     return {
-        manifest: { slot: 'model', module_id: 'opencode', contract_version: 'v13', composition: 'select_one',
+        manifest: { slot: 'model', module_id: binding.module_id, contract_version: 'v13', composition: 'select_one',
             module_features: ['model.catalog.v1', ...(quota ? ['model.quota.v1'] : [])], config_schema: configSchema },
         async invoke(method, params, { signal, hostCall }) {
             if (method === 'catalog') return runtime.catalog(signal);

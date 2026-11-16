@@ -201,27 +201,45 @@ test('failure diagnostics omit native credential-bearing messages and validate c
 });
 
 test('configuration form exposes supported fields without inventing defaults or restricting provider IDs', () => {
-    const config = { provider: 'custom-provider', database_path: '/synthetic/opencode.db',
+    const config = { provider: 'custom-provider', api_key: 'synthetic-explicit-key', database_path: '/synthetic/opencode.db',
         models_file: '/synthetic/models.json', models_url: 'https://catalog.invalid/models.json' };
     const adapter = modelExport({ ...binding, module_config: config }, { runtime: {} });
     const fields = adapter.manifest.config_schema.fields;
     assert.deepEqual(fields.map(field => field.key), Object.keys(config));
     for (const field of fields) {
         assert.equal(field.default, null, 'opening the form must not add runtime overrides');
-        assert.deepEqual(field.value, { type: 'string', multiline: false, secret: false });
+        assert.deepEqual(field.value, { type: 'string', multiline: false, secret: field.key === 'api_key' });
         assert.equal(field.required, field.key === 'provider');
-        assert.equal(field.advanced, field.key !== 'provider');
+        assert.equal(field.advanced, !['provider', 'api_key'].includes(field.key));
         assert.ok(field.title && field.description && field.section.description);
         assert.throws(() => modelExport({ ...binding, module_config: { ...config, [field.key]: false } },
             { runtime: {} }), /Invalid/);
     }
     assert.match(fields[0].section.description, /OpenCode.*OAuth/);
-    assert.deepEqual(config, { provider: 'custom-provider', database_path: '/synthetic/opencode.db',
+    assert.deepEqual(config, { provider: 'custom-provider', api_key: 'synthetic-explicit-key', database_path: '/synthetic/opencode.db',
         models_file: '/synthetic/models.json', models_url: 'https://catalog.invalid/models.json' });
     assert.throws(() => modelExport({ ...binding, module_config: {} }, { runtime: {} }), /Invalid/);
     assert.throws(() => modelExport({ ...binding, module_config: { provider: ' ' } }, { runtime: {} }), /Invalid/);
-    for (const key of ['api_key', 'auth_file', 'route']) assert.throws(() => modelExport({ ...binding,
+    for (const key of ['auth_file', 'route']) assert.throws(() => modelExport({ ...binding,
         module_config: { provider: 'custom-provider', [key]: 'unsupported' } }, { runtime: {} }), /Invalid/);
+});
+
+test('concrete connection IDs and explicit keys stay export-local without native auth writes', async () => {
+    for (const module_id of ['work-go', 'personal-zen']) {
+        const config = { provider: 'opencode-go', api_key: 'synthetic-' + module_id };
+        let received;
+        const adapter = modelExport({ ...binding, module_id, module_config: config }, {
+            runtime: { environment() { throw new Error('Explicit key must not read native environment'); } },
+            quota: async ({ getAuth }) => { received = await getAuth(); return { plan: 'synthetic' }; },
+        });
+        assert.equal(adapter.manifest.module_id, module_id);
+        const result = await adapter.invoke('quota', null, { signal: new AbortController().signal });
+        assert.deepEqual(received, { auth: { apiKey: config.api_key } });
+        assert.deepEqual(result, { plan: 'synthetic' });
+        assert.ok(!JSON.stringify(adapter.manifest).includes(config.api_key));
+    }
+    for (const module_id of ['', '*', ' bad', 'bad\nname'])
+        assert.throws(() => modelExport({ ...binding, module_id }, { runtime: {} }), /Invalid/);
 });
 
 test('only a native completed message survives a subsequent stream failure', async () => {

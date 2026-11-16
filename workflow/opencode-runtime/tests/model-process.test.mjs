@@ -31,6 +31,33 @@ test('native OpenCode catalog and capabilities cross the real v3 worker, then wo
     } finally { assert.deepEqual(await host.close(), { code: 0, signal: null }); }
 });
 
+test('one native worker keeps Go and Zen connections independent under concrete export IDs', async () => {
+    const f = await fixture(), source = nativeCatalog();
+    source.opencode = { ...source['opencode-go'], id: 'opencode', name: 'Synthetic Zen',
+        models: { 'zen-only': { ...source['opencode-go'].models[flash], id: 'zen-only', name: 'Zen only' } } };
+    await writeFile(f.catalog, JSON.stringify(source));
+    const authBefore = await readFile(f.database);
+    const host = component(f, f.config, { 'work-go': f.config,
+        'personal-zen': { ...f.config, provider: 'opencode' } });
+    try {
+        const initialized = await host.initialize();
+        assert.equal(initialized.error, undefined);
+        const exports = initialized.result.exports;
+        assert.deepEqual(exports.map(exported => exported.module_id), ['work-go', 'personal-zen']);
+        assert.deepEqual(exports[0].module_features, ['model.catalog.v1', 'model.quota.v1']);
+        assert.deepEqual(exports[1].module_features, ['model.catalog.v1']);
+        const [go, zen] = await Promise.all([
+            host.invoke('catalog', null, 'work-go').result,
+            host.invoke('catalog', null, 'personal-zen').result,
+        ]);
+        assert.deepEqual(go.result.models.map(model => model.id).sort(), [flash, second].sort());
+        assert.deepEqual(zen.result.models.map(model => model.id), ['zen-only']);
+        assert.match((await host.invoke('describe', { model: { model: 'zen-only' } }, 'work-go').result).error.message, /unavailable/);
+        assert.match((await host.invoke('describe', { model: { model: flash } }, 'personal-zen').result).error.message, /unavailable/);
+        assert.deepEqual(await readFile(f.database), authBefore);
+    } finally { assert.deepEqual(await host.close(), { code: 0, signal: null }); }
+});
+
 test('model metadata, options, validation and persisted selection cross ready Core and native worker', { timeout: 45000, skip: readyCore }, async () => {
     const f = await fixture();
     let server = await appServer(f, 'first');

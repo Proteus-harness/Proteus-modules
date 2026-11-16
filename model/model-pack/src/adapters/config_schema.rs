@@ -11,7 +11,7 @@ pub fn config_schema(config: &Value) -> ModuleConfigSchema {
         .get("implementation")
         .and_then(Value::as_str)
         .unwrap_or("");
-    let mut fields = vec![Field::new("implementation","Способ подключения","Способ подключения провайдера. Модель выбирается отдельно в чате. После сохранения форма обновится для выбранного подключения.",Kind::choices(&[
+    let mut fields = vec![Field::new("implementation","Способ подключения","Способ подключения провайдера. Модель задаётся отдельно. После сохранения форма обновится для выбранного подключения.",Kind::choices(&[
         ("openai","OpenAI API"),("openai_compatible","OpenAI-совместимый API"),("openai_codex","Подписка ChatGPT"),("anthropic","Anthropic API"),("fake","Тестовая модель"),
     ])).required()];
     if implementation == "fake" {
@@ -28,22 +28,24 @@ pub fn config_schema(config: &Value) -> ModuleConfigSchema {
     }
     let codex = implementation == "openai_codex";
     let anthropic = implementation == "anthropic";
-    fields.push(
-        Field::new(
-            "base_url",
-            "Адрес сервера",
-            "Базовый адрес API для этого подключения; не определяет выбранную модель.",
-            Kind::text(),
-        )
-        .with_default(if codex {
-            super::codex_auth::CODEX_BASE_URL
-        } else if anthropic {
-            "https://api.anthropic.com"
-        } else {
-            "https://api.openai.com/v1"
-        })
-        .advanced(),
-    );
+    let base_url = Field::new(
+        "base_url",
+        "Адрес сервера",
+        "Базовый адрес API для этого подключения; не определяет выбранную модель.",
+        Kind::text(),
+    )
+    .with_default(if codex {
+        super::codex_auth::CODEX_BASE_URL
+    } else if anthropic {
+        "https://api.anthropic.com"
+    } else {
+        "https://api.openai.com/v1"
+    });
+    fields.push(if implementation == "openai_compatible" {
+        base_url
+    } else {
+        base_url.advanced()
+    });
     if codex {
         fields.push(Field::new(
             "auth_file",
@@ -91,7 +93,8 @@ pub fn config_schema(config: &Value) -> ModuleConfigSchema {
                 "ANTHROPIC_API_KEY"
             } else {
                 "OPENAI_API_KEY"
-            }),
+            })
+            .advanced(),
         );
         fields.push(
             Field::new(
@@ -116,13 +119,12 @@ pub fn config_schema(config: &Value) -> ModuleConfigSchema {
             Field::new(
                 "api_key",
                 "Ключ API",
-                "Явное значение имеет приоритет над файлом и переменной.",
+                "Если пусто — используется файл ключа или переменная окружения. Явное значение имеет приоритет и хранится в конфиге Proteus.",
                 Kind::String {
                     multiline: false,
                     secret: true,
                 },
-            )
-            .advanced(),
+            ),
         );
         for (key, title) in [
             ("base_url_file", "Файл с адресом сервера"),
