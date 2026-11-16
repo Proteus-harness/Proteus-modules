@@ -22,9 +22,14 @@ Reference export `tool/codex_patch` адаптирован из OpenAI Codex com
 `args.patch` (function) либо `args.input` (freeform), cwd вызова внутри workspace,
 `ToolResult` или module error. Policy/approval/safety принадлежат общему tool path.
 Remote Environment ID отклоняется явно.
-Workspace path validation сохраняет существующее ограничение Proteus:
-относительные пути без parent traversal и без symlink-компонентов. Это
-ограничение текущей локальной сборки, а не полная filesystem semantics Codex.
+Workspace path validation сохраняет границу Proteus: относительные пути и
+абсолютные пути внутри выбранного working directory, без parent traversal
+и symlink-компонентов. Абсолютный путь сначала переводится в относительный
+через компонентный `strip_prefix`, поэтому aliases одинаково участвуют в
+проверках duplicate target и self-move до записей. `workdir` выбирается внутри
+workspace; при выборе подкаталога разрешённая граница остаётся этим
+подкаталогом, а не расширяется обратно до корня workspace. Это ограничение
+локальной сборки, а не полная filesystem semantics Codex.
 Полный upstream applied delta, diff-progress events, длительность/exit-code
 обёртки tool output и optional PreserveLineEndings не представлены этим срезом.
 Proxy-профили сохраняют function tool surface; freeform transport настраивается

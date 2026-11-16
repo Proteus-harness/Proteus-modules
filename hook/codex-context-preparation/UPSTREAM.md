@@ -20,6 +20,13 @@ SHA256 сохранены в `provenance.json`; Apache-2.0 LICENSE находи�
 
 `codex_base_instructions` выбирает шаблон по точному model ID на `BeforeModel`
 прямого model call. Пользовательские instructions и messages сохраняются.
+Перед выдачей модели устаревший пример `apply_patch` с `command:[...]` из
+fallback-шаблона переводится в фактический binding из `request.tools`:
+function с `patch:string` получает JSON arguments, freeform с `input:string` —
+пример raw patch без JSON wrapper. При отсутствии такого binding или старого
+примера текст остаётся прежним. Это локальная адаптация model-facing текста;
+файлы upstream и их SHA256 не меняются, выбор по model ID не определяет
+форму вызова tool.
 Конфигурация hook явная, она не импортирует обновляемые remote instructions.
 Каталог native CLI, полученный с сервера, может отличаться от этого публичного
 pin. Равенство установленному CLI проверяется отдельным differential gate.

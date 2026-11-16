@@ -14,7 +14,7 @@ impl ToolModule for ApplyPatchTool {
     fn spec_json(&self) -> String {
         let mut spec = ToolSpec::new(
             "apply_patch",
-            "Apply a workspace patch using the Codex format documented in the profile instructions.",
+            "Apply a workspace patch using the Codex format documented in the profile instructions. Patch paths may be relative to the selected working directory or absolute inside it; parent traversal and symlink components are rejected.",
             json!({
                 "type": "object",
                 "properties": {

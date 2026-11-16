@@ -6,7 +6,13 @@ use std::{
 };
 
 pub(super) fn checked_target_path(workspace: &Path, path: &Path) -> Result<PathBuf, String> {
-    let clean = clean_relative_path(path)?;
+    let relative = if path.is_absolute() {
+        path.strip_prefix(workspace)
+            .map_err(|_| format!("path escapes workspace: {}", path.display()))?
+    } else {
+        path
+    };
+    let clean = clean_relative_path(relative)?;
     let target = workspace.join(&clean);
     let mut current = workspace.to_path_buf();
     if let Some(parent) = clean.parent() {
