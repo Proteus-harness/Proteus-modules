@@ -1,0 +1,14 @@
+{
+  "repository": "https://github.com/NousResearch/hermes-agent",
+  "release": "v0.23.1",
+  "revision": "3b421578588243f920886e6fe79a6faa87ea026e",
+  "files": {
+    "LICENSE": "821556e6336796450ab852d375117b48a4887e71d255794fd6318d99982a5ab6",
+    "agent/tool_executor.py": "201ef6dafb7ea1a78080aa55eb8e101d4f6713430716222d9901acf4ca1f26b7",
+    "agent/inline_tool_executors.py": "b6ffcad0008c9152e2c8af75eaeaf94c94cc6582231832600ab6f92ccdee1c9b",
+    "agent/context_compressor.py": "932180e738e02ff90c62a1175db3ee0727b922f835583e6a4862e111d0eec1b2",
+    "agent/session_persistence.py": "ea1eb6a430a9ef738c80f79f36f5c6fd5e61b481d7a6c27d72fa2b66c35a023d",
+    "hermes_cli/middleware.py": "1fe2e27888aab268f5938b3efc33cb70cd137443c6dea1587c37bdb370b66a2d",
+    "tools/todo_tool.py": "a895fb70e9d6d118cc7992114e7efaece753d57af115cf822caf27e67cef4c87"
+  }
+}
