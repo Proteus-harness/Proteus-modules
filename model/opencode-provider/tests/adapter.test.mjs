@@ -55,7 +55,7 @@ test('actual OpenCode resolver and native LLM client preserve model, reasoning, 
     assert.ok(progress.some(row => row.event.ReasoningDelta));
     assert.ok(progress.some(row => row.event.TextDelta));
     assert.equal(result.event_count, progress.length);
-    assert.deepEqual(progress.map(row => row.sequence), progress.map((_, index) => index + 1));
+    assert.deepEqual(progress.map(row => row.sequence), progress.map((_, index) => index));
     assert.equal(received.length, 1);
     assert.equal(received[0].model, 'deepseek-v4.1-flash');
     assert.equal(received[0].reasoning_effort, 'high');
@@ -100,6 +100,60 @@ test('Go requests without canonical session metadata fail before HTTP instead of
     assert.equal(output.terminal.kind, 'request_error');
     assert.match(output.terminal.failure.message, /client_metadata.session_id/);
     assert.equal(received.length, 0);
+});
+
+test('reasoning and tool streaming obey zero-based Core callback acknowledgments', async () => {
+    const runtime = createNativeRuntime(binding.module_config, { loadSnapshots: async () => snapshots });
+    const native = [
+        { type: 'reasoning-start', id: 'reason' },
+        { type: 'reasoning-delta', id: 'reason', text: 'inspect workspace' },
+        { type: 'reasoning-end', id: 'reason' },
+        { type: 'tool-input-start', id: 'read-one', name: 'read' },
+        { type: 'tool-input-delta', id: 'read-one', name: 'read', text: '{"path":"a"}' },
+        { type: 'tool-input-end', id: 'read-one', name: 'read' },
+        { type: 'tool-call', id: 'read-one', name: 'read', input: { path: 'a' } },
+        { type: 'finish', reason: { normalized: 'tool-calls' },
+          usage: { inputTokens: 100, outputTokens: 30, reasoningTokens: 20 } },
+    ];
+    const adapter = modelExport(binding, { runtime, credential: async () => ({ type: 'key', key: 'synthetic' }),
+        stream: async (_request, _signal, accept) => { for (const event of native) await accept(event); } });
+    const emitted = [];
+    const output = await adapter.invoke('stream', { request: request(), stream: true }, {
+        signal: new AbortController().signal,
+        hostCall: async (method, row) => {
+            assert.equal(method, 'host.model.emit');
+            assert.equal(row.sequence, emitted.length, 'Core requires the next zero-based sequence');
+            assert.ok(!row.event.Response && !row.event.Error, 'terminal responses use the invoke result');
+            emitted.push(row.event);
+        },
+    });
+    assert.equal(output.terminal.kind, 'response');
+    assert.equal(output.event_count, emitted.length);
+    assert.deepEqual(emitted.map(event => Object.keys(event)[0]), [
+        'ReasoningDelta', 'ToolCallDelta', 'ToolCallDelta', 'ToolCallFinished', 'Usage', 'MessageCompleted', 'Done',
+    ]);
+    assert.equal(output.terminal.response.tool_calls[0].id, 'read-one');
+    assert.equal(output.terminal.response.usage.reasoning_output_tokens, 20);
+});
+
+test('a rejected callback does not count as an acknowledged delivery', async () => {
+    const runtime = createNativeRuntime(binding.module_config, { loadSnapshots: async () => snapshots });
+    const adapter = modelExport(binding, { runtime, credential: async () => ({ type: 'key', key: 'synthetic' }),
+        stream: async (_request, _signal, accept) => {
+            await accept({ type: 'text-delta', id: 'text', text: 'first' });
+            await accept({ type: 'text-delta', id: 'text', text: 'second' });
+        } });
+    let deliveries = 0;
+    const output = await adapter.invoke('stream', { request: request(), stream: true }, {
+        signal: new AbortController().signal,
+        hostCall: async (_method, row) => {
+            assert.equal(row.sequence, deliveries);
+            if (deliveries === 1) throw new Error('Core rejected callback');
+            deliveries++;
+        },
+    });
+    assert.equal(output.terminal.kind, 'stream_error');
+    assert.equal(output.event_count, 1);
 });
 
 test('unset Core output limit preserves the native SDK request default without a synthetic 4096 cap', async t => {

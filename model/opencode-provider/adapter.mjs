@@ -82,7 +82,13 @@ export function modelExport(binding, dependencies = {}) {
                         started = true;
                         completedMessages.push(event.MessageCompleted.message);
                     }
-                    if (params.stream) for (const event of events) await hostCall('host.model.emit', { sequence: ++count, event });
+                    if (params.stream) for (const event of events) {
+                        // Process model callbacks start at zero. Count only
+                        // acknowledged deliveries so terminal event_count is
+                        // the number Core actually accepted.
+                        await hostCall('host.model.emit', { sequence: count, event });
+                        count++;
+                    }
                 });
                 return { event_count: count, terminal: { kind: 'response', response: collector.finish() } };
             } catch (error) {
