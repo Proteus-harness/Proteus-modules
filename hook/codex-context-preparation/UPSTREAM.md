@@ -34,3 +34,32 @@ pin. Равенство установленному CLI проверяется 
 `codex_compact` продолжает реализовывать локальный алгоритм предыдущего pin.
 Текущая native remote compaction и lifecycle code-mode-host имеют отдельные
 границы исполнения и не подтверждаются тестом выбора base instructions.
+
+## Локальная И Удалённая Компактация
+
+Уже compactor pin `67cc3c3` выбирает удалённую V2-компактацию для OpenAI/Azure;
+feature `remote_compaction_v2` включена по умолчанию. При её выключении тот же
+provider использует прежний `POST responses/compact`, а provider без этой
+capability — локальный summary. Источники: [выбор ветки](https://github.com/openai/codex/blob/67cc3c318dc8b5532db6ade4182b1dc6f3870889/codex-rs/core/src/tasks/compact.rs#L41-L76),
+[capability провайдера](https://github.com/openai/codex/blob/67cc3c318dc8b5532db6ade4182b1dc6f3870889/codex-rs/model-provider/src/provider.rs#L353-L364)
+и [default feature](https://github.com/openai/codex/blob/67cc3c318dc8b5532db6ade4182b1dc6f3870889/codex-rs/features/src/lib.rs#L1656-L1661).
+Локальная реализация Proteus — выбранная ветка этого pin, а не полный паритет
+компактации нативного ChatGPT-профиля Codex.
+
+V2 добавляет последним input item `compaction_trigger` в обычный Responses
+запрос и получает `compaction` с `encrypted_content`; это непрозрачный
+checkpoint для следующих запросов, а не текстовый summary. Такой explicit
+trigger также описан в [официальном Responses API](https://developers.openai.com/api/docs/guides/compaction#request-compaction-with-an-explicit-trigger).
+Наш [summary request](src/summary.rs) делает обычный completion без tools.
+У `openai_codex` уже есть OAuth-транспорт `chatgpt.com/backend-api/codex/responses`,
+но удалённая компактация требует операции/capability в model contract,
+кодирования trigger, чтения и повторной отправки checkpoint через model adapter.
+Сейчас OpenAI adapter отклоняет canonical `Opaque` на входе и не декодирует
+compaction item на выходе; напрямую вызывать HTTP из hook в обход model boundary
+нельзя.
+
+Для DeepSeek через OpenCode Go поддержка remote-компактации Codex не заявлена;
+локальная ветка соответствует fallback для provider без этой capability.
+Зашифрованный OpenAI checkpoint нельзя прозрачно подставить вместо summary
+в запрос DeepSeek. Наличие OAuth-маршрута и описанного протокола само по себе
+не подтверждает доступ remote-компактации для конкретного аккаунта и модели.
