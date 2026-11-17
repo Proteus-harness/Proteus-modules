@@ -14,6 +14,7 @@ pub(super) struct OpenAiModelProfile {
     pub supports_freeform_tools: bool,
     pub supports_json_schema: bool,
     pub supports_reasoning_config: bool,
+    pub supports_compaction: bool,
     pub support_verbosity: bool,
     pub verbosity: Option<String>,
     pub default_verbosity: Option<String>,
@@ -79,6 +80,12 @@ impl OpenAiModelProfile {
                 "supports_reasoning_config",
                 false,
             )?,
+            supports_compaction: bool_setting(
+                config,
+                capabilities,
+                "supports_compaction",
+                super::default_compaction_support(config),
+            )?,
             support_verbosity,
             verbosity,
             default_verbosity,
@@ -100,6 +107,7 @@ impl OpenAiModelProfile {
             .with_developer_role(true)
             .with_cache_hints(true)
             .with_reasoning_config(self.supports_reasoning_config)
+            .with_compaction(self.supports_compaction)
             .with_streaming(true)
             .with_provider_hosted_tools(self.hosted_tools.supported_kinds().to_vec())
             .with_max_input_tokens(max_input_tokens)

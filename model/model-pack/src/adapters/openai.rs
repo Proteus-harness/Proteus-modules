@@ -14,7 +14,7 @@ use crate::{
     domain::ModelRef,
     model_standard::{
         CanonicalModelRequest, CanonicalModelResponse, ModelCapabilities, ModelFailure,
-        ModelFailureKind, ModelStreamEvent,
+        ModelFailureKind, ModelOperation, ModelStreamEvent,
     },
 };
 
@@ -29,10 +29,14 @@ mod codex_catalog;
 mod codex_catalog_tests;
 mod codex_config;
 mod codex_quota;
+mod compaction;
+pub(super) use compaction::default_support as default_compaction_support;
 #[cfg(test)]
 mod codex_quota_tests;
 #[cfg(test)]
 mod codex_tests;
+#[cfg(test)]
+mod compaction_tests;
 mod errors;
 mod hosted_tools;
 mod http_retry;
@@ -238,7 +242,9 @@ impl Model for OpenAiResponsesClient {
     }
 
     async fn stream(&self, request: CanonicalModelRequest) -> Result<ModelEventStream> {
-        if self.stream_enabled {
+        // Native compaction is a strict streaming operation even when ordinary
+        // generation uses a non-streaming provider configuration.
+        if self.stream_enabled || request.operation == ModelOperation::Compact {
             self.stream_response(request).await
         } else {
             let response = if self.codex_auth.is_some() {
@@ -268,11 +274,12 @@ impl OpenAiResponsesClient {
     }
 
     async fn stream_response(&self, request: CanonicalModelRequest) -> Result<ModelEventStream> {
+        let compact = request.operation == ModelOperation::Compact;
         let body = self.request_body(&request, true)?;
         let identity_headers = self.request_identity_headers(&request)?;
         // Only diagnostic fallback needs the canonical request after encoding.
         // Drop it before network waits when replay is disabled (including Codex).
-        let fallback_request = self.stream_error_fallback.then_some(request);
+        let fallback_request = (self.stream_error_fallback && !compact).then_some(request);
         let response = self.send_response(&body, &identity_headers).await?;
 
         // reqwest bytes_stream → eventsource-stream Event → наши ModelStreamEvent.
@@ -281,7 +288,7 @@ impl OpenAiResponsesClient {
         let client = self.clone();
         let mut sse = response.bytes_stream().eventsource();
         let events = async_stream::stream! {
-            let mut state = OpenAiStreamState::default();
+            let mut state = OpenAiStreamState::for_compaction(compact);
             let mut saw_terminal_event = false;
             loop {
                 let chunk = match client.stream_idle_timeout.next(&mut sse).await {
@@ -297,6 +304,9 @@ impl OpenAiResponsesClient {
                     Ok(event) => {
                         let mapped = state.translate(&event.data);
                         for mapped in mapped {
+                            if compact && !matches!(mapped, ModelStreamEvent::Response { .. } | ModelStreamEvent::Error { .. }) {
+                                continue;
+                            }
                             if matches!(
                                 mapped,
                                 ModelStreamEvent::Response { .. } | ModelStreamEvent::Error { .. }

@@ -5,7 +5,9 @@ use super::AnthropicPromptCacheConfig;
 use crate::{
     adapters::context_render::{context_text, instruction_text},
     domain::{ToolCallSurface, ToolChoice, ToolContent, ToolSpec, ToolSurface},
-    model_standard::{CanonicalMessage, CanonicalModelRequest, ContentPart, MessageRole},
+    model_standard::{
+        CanonicalMessage, CanonicalModelRequest, ContentPart, MessageRole, ModelOperation,
+    },
 };
 
 #[cfg(test)]
@@ -17,6 +19,11 @@ pub(super) fn to_anthropic_request_with_cache(
     request: &CanonicalModelRequest,
     prompt_cache: &AnthropicPromptCacheConfig,
 ) -> Result<Value> {
+    if request.operation != ModelOperation::Complete {
+        return Err(anyhow!(
+            "anthropic.messages does not support native compaction"
+        ));
+    }
     let mut body = json!({
         "model": request.model.model,
         "max_tokens": request.limits.max_output_tokens.unwrap_or(2048),

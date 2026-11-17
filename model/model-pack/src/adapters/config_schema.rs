@@ -277,6 +277,11 @@ pub fn config_schema(config: &Value) -> ModuleConfigSchema {
                 "Разрешить передачу параметров рассуждений в запросе.",
             ),
             (
+                "supports_compaction",
+                "Серверное сжатие контекста",
+                "Сервер возвращает зашифрованное состояние для продолжения разговора. Включайте только для поддерживающего этот протокол сервера.",
+            ),
+            (
                 "support_verbosity",
                 "Настройка подробности",
                 "Разрешить передачу verbosity и default_verbosity провайдеру.",
@@ -290,7 +295,7 @@ pub fn config_schema(config: &Value) -> ModuleConfigSchema {
                 .and_then(|capabilities| capabilities.get(key))
                 .or_else(|| config.get(key))
                 .cloned()
-                .unwrap_or(Value::Bool(false));
+                .unwrap_or_else(|| Value::Bool(key == "supports_compaction" && (codex || super::openai::default_compaction_support(config))));
             Field::new(key, title, description, Kind::Boolean {}).with_default(default)
         })
         .collect();

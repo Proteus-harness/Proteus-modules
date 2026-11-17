@@ -1,13 +1,14 @@
 use super::{Field, Kind, config_schema};
 use serde_json::{Value, json};
 
-const CAPABILITY_KEYS: [&str; 6] = [
+const CAPABILITY_KEYS: [&str; 7] = [
     "supports_image_input",
     "supports_parallel_tool_calls",
     "supports_freeform_tools",
     "supports_json_schema",
     "supports_reasoning_config",
     "support_verbosity",
+    "supports_compaction",
 ];
 
 fn schema_fields(config: &Value) -> Vec<Field> {
@@ -69,7 +70,7 @@ fn flat_capability_values_remain_visible_as_nested_defaults_until_overridden() {
     for key in CAPABILITY_KEYS {
         assert_eq!(
             field(capability_fields(&defaults), key).default,
-            Some(json!(false))
+            Some(json!(key == "supports_compaction"))
         );
     }
 }

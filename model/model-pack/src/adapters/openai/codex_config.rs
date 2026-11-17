@@ -12,6 +12,7 @@ pub(super) fn validate(config: &Value) -> Result<()> {
         "supports_freeform_tools",
         "supports_json_schema",
         "supports_reasoning_config",
+        "supports_compaction",
         "support_verbosity",
         "hosted_tools",
     ];

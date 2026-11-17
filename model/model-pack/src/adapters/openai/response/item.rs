@@ -70,6 +70,13 @@ pub(crate) fn parse_output_item(item: &Value) -> Result<Option<CanonicalMessage>
                 vec![ContentPart::Reasoning { text, signature }],
             )
         }
+        Some("compaction" | "compaction_summary") => CanonicalMessage::new(
+            MessageRole::Assistant,
+            vec![ContentPart::Opaque {
+                format: super::super::compaction::FORMAT.to_owned(),
+                data: super::super::compaction::canonical_item(item)?,
+            }],
+        ),
         Some("function_call") => {
             let call_id = required_call_field(item, "call_id", "function_call")?;
             let name = required_call_field(item, "name", "function_call")?;

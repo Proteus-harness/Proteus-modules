@@ -3,7 +3,7 @@ use anyhow::{Context, Result, bail};
 use futures_util::StreamExt;
 use reqwest::{
     StatusCode,
-    header::{AUTHORIZATION, CONTENT_TYPE, HeaderMap, HeaderValue},
+    header::{ACCEPT, AUTHORIZATION, CONTENT_TYPE, HeaderMap, HeaderValue},
 };
 use serde_json::{Value, json};
 
@@ -69,6 +69,9 @@ impl OpenAiResponsesClient {
         object
             .entry("base_url")
             .or_insert_with(|| json!(CODEX_BASE_URL));
+        object
+            .entry("supports_compaction")
+            .or_insert_with(|| json!(true));
         let base_url = validate_endpoint(
             object["base_url"]
                 .as_str()
@@ -199,11 +202,17 @@ impl OpenAiResponsesClient {
         body: &Value,
         headers: &HeaderMap,
     ) -> reqwest::RequestBuilder {
-        self.http
+        let request = self
+            .http
             .post(url)
             .headers(headers.clone())
             .header(CONTENT_TYPE, "application/json")
-            .json(body)
+            .json(body);
+        if body.get("stream").and_then(Value::as_bool) == Some(true) {
+            request.header(ACCEPT, "text/event-stream")
+        } else {
+            request
+        }
     }
 
     pub(super) async fn collect_codex_response(
