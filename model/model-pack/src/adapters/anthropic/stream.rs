@@ -19,7 +19,6 @@ pub(super) struct AnthropicStreamState {
     blocks: Vec<AnthropicBlock>,
     usage: AnthropicUsage,
     stop_reason: Option<String>,
-    dsml_filter: DsmlStreamFilter,
     // Anthropic SSE референсит блоки по index, так что нужен index → block mapping.
 }
 
@@ -31,7 +30,6 @@ impl Default for AnthropicStreamState {
             blocks: Vec::new(),
             usage: AnthropicUsage::default(),
             stop_reason: None,
-            dsml_filter: DsmlStreamFilter::default(),
         }
     }
 }
@@ -47,6 +45,7 @@ enum AnthropicBlock {
     },
     Text {
         text: String,
+        filter: DsmlStreamFilter,
     },
     ToolUse {
         id: String,
@@ -115,6 +114,7 @@ impl AnthropicStreamState {
                     }
                     "text" => Some(AnthropicBlock::Text {
                         text: String::new(),
+                        filter: DsmlStreamFilter::default(),
                     }),
                     "tool_use" => {
                         let id = block
@@ -146,6 +146,7 @@ impl AnthropicStreamState {
                             index + 1,
                             AnthropicBlock::Text {
                                 text: String::new(),
+                                filter: DsmlStreamFilter::default(),
                             },
                         );
                     }
@@ -246,7 +247,15 @@ impl AnthropicStreamState {
                     _ => Vec::new(),
                 }
             }
-            "content_block_stop" => Vec::new(),
+            "content_block_stop" => {
+                let index = parsed.get("index").and_then(Value::as_u64).unwrap_or(0) as usize;
+                let Some(AnthropicBlock::Text { text, filter }) = self.blocks.get_mut(index) else {
+                    return Vec::new();
+                };
+                let pending = filter.finish();
+                text.push_str(&pending);
+                self.text_delta(pending)
+            }
             "message_delta" => {
                 if let Some(stop) = parsed
                     .get("delta")
@@ -276,12 +285,17 @@ impl AnthropicStreamState {
         }
     }
 
-    // Стартовый text и последующие дельты используют один фильтр и один буфер.
+    // Start/delta/stop share the same block-owned filter and text buffer.
     fn append_text(&mut self, index: usize, text: &str) -> Vec<ModelStreamEvent> {
-        let text = self.dsml_filter.filter(text);
-        if let Some(AnthropicBlock::Text { text: buf }) = self.blocks.get_mut(index) {
-            buf.push_str(&text);
-        }
+        let Some(AnthropicBlock::Text { text: buf, filter }) = self.blocks.get_mut(index) else {
+            return Vec::new();
+        };
+        let text = filter.filter(text);
+        buf.push_str(&text);
+        self.text_delta(text)
+    }
+
+    fn text_delta(&self, text: String) -> Vec<ModelStreamEvent> {
         if text.is_empty() {
             Vec::new()
         } else {
@@ -294,16 +308,6 @@ impl AnthropicStreamState {
     }
 
     fn finalise(&mut self) -> ModelStreamEvent {
-        let pending_text = self.dsml_filter.finish();
-        if !pending_text.is_empty() {
-            match self.blocks.last_mut() {
-                Some(AnthropicBlock::Text { text }) => text.push_str(&pending_text),
-                _ => self
-                    .blocks
-                    .push(AnthropicBlock::Text { text: pending_text }),
-            }
-        }
-
         if let Some(failure) = super::errors::context_window_stop_failure(
             self.http_status,
             self.stop_reason.as_deref(),
@@ -325,7 +329,12 @@ impl AnthropicStreamState {
                         parts.push(ContentPart::Reasoning { text, signature });
                     }
                 }
-                AnthropicBlock::Text { text } => {
+                AnthropicBlock::Text {
+                    mut text,
+                    mut filter,
+                } => {
+                    // Tolerate a missing block_stop without moving its suffix to another block.
+                    text.push_str(&filter.finish());
                     let text = sanitize_provider_text(&text);
                     if text.is_empty() {
                         continue;
@@ -384,3 +393,6 @@ impl AnthropicStreamState {
 
 #[cfg(test)]
 mod start_tests;
+
+#[cfg(test)]
+mod block_tests;

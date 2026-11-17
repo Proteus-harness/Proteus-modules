@@ -295,7 +295,12 @@ Anthropic Messages сохраняет `redacted_thinking` как непрозр�
 [контракт Anthropic для redacted thinking](https://platform.claude.com/docs/en/build-with-claude/thinking#redacted-thinking-blocks).
 
 Anthropic SSE сохраняет стартовый текст блока и стартовый `tool_use.input`,
-если JSON-дельты не заменили его. Закрытие HTTP 200 SSE без terminal event
+если JSON-дельты не заменили его. Каждый text block владеет своим DSML-фильтром:
+`content_block_stop` дописывает удержанный буквальный суффикс в этот же блок
+до следующих tool/text events; повторный stop не дублирует текст. При отсутствии
+stop terminal fallback сохраняет суффикс на исходном месте. Text delta без
+text-владельца игнорируется и не меняет соседние блоки. Алгоритм очистки DSML
+и trimming не меняются. Закрытие HTTP 200 SSE без terminal event
 возвращает `StreamDisconnected`; документированный overload возвращает
 `Retryable`, а HTTP 400 `prompt is too long` — `ContextWindowExceeded`.
 Тот же context failure возвращается для HTTP 200 ответа с
