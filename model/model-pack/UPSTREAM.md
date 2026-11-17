@@ -52,7 +52,8 @@ hook/workflow через общий model contract. Адаптер не вызы
 Операция работает и для ранее сохранённого `openai.responses.compaction.v1`,
 не добавляет hints, не меняет ciphertext и не читает credentials или сеть.
 Неизвестные opaque formats пропускаются, повреждённый известный checkpoint
-возвращает ошибку. Feature объявляется только при `supports_compaction`.
+возвращает ошибку. Feature объявляет наличие optional handler; провайдеры без
+`supports_compaction` возвращают `None`, не обращаясь к авторизации или сети.
 
 ## Зафиксированные Источники
 

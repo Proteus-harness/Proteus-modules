@@ -215,15 +215,11 @@ fn non_empty_config_string(config: &Value, key: &str) -> Option<String> {
 
 #[async_trait]
 impl Model for OpenAiResponsesClient {
-    fn supports_input_estimate(&self) -> bool {
-        self.model_profile.supports_compaction
-    }
-
     async fn estimate_input(
         &self,
         request: crate::contracts::ModelInputEstimateRequest,
     ) -> Result<Option<crate::contracts::ModelInputEstimate>> {
-        if !self.supports_input_estimate() {
+        if !self.model_profile.supports_compaction {
             return Ok(None);
         }
         request.validate().map_err(anyhow::Error::msg)?;

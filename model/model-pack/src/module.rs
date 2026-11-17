@@ -84,7 +84,8 @@ fn build(id: &str, config: &Value, stream: bool) -> ProcessModuleResult<Arc<dyn 
 
 impl ModelModule for ProviderModule {
     fn supports_input_estimate(&self) -> bool {
-        self.streaming.supports_input_estimate()
+        // Advertise the optional method handler; unsupported providers return None.
+        true
     }
 
     fn estimate_input_json(&self, request_json: String) -> ProcessModuleResult<String> {

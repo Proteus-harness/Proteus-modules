@@ -94,16 +94,20 @@ fn provider_module_rejects_invalid_requests_and_does_not_claim_unknown_format_ze
 }
 
 #[test]
-fn unsupported_provider_module_keeps_optional_estimation_absent() {
+fn unsupported_provider_module_advertises_handler_but_returns_no_estimate_without_transport() {
     for (implementation, config) in [
         ("fake", json!({})),
+        (
+            "anthropic",
+            json!({"base_url":"http://127.0.0.1:1/v1", "api_key_env":"PROTEUS_INPUT_ESTIMATE_UNUSED_KEY"}),
+        ),
         (
             "openai_compatible",
             json!({"base_url":"http://127.0.0.1:1/v1"}),
         ),
     ] {
         let provider = provider(implementation, config);
-        assert!(!provider.supports_input_estimate());
+        assert!(provider.supports_input_estimate());
         assert_eq!(
             provider
                 .estimate_input_json(serde_json::to_string(&request()).unwrap())

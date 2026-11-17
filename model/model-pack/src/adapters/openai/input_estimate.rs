@@ -176,7 +176,6 @@ mod tests {
             }))
             .unwrap(),
         ] {
-            assert!(client.supports_input_estimate());
             let result = client
                 .estimate_input(request("x".repeat(3172)))
                 .await
@@ -202,13 +201,12 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn unsupported_transports_do_not_advertise_or_invent_estimates() {
+    async fn unsupported_transports_return_no_estimate_without_credentials_or_transport() {
         use crate::{adapters::openai::OpenAiResponsesClient, contracts::Model};
         let client = OpenAiResponsesClient::from_provider_config(json!({
             "base_url":"http://127.0.0.1:1/v1"
         }))
         .unwrap();
-        assert!(!client.supports_input_estimate());
         assert!(
             client
                 .estimate_input(request("x".repeat(3172)))
