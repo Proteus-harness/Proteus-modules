@@ -102,6 +102,7 @@ export async function workflow({ task, runtime, history }, { hostCall, signal, c
         const streamFn = async () => {
             signal.throwIfAborted();
             const request = {
+                operation: "Complete",
                 model: runtime.model_ref,
                 instructions: [...runtime.instructions, { kind: "System", text: prompt, priority: 100 }],
                 messages,

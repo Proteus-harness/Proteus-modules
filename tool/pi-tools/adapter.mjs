@@ -62,12 +62,12 @@ export async function executePiTool(input, signal) {
 }
 
 export function createPiToolsExport(binding) {
-    if (binding.module_id !== "pi_tools" || binding.contract_version !== "v6" || binding.composition !== "ordered_many") {
-        throw new Error("Pi tools require tool/pi_tools v6 ordered_many");
+    if (binding.module_id !== "pi_tools" || binding.contract_version !== "v7" || binding.composition !== "ordered_many") {
+        throw new Error("Pi tools require tool/pi_tools v7 ordered_many");
     }
     if (Object.keys(binding.module_config).length) throw new Error("Pi tools take no module config");
     return {
-        manifest: { slot: "tool", module_id: "pi_tools", contract_version: "v6", composition: "ordered_many", module_features: [], config_schema: null },
+        manifest: { slot: "tool", module_id: "pi_tools", contract_version: "v7", composition: "ordered_many", module_features: [], config_schema: null },
         async invoke(method, params, { signal }) {
             if (method === "list") {
                 if (params !== null) throw new Error("Pi tool list params must be null");

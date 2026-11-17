@@ -9,7 +9,7 @@ import { modelExport, modelFailure } from '../adapter.mjs';
 const snapshots = await Effect.runPromise(Effect.scoped(Effect.gen(function* () {
     return yield* (yield* ModelsDev.Service).get();
 }).pipe(Effect.provide(LayerNode.compile(ModelsDev.configured({ fetch: false }))))));
-const binding = { slot: 'model', module_id: 'opencode', contract_version: 'v13', module_config: { provider: 'opencode-go' } };
+const binding = { slot: 'model', module_id: 'opencode', contract_version: 'v14', module_config: { provider: 'opencode-go' } };
 const request = () => ({ model: { provider: 'opencode', model: 'deepseek-v4.1-flash' }, reasoning: { effort: 'high' },
     instructions: [{ text: 'Exact Core instructions' }], tools: [], tool_choice: 'None', response_format: 'Text',
     limits: { max_output_tokens: 256 }, sampling: { temperature: null, top_p: null },
@@ -68,6 +68,22 @@ test('stream false returns terminal data without progress and without extra requ
     const result = await adapter.invoke('stream', { request: request(), stream: false }, {
         signal: new AbortController().signal, hostCall: async () => { throw Error('No progress expected'); } });
     assert.equal(result.terminal.kind, 'response'); assert.equal(result.event_count, 0); assert.equal(received.length, 1);
+});
+
+test('native compaction is rejected before credential lookup or provider IO', async () => {
+    let resolves = 0, credentials = 0, streams = 0;
+    const adapter = modelExport(binding, {
+        runtime: { resolve: async () => { resolves++; throw Error('unexpected resolve'); } },
+        credential: async () => { credentials++; throw Error('unexpected credential lookup'); },
+        stream: async () => { streams++; throw Error('unexpected provider call'); },
+    });
+    const result = await adapter.invoke('stream', { request: { ...request(), operation: 'Compact' }, stream: true }, {
+        signal: new AbortController().signal,
+        hostCall: async () => { throw Error('unexpected stream event'); },
+    });
+    assert.equal(result.terminal.kind, 'request_error');
+    assert.equal(result.event_count, 0);
+    assert.deepEqual([resolves, credentials, streams], [0, 0, 0]);
 });
 
 test('Go routing preserves Core session affinity across tool-bearing high-effort requests and resume', async t => {

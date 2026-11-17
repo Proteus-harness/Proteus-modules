@@ -24,7 +24,7 @@ test("pinned process worker routes this adapter and cancels only the addressed c
       Stop: [{ hooks: [{ type: "command", command: process.execPath, args: [fixture, "exit2", "verify before finishing"] }] }],
     } }));
     bindings.push({
-      slot: "hook", module_id: id, contract_version: "v6", composition: "ordered_many", host_features: [],
+      slot: "hook", module_id: id, contract_version: "v7", composition: "ordered_many", host_features: [],
       module_config: { entry, settings: {
         config_path: config, sdk_root: sdk, plugin_root: directory,
         mode: "strict_subset", allow_execution: true, events: ["PreToolUse", "Stop"],
@@ -74,7 +74,7 @@ test("pinned process worker routes this adapter and cancels only the addressed c
   const initialized = await send("h:7:0", "initialize", { protocol_version: "v3", component_id: "claude-port-test", exports: bindings });
   assert.equal(initialized.error, undefined, stderr);
   assert.equal(initialized.result.exports.length, 2);
-  assert.equal(initialized.result.exports[0].contract_version, "v6");
+  assert.equal(initialized.result.exports[0].contract_version, "v7");
   const slow = invoke(1, "slow");
   const quick = await invoke(2, "check");
   assert.deepEqual(quick.result.result, { action: "block_tool", reason: "wire veto" });

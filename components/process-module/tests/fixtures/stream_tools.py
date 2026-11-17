@@ -8,7 +8,7 @@ from pathlib import Path
 from component_runtime import PROTOCOL_VERSION, ProtocolError, run_component
 
 EXPORT = {
-    "slot": "tool", "module_id": "stream-tools", "contract_version": "v6",
+    "slot": "tool", "module_id": "stream-tools", "contract_version": "v7",
     "composition": "ordered_many", "module_features": [], "config_schema": None,
 }
 LOCK = threading.Lock()

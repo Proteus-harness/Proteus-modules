@@ -3,8 +3,8 @@ import { preparation } from "./compaction.mjs";
 import { context } from "./context.mjs";
 
 const slots = {
-    workflow: { id: "pi_loop", version: "v20", method: "run", handle: workflow },
-    hook: { id: "pi_compact", version: "v6", method: "hook.invoke", handle: preparation },
+    workflow: { id: "pi_loop", version: "v21", method: "run", handle: workflow },
+    hook: { id: "pi_compact", version: "v7", method: "hook.invoke", handle: preparation },
     context: { id: "pi_context", version: "v3", method: "build", handle: context },
 };
 

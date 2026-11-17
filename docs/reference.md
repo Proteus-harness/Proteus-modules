@@ -28,7 +28,7 @@ slot authority.
 
 ## Native OpenCode Model
 
-`model/opencode-provider` предоставляет конкретные model exports (`v13`),
+`model/opencode-provider` предоставляет конкретные model exports (`v14`),
 по умолчанию `model/opencode`, через `proteus-opencode-module`.
 Он вызывает pinned `ModelsDev`, `ModelResolver` и
 `LLMClient` OpenCode напрямую. Это отдельный model slot: выбор его в профиле
@@ -121,14 +121,15 @@ policy/approval и authority остаётся на прежних граница
 ## Codex Base Instructions И Patch Surface
 
 Пакет `codex-context-preparation` дополнительно экспортирует
-`hook/codex_base_instructions`. На `BeforeModel` прямого запроса он выбирает
+`hook/codex_base_instructions`. На `BeforeModel` прямого запроса или
+вспомогательного native `Compact` он выбирает
 публичный model-specific `instructions_template` из OpenAI Codex
 `rust-v0.167.0`, commit `086ccc833bc9cf01024ad2dd6af7dbd421b6bf9a`.
 Включены `gpt-6.1-sol`, `gpt-6.1-terra`, `gpt-5.6-luna`; для остальных
 используется upstream `default.md`. Пользовательские инструкции сохраняются.
 Источники, лицензия Apache-2.0 и SHA256 находятся в
 `hook/codex-context-preparation/src/upstream/0.167.0/`.
-Auxiliary summary requests сохраняют собственную подготовку.
+Обычные вспомогательные summary requests сохраняют собственную подготовку.
 
 В `codex_patch` параметр `freeform=true` публикует custom tool с точной
 upstream Lark grammar этой версии. Canonical input имеет `{input: string}`;
@@ -145,8 +146,31 @@ binding для своего `tools.call` API.
 Публичный pinned каталог отличается от обновляемого `/models` каталога
 конкретной native CLI-сессии. Применение pinned template и grammar не закрывает
 остальные fidelity gates. Native CLI `0.167.0` по умолчанию предоставляет
-programmatic `exec` через отдельный code-mode-host; local summary compactor
+programmatic `exec` через отдельный code-mode-host; compaction
 и protocol/tool/session orchestration этой сборки проверяются отдельно.
+
+## Native Codex Compaction
+
+`codex_compact` выбирает серверный путь по host-owned capability выбранной
+модели `supports_compaction`. Model-pack поддерживает его для OpenAI Responses
+и ChatGPT OAuth; совместимый Responses endpoint требует явной capability.
+Pi/OpenCode bridges её не объявляют: с DeepSeek через Go сохраняется локальное
+summary. Ошибка поддерживаемого серверного пути не подменяется локальным.
+
+Серверный запрос проходит обычную model authority с операцией `Compact`,
+историей и выбранными tools. Успешно завершённый stream должен содержать ровно
+один checkpoint. Он хранится как `Opaque` и передаётся следующей модели без
+перевода в текст; неизвестный формат или неподдерживаемый transport дают ошибку.
+История заменяется только после полного ответа и проверки отмены. Повторный
+compact получает прежний checkpoint, затем заменяет его новым. Бюджет
+сохраняемых пользователей и изображений повторяет remote-ветку Codex pin
+`67cc3c3`; локальная ветка сохраняет собственный алгоритм.
+
+Контрактный переход согласованный: `model/v14`, `hook/v7`, `workflow/v21`,
+`tool/v7`. Операция обычного запроса — `Complete`; поддержка compaction по
+умолчанию выключена. Core, SDK и process exports обновляются вместе.
+Подробности происхождения и ограничений оценки токенов — в
+[UPSTREAM.md](../hook/codex-context-preparation/UPSTREAM.md).
 
 ## Окончания Строк В Direct Patch
 

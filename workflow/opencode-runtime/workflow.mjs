@@ -172,6 +172,7 @@ export async function workflow({ task, history, runtime }, { hostCall, signal })
             });
             selection.tools = await selectNativeTools(ref, selection.tools, signal);
             const request = {
+                operation: "Complete",
                 model: ref,
                 instructions: runtime.instructions,
                 messages,
@@ -330,7 +331,7 @@ export function createWorkflowExport(binding) {
     if (
         binding.module_id !== "opencode_loop" ||
         binding.slot !== "workflow" ||
-        binding.contract_version !== "v20" ||
+        binding.contract_version !== "v21" ||
         binding.composition !== "select_one" ||
         Object.keys(binding.module_config).length
     )
@@ -339,7 +340,7 @@ export function createWorkflowExport(binding) {
         manifest: {
             module_id: binding.module_id,
             slot: binding.slot,
-            contract_version: "v20",
+            contract_version: "v21",
             composition: "select_one",
             module_features: [],
             config_schema: null,

@@ -17,7 +17,7 @@ async function run(mode = "success") {
     const controller = new AbortController();
     const history = [text("User", "Original task " + "historical context ".repeat(2500)),
         text("Assistant", "Earlier work " + "inspected ".repeat(1000)), text("User", "Current task")];
-    const hook = createCompactionExport({ slot: "hook", module_id: "opencode_compact", contract_version: "v6",
+    const hook = createCompactionExport({ slot: "hook", module_id: "opencode_compact", contract_version: "v7",
         composition: "ordered_many", module_config: { keep: 0, ...(mode === "unchanged" ? { auto: false } : {}) } });
     const requests = [], checkpoints = [], summaries = [];
     let sample = 0, frame = 0, effects = 0, revision = 0, replacementAcked = false;

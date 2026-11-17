@@ -56,12 +56,12 @@ test("actual model export advertises Go quota and processes null params without 
     ModelRuntime.create = async () => runtime;
     try {
         await withFetch(async url => url.includes("/usage") ? response(usage) : response([budget]), async () => {
-            const provider = modelExport({ module_id: "pi_codex", contract_version: "v13", module_config: { implementation: "opencode-go" } });
+            const provider = modelExport({ module_id: "pi_codex", contract_version: "v14", module_config: { implementation: "opencode-go" } });
             assert.deepEqual(provider.manifest.module_features, ["model.quota.v1"]);
             const snapshot = await provider.invoke("quota", null, { signal: controller().signal });
             assert.equal(snapshot.buckets.length, 2);
             assert.deepEqual(snapshot.notices, []);
-            const other = modelExport({ module_id: "pi_codex", contract_version: "v13", module_config: { implementation: "openai-codex" } });
+            const other = modelExport({ module_id: "pi_codex", contract_version: "v14", module_config: { implementation: "openai-codex" } });
             assert.deepEqual(other.manifest.module_features, []);
         });
     } finally { ModelRuntime.create = original; }

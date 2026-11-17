@@ -179,6 +179,7 @@ export async function runNativeCompaction(context, template, config, { hostCall,
             signal.throwIfAborted();
             const response = await hostCall("host.model.complete", { request: {
                 ...template, instructions: request.system.map(part => ({ kind: "System", text: part.text, priority: 100 })),
+                operation: "Complete",
                 messages: request.messages.map(canonicalPrompt), tools: [], tool_choice: "None", response_format: "Text",
                 metadata: { ...(template.metadata ?? {}), suppress_stream_deltas: true },
             } });
@@ -195,7 +196,7 @@ export async function runNativeCompaction(context, template, config, { hostCall,
                 { error: { type: "compaction.model-failed", message: error.message ?? String(error) } };
         } })),
         compact: () => Effect.fail({ error: { type: "provider.unsupported-operation",
-            message: "Native provider compaction is unavailable through hook/v6 host.model.complete" } }),
+            message: "Native provider compaction is unavailable through hook/v7 host.model.complete" } }),
     };
     const services = Layer.mergeAll(
         Layer.succeed(Bus, { publish: (event, data) => Effect.sync(() => events.push({ type: event.type, ...data })) }),
@@ -203,7 +204,7 @@ export async function runNativeCompaction(context, template, config, { hostCall,
         Layer.succeed(ModelRequest, { compaction: input => {
             if (context.model.compaction?.type === "native") return Effect.fail({ error: {
                 type: "provider.unsupported-operation",
-                message: "Native provider remote compaction is unsupported by hook/v6 host.model.complete; no local summary was substituted",
+                message: "Native provider remote compaction is unsupported by hook/v7 host.model.complete; no local summary was substituted",
             } });
             events.push({ type: "proteus.compaction.prepared", budget: input.inputTokens.measured });
             return Effect.succeed({ event: {}, options: {}, retry: () => Effect.void,
@@ -232,9 +233,9 @@ export async function runNativeCompaction(context, template, config, { hostCall,
 }
 
 export function createCompactionExport(binding) {
-    if (binding.slot !== "hook" || binding.module_id !== "opencode_compact" || binding.contract_version !== "v6" || binding.composition !== "ordered_many") throw new Error("Expected hook/opencode_compact v6 ordered_many");
+    if (binding.slot !== "hook" || binding.module_id !== "opencode_compact" || binding.contract_version !== "v7" || binding.composition !== "ordered_many") throw new Error("Expected hook/opencode_compact v7 ordered_many");
     const config = validateConfig(binding.module_config);
-    return { manifest: { slot: "hook", module_id: "opencode_compact", contract_version: "v6", composition: "ordered_many", module_features: [], config_schema: configSchema },
+    return { manifest: { slot: "hook", module_id: "opencode_compact", contract_version: "v7", composition: "ordered_many", module_features: [], config_schema: configSchema },
         async invoke(method, params, invocation) {
             if (method !== "hook.invoke") throw new Error(`Unsupported compaction hook method ${method}`);
             const event = params.event;

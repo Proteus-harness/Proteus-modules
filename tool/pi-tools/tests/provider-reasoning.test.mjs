@@ -9,7 +9,7 @@ import { piMessages } from "../../../components/pi-runtime-js/messages.mjs";
 const model = resolveModel({ model: "deepseek-v4.1-flash" }, "opencode-go");
 const binding = {
     module_id: "pi_codex",
-    contract_version: "v13",
+    contract_version: "v14",
     module_config: { implementation: "opencode-go" },
 };
 const request = {
@@ -21,12 +21,12 @@ const request = {
     cache: { routing_key: "fixture", cache_context: true },
 };
 
-async function invoke(produce, stream = true) {
+async function invoke(produce, stream = true, input = request) {
     const create = ModelRuntime.create;
     ModelRuntime.create = async () => ({ getModel: () => model, streamSimple: produce });
     try {
         const frames = [];
-        const result = await modelExport(binding).invoke("stream", { request, stream }, {
+        const result = await modelExport(binding).invoke("stream", { request: input, stream }, {
             signal: new AbortController().signal,
             hostCall: async (method, frame) => {
                 assert.equal(method, "host.model.emit");
@@ -38,6 +38,16 @@ async function invoke(produce, stream = true) {
         ModelRuntime.create = create;
     }
 }
+
+test("Pi rejects native compaction before sampling the model", async () => {
+    let calls = 0;
+    const { frames, result } = await invoke(() => { calls++; throw Error("unexpected sample"); }, true,
+        { ...request, operation: "Compact" });
+    assert.equal(calls, 0);
+    assert.deepEqual(frames, []);
+    assert.equal(result.terminal.failure.kind, "other");
+    assert.match(result.terminal.failure.message, /does not support native model compaction/);
+});
 
 test("pinned Pi reasoning_content reaches the model stream once and survives the terminal response", async () => {
     let fetches = 0;

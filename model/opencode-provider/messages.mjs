@@ -1,4 +1,4 @@
-// Pure model/v13 -> @opencode/ai bridge. Agent prompts, model selection,
+// Pure model/v14 -> @opencode/ai bridge. Agent prompts, model selection,
 // authentication and provider variants belong to their own slots.
 import { readFile } from 'node:fs/promises';
 import { contextText } from '../../components/model-runtime-js/context.mjs';

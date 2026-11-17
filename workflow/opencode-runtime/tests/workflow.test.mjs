@@ -284,7 +284,7 @@ for (const compactor of ["absent", "auto:false"]) {
             if (method === "host.context.prepare") {
                 const output = { messages: params.input.messages, changed: false };
                 if (compactor === "auto:false") {
-                    const hook = createCompactionExport({ slot: "hook", module_id: "opencode_compact", contract_version: "v6",
+                    const hook = createCompactionExport({ slot: "hook", module_id: "opencode_compact", contract_version: "v7",
                         composition: "ordered_many", module_config: { auto: false } });
                     const skipped = await hook.invoke("hook.invoke", { event: { event: "before_context",
                         target: null, input: params.input, output } }, invocation);

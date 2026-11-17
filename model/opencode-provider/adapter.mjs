@@ -44,7 +44,7 @@ export function modelFailure(error, { signal, started = false } = {}) {
 export function modelExport(binding, dependencies = {}) {
     const config = binding.module_config;
     if (binding.slot !== 'model' || typeof binding.module_id !== 'string' || !binding.module_id.trim() ||
-        binding.module_id !== binding.module_id.trim() || binding.module_id === '*' || /[\x00-\x1f\x7f]/.test(binding.module_id) || binding.contract_version !== 'v13' ||
+        binding.module_id !== binding.module_id.trim() || binding.module_id === '*' || /[\x00-\x1f\x7f]/.test(binding.module_id) || binding.contract_version !== 'v14' ||
         !config || typeof config.provider !== 'string' || !config.provider.trim() ||
         Object.keys(config).some(key => !['provider', 'api_key', 'database_path', 'models_file', 'models_url'].includes(key)) ||
         ['api_key', 'database_path', 'models_file', 'models_url'].some(key => config[key] !== undefined && typeof config[key] !== 'string') ||
@@ -62,7 +62,7 @@ export function modelExport(binding, dependencies = {}) {
             Effect.provide(LLMClient.layer), Effect.provide(RequestExecutor.fetchLayer)), { signal });
     });
     return {
-        manifest: { slot: 'model', module_id: binding.module_id, contract_version: 'v13', composition: 'select_one',
+        manifest: { slot: 'model', module_id: binding.module_id, contract_version: 'v14', composition: 'select_one',
             module_features: ['model.catalog.v1', ...(quota ? ['model.quota.v1'] : [])], config_schema: configSchema },
         async invoke(method, params, { signal, hostCall }) {
             if (method === 'catalog') return runtime.catalog(signal);
@@ -77,6 +77,8 @@ export function modelExport(binding, dependencies = {}) {
             const collector = new NativeResponseCollector(randomUUID());
             try {
                 const r = params.request;
+                if (r.operation !== undefined && r.operation !== 'Complete')
+                    throw new Error('OpenCode provider bridge does not support native model compaction');
                 const resolved = await runtime.resolve(r.model.model, r.reasoning.effort, await credential(signal), signal);
                 const request = await toNativeRequest(r, resolved.model, { signal, modelInfo: resolved.modelInfo });
                 await stream(request, signal, async event => {

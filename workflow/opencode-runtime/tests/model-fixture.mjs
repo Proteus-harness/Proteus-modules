@@ -8,7 +8,8 @@ import { join, resolve } from 'node:path';
 export const root = fileURLToPath(new URL('../../../', import.meta.url));
 export const node = join(root, 'workflow/opencode-runtime/node_modules/node-linux-x64/bin/node');
 export const worker = join(root, 'workflow/opencode-runtime/worker.mjs');
-export const core = resolve(root, '../Proteus-desktop/build/Proteus/bin/proteus');
+export const core = process.env.PROTEUS_TEST_CORE_BIN ?? resolve(root, '../Proteus-desktop/build/Proteus/bin/proteus');
+export const moduleBin = name => join(process.env.PROTEUS_TEST_MODULES_BIN_DIR ?? resolve(core, '..'), name);
 export const flash = 'deepseek-v4.1-flash';
 export const second = 'synthetic-second';
 
@@ -69,7 +70,7 @@ export function component(f, config = f.config, connections = { opencode: config
     }
     return { child, exit, initialize: () => request('initialize', { protocol_version: 'v3', component_id: 'synthetic-opencode',
         exports: Object.entries(connections).map(([module_id, module_config]) => ({ slot: 'model', module_id,
-            contract_version: 'v13', composition: 'select_one', module_config,
+            contract_version: 'v14', composition: 'select_one', module_config,
             host_features: ['model.catalog.v1', 'model.quota.v1'] })) }, 'h:1:0'),
     invoke(method, params = null, module_id = 'opencode') { const id = `h:1:${++seq}`; return { id, result: request(method, {
         export: { slot: 'model', module_id }, lineage: { root_invocation_id: id, parent_invocation_id: null, depth: 0 }, params }, id) }; },

@@ -18,7 +18,7 @@ handlers, общий JSON-RPC broker, model bridge и общий Go quota helper
 
 ## Model Export
 
-Model export с конкретным ID (`opencode` или другим) реализует `model/v13`
+Model export с конкретным ID (`opencode` или другим) реализует `model/v14`
 и optional `model.catalog.v1`. Один worker поддерживает несколько независимых
 подключений: их `module_config.model.<id>` и native маршруты не смешиваются.
 Для `provider="opencode-go"` дополнительно объявляется `model.quota.v1`

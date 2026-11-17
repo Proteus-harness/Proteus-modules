@@ -46,6 +46,7 @@ export async function preparation(params, { hostCall, signal, catalogProvider })
         const reply = await hostCall("host.model.complete", {
             request: {
                 ...request,
+                operation: "Complete",
                 instructions,
                 messages: history,
                 tools: [],

@@ -6,7 +6,7 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import { resolve, join } from "node:path";
 
-test("real tool/v6 and context/v3 process preserves native prompts, four tools and bash cancellation", async () => {
+test("real tool/v7 and context/v3 process preserves native prompts, four tools and bash cancellation", async () => {
     const base = fileURLToPath(new URL("../../../target/pi-tools-tests",import.meta.url));
     await mkdir(base, { recursive: true });
     const cwd = await mkdtemp(join(base, "wire-"));
@@ -42,7 +42,7 @@ test("real tool/v6 and context/v3 process preserves native prompts, four tools a
     }
     try {
         const initialized = await rpc("initialize", { protocol_version: "v3", component_id: "pi", exports: [
-            { slot: "tool", module_id: "pi_tools", contract_version: "v6", composition: "ordered_many", module_config: {}, host_features: [] },
+            { slot: "tool", module_id: "pi_tools", contract_version: "v7", composition: "ordered_many", module_config: {}, host_features: [] },
             { slot: "context", module_id: "pi_context", contract_version: "v3", composition: "select_one", module_config: {}, host_features: [] },
         ] }).response;
         assert.ok(initialized.result, stderr);

@@ -4,7 +4,7 @@ import { buildPrompt, estimateContext, estimatePrompt, recentUserMessages } from
 import { canonical } from "../../../components/module-runtime-js/canonical.mjs";
 import { createCompactionExport, nativeContext, runNativeCompaction } from "../compaction.mjs";
 
-const binding = config => ({ slot: "hook", module_id: "opencode_compact", contract_version: "v6", composition: "ordered_many", module_config: config });
+const binding = config => ({ slot: "hook", module_id: "opencode_compact", contract_version: "v7", composition: "ordered_many", module_config: config });
 const text = message => message.parts.flatMap(part => part.payload.Text ? [part.payload.Text.text] : []).join("\n");
 const summary = "## Objective\n- Finish the task.\n\n## Work State\n### Completed\n- Inspected a file.\n\n## Next Move\n1. Implement the fix.";
 function fixture(tokens = 180000, window = 200000) {

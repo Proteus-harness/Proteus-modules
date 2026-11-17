@@ -20,7 +20,7 @@ const request = {
 };
 const binding = {
     module_id: "pi_codex",
-    contract_version: "v13",
+    contract_version: "v14",
     module_config: { implementation: "opencode-go" },
 };
 const usage = { input: 10, output: 2, cacheRead: 0, cacheWrite: 0, totalTokens: 12 };

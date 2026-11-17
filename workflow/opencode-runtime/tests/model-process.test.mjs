@@ -4,7 +4,7 @@ import { createServer } from 'node:http';
 import { existsSync } from 'node:fs';
 import { readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
-import { fixture, component, appServer, nativeCatalog, flash, second, core, node, worker } from './model-fixture.mjs';
+import { fixture, component, appServer, nativeCatalog, flash, second, core, node, worker, moduleBin } from './model-fixture.mjs';
 
 // Module-only checkouts still exercise the real v3 worker. A ready Core artifact
 // additionally enables the host/UI DTO boundary; tests never build that artifact.
@@ -210,7 +210,7 @@ test('ready Core acknowledges native overflow compaction before resampling and p
     } };
     const profile = { modules: { workflow: 'opencode_loop', context: 'opencode_context', policy: 'opencode_policy',
         hooks: ['opencode_prompt', 'opencode_compact'] },
-        components: { runtime, policy: { command: join(core, '..', 'proteus-policy-pack-module'), exports: { policy: { opencode_policy: {} } } } },
+        components: { runtime, policy: { command: moduleBin('proteus-policy-pack-module'), exports: { policy: { opencode_policy: {} } } } },
         module_config: { hook: { opencode_compact: { keep: 0 } }, policy: { opencode_policy: { rules: [{ permission: '*', action: 'allow' }] } } },
         tools: { enabled: ['shell'] }, permissions: { mode: 'normal' } };
     let server, session;
