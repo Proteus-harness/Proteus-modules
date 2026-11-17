@@ -7,8 +7,7 @@ use proteus_contracts::{
     model_standard::ContentPart,
 };
 use proteus_core::core::{
-    AgentRuntime, AppConfig, JournalEntry, ModuleCatalog, SessionStore, WorkflowReplayOptions,
-    replay_workflow,
+    AgentRuntime, AppConfig, JournalEntry, ModuleCatalog, WorkflowReplayOptions, replay_workflow,
 };
 use serde_json::{Value, json};
 use tokio::{io::AsyncWriteExt, net::TcpListener, process::Command};
@@ -198,7 +197,7 @@ async fn crash_and_resume(after_result: bool, freeform: bool) {
             name
         );
     }
-    let store = SessionStore::open(session_path.into()).unwrap();
+    let store = crate::session_storage::open(session_path.into()).unwrap();
     let projection = store.load_projection().unwrap();
     assert_eq!(projection.unsettled_turns.len(), 1);
     assert_eq!(projection.unresolved_tool_calls.is_empty(), after_result);

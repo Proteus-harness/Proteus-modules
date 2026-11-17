@@ -5,8 +5,8 @@ use std::{path::Path, sync::Arc, time::Duration};
 
 use proteus_contracts::model_standard::{ContentPart, MessagePhase, ModelFailureKind};
 use proteus_core::core::{
-    AgentRuntime, JournalEntry, ModelResponseOutcome, ModuleCatalog, SessionStore,
-    TurnSettlementStatus, WorkflowReplayOptions, replay_workflow,
+    AgentRuntime, JournalEntry, ModelResponseOutcome, ModuleCatalog, TurnSettlementStatus,
+    WorkflowReplayOptions, replay_workflow,
 };
 use serde_json::{Value, json};
 use tokio::{io::AsyncWriteExt, net::TcpListener};
@@ -279,7 +279,7 @@ async fn accepted_sse_disconnect_retries_same_turn_without_repeating_tool_effect
     );
 
     let session_dir = runtime.session_dir().unwrap().to_owned();
-    let projection = SessionStore::open(session_dir.clone())
+    let projection = crate::session_storage::open(session_dir.clone())
         .unwrap()
         .load_projection()
         .unwrap();
@@ -418,7 +418,7 @@ async fn accepted_sse_disconnect_stops_after_configured_retry_budget() {
     }
 
     let session_dir = runtime.session_dir().unwrap().to_owned();
-    let projection = SessionStore::open(session_dir.clone())
+    let projection = crate::session_storage::open(session_dir.clone())
         .unwrap()
         .load_projection()
         .unwrap();

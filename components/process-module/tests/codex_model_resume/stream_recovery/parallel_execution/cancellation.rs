@@ -66,7 +66,7 @@ async fn cancel_preserves_completed_tool_and_never_dispatches_queued_calls() {
     approvals.sort();
     assert_eq!(approvals, ["call_a", "call_b"]);
     assert!(!directory.join("effects.log").exists());
-    let projection = SessionStore::open(session.clone())
+    let projection = crate::session_storage::open(session.clone())
         .unwrap()
         .load_projection()
         .unwrap();

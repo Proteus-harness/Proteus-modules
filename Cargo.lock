@@ -1965,7 +1965,7 @@ dependencies = [
 [[package]]
 name = "proteus-contracts"
 version = "0.1.0-alpha.2"
-source = "git+https://github.com/Proteus-harness/Proteus-core.git?rev=d6939cad236fe64aed6856a98f8251675636aeb3#d6939cad236fe64aed6856a98f8251675636aeb3"
+source = "git+https://github.com/Proteus-harness/Proteus-core.git?rev=4c032eeb7c51b2467064d7cd10fc6f8008ae51e4#4c032eeb7c51b2467064d7cd10fc6f8008ae51e4"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -1974,6 +1974,7 @@ dependencies = [
  "futures-core",
  "futures-util",
  "jsonschema",
+ "ring",
  "rustix",
  "serde",
  "serde_json",
@@ -1984,7 +1985,7 @@ dependencies = [
 [[package]]
 name = "proteus-core"
 version = "0.1.0-alpha.3"
-source = "git+https://github.com/Proteus-harness/Proteus-core.git?rev=d6939cad236fe64aed6856a98f8251675636aeb3#d6939cad236fe64aed6856a98f8251675636aeb3"
+source = "git+https://github.com/Proteus-harness/Proteus-core.git?rev=4c032eeb7c51b2467064d7cd10fc6f8008ae51e4#4c032eeb7c51b2467064d7cd10fc6f8008ae51e4"
 dependencies = [
  "agent-client-protocol",
  "anyhow",
@@ -1998,14 +1999,13 @@ dependencies = [
  "http-body-util",
  "hyper",
  "hyper-util",
- "im",
  "libc",
  "proteus-contracts",
  "proteus-module-protocol",
  "proteus-process-host",
+ "proteus-session-semantics",
  "ring",
  "rmcp",
- "rusqlite",
  "serde",
  "serde_json",
  "tokio",
@@ -2065,7 +2065,7 @@ dependencies = [
 [[package]]
 name = "proteus-module-protocol"
 version = "0.1.0-alpha.2"
-source = "git+https://github.com/Proteus-harness/Proteus-core.git?rev=d6939cad236fe64aed6856a98f8251675636aeb3#d6939cad236fe64aed6856a98f8251675636aeb3"
+source = "git+https://github.com/Proteus-harness/Proteus-core.git?rev=4c032eeb7c51b2467064d7cd10fc6f8008ae51e4#4c032eeb7c51b2467064d7cd10fc6f8008ae51e4"
 dependencies = [
  "anyhow",
  "proteus-contracts",
@@ -2090,7 +2090,7 @@ dependencies = [
 [[package]]
 name = "proteus-module-sdk"
 version = "0.1.0-alpha.2"
-source = "git+https://github.com/Proteus-harness/Proteus-core.git?rev=d6939cad236fe64aed6856a98f8251675636aeb3#d6939cad236fe64aed6856a98f8251675636aeb3"
+source = "git+https://github.com/Proteus-harness/Proteus-core.git?rev=4c032eeb7c51b2467064d7cd10fc6f8008ae51e4#4c032eeb7c51b2467064d7cd10fc6f8008ae51e4"
 dependencies = [
  "anyhow",
  "proteus-contracts",
@@ -2118,7 +2118,7 @@ dependencies = [
 [[package]]
 name = "proteus-process-host"
 version = "0.1.0-alpha.2"
-source = "git+https://github.com/Proteus-harness/Proteus-core.git?rev=d6939cad236fe64aed6856a98f8251675636aeb3#d6939cad236fe64aed6856a98f8251675636aeb3"
+source = "git+https://github.com/Proteus-harness/Proteus-core.git?rev=4c032eeb7c51b2467064d7cd10fc6f8008ae51e4#4c032eeb7c51b2467064d7cd10fc6f8008ae51e4"
 dependencies = [
  "anyhow",
  "libc",
@@ -2176,6 +2176,33 @@ version = "0.1.0-alpha.3"
 dependencies = [
  "proteus-module-runtime",
  "rust-lsp",
+]
+
+[[package]]
+name = "proteus-session-semantics"
+version = "0.1.0-alpha.1"
+source = "git+https://github.com/Proteus-harness/Proteus-core.git?rev=4c032eeb7c51b2467064d7cd10fc6f8008ae51e4#4c032eeb7c51b2467064d7cd10fc6f8008ae51e4"
+dependencies = [
+ "anyhow",
+ "im",
+ "proteus-contracts",
+ "ring",
+ "serde",
+ "serde_json",
+ "uuid",
+]
+
+[[package]]
+name = "proteus-session-storage-module"
+version = "0.1.0-alpha.3"
+dependencies = [
+ "anyhow",
+ "proteus-contracts",
+ "proteus-module-sdk",
+ "serde",
+ "serde_json",
+ "session-storage",
+ "tempfile",
 ]
 
 [[package]]
@@ -2815,6 +2842,22 @@ dependencies = [
  "cfg-if",
  "libc",
  "windows-sys 0.61.2",
+]
+
+[[package]]
+name = "session-storage"
+version = "0.1.0-alpha.3"
+dependencies = [
+ "anyhow",
+ "base64 0.22.1",
+ "proteus-contracts",
+ "proteus-session-semantics",
+ "ring",
+ "rusqlite",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "uuid",
 ]
 
 [[package]]

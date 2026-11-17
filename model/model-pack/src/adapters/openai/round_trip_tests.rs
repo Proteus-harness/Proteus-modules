@@ -75,14 +75,20 @@ async fn multipart_message_and_custom_tool_survive_journal_round_trip() {
     ));
     let root = tempfile::tempdir().unwrap();
     let workspace = tempfile::tempdir().unwrap();
-    let store = SessionStore::new(root.path(), workspace.path(), new_session_id()).unwrap();
+    let store = SessionStore::new(
+        crate::test_storage::service(workspace.path()),
+        root.path(),
+        workspace.path(),
+        new_session_id(),
+    )
+    .unwrap();
     store
         .append_history(new_thread_id(), None, &history)
         .await
         .unwrap();
     let session_dir = store.session_dir().to_path_buf();
     drop(store);
-    let restored = SessionStore::open(session_dir)
+    let restored = SessionStore::open(crate::test_storage::service(workspace.path()), session_dir)
         .unwrap()
         .load_messages()
         .unwrap();
@@ -112,14 +118,23 @@ async fn refusal_reason_and_metadata_survive_cold_history_and_next_request() {
         assert!(message.display_text().contains("Cannot comply."));
         let root = tempfile::tempdir().unwrap();
         let workspace = tempfile::tempdir().unwrap();
-        let store = SessionStore::new(root.path(), workspace.path(), new_session_id()).unwrap();
+        let store = SessionStore::new(
+            crate::test_storage::service(workspace.path()),
+            root.path(),
+            workspace.path(),
+            new_session_id(),
+        )
+        .unwrap();
         store
             .append_history(new_thread_id(), None, &response.messages)
             .await
             .unwrap();
         let dir = store.session_dir().to_path_buf();
         drop(store);
-        let restored = SessionStore::open(dir).unwrap().load_messages().unwrap();
+        let restored = SessionStore::open(crate::test_storage::service(workspace.path()), dir)
+            .unwrap()
+            .load_messages()
+            .unwrap();
         assert_eq!(restored, [message]);
         let body = to_openai_request(&CanonicalModelRequest::new(
             ModelRef::new("openai", "fixture"),

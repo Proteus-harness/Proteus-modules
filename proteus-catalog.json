@@ -23,6 +23,10 @@
       "title": "Разрешения"
     },
     {
+      "id": "storage",
+      "title": "Хранение сессий"
+    },
+    {
       "id": "tool",
       "title": "Инструменты"
     },
@@ -400,6 +404,31 @@
           "rust-lsp"
         ],
         "artifact": "dist/rust-lsp.zip",
+        "requirements": [
+          "Rust",
+          "Git",
+          "Python 3.11+",
+          "LLD (Linux x86_64)"
+        ]
+      }
+    },
+    {
+      "id": "session-storage",
+      "kind": "process_module",
+      "title": "session-storage",
+      "description": "Хранение истории сессий в JSONL или SQLite. Exports: session_storage/jsonl, session_storage/sqlite.",
+      "category": "storage",
+      "version": "0.1.0-alpha.3",
+      "path": "components/session-storage-module",
+      "source": {
+        "path": ".",
+        "build": [
+          "python3",
+          "package.py",
+          "--package",
+          "session-storage"
+        ],
+        "artifact": "dist/session-storage.zip",
         "requirements": [
           "Rust",
           "Git",

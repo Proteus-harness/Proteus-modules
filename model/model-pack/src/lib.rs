@@ -6,3 +6,6 @@ pub mod fake;
 mod module;
 
 pub use module::register_model;
+
+#[cfg(test)]
+mod test_storage;

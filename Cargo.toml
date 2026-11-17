@@ -42,9 +42,12 @@ members = [
     "context_provider/memory-pack",
     "context_provider/sqlite-memory",
     "components/process-module",
+    "components/session-storage-module",
+    "storage/session-storage",
 ]
 
 default-members = [
+    "components/session-storage-module",
     "components/model-pack-module",
     "components/coding-workflow-module",
     "components/context-pack-module",
@@ -67,11 +70,12 @@ default-members = [
 ]
 
 [workspace.dependencies]
-proteus-module-sdk = { git = "https://github.com/Proteus-harness/Proteus-core.git", rev = "d6939cad236fe64aed6856a98f8251675636aeb3" }
-proteus-contracts = { git = "https://github.com/Proteus-harness/Proteus-core.git", rev = "d6939cad236fe64aed6856a98f8251675636aeb3" }
-proteus-module-protocol = { git = "https://github.com/Proteus-harness/Proteus-core.git", rev = "d6939cad236fe64aed6856a98f8251675636aeb3" }
-proteus-process-host = { git = "https://github.com/Proteus-harness/Proteus-core.git", rev = "d6939cad236fe64aed6856a98f8251675636aeb3" }
-proteus-core = { git = "https://github.com/Proteus-harness/Proteus-core.git", rev = "d6939cad236fe64aed6856a98f8251675636aeb3" }
+proteus-session-semantics = { git = "https://github.com/Proteus-harness/Proteus-core.git", rev = "4c032eeb7c51b2467064d7cd10fc6f8008ae51e4" }
+proteus-module-sdk = { git = "https://github.com/Proteus-harness/Proteus-core.git", rev = "4c032eeb7c51b2467064d7cd10fc6f8008ae51e4" }
+proteus-contracts = { git = "https://github.com/Proteus-harness/Proteus-core.git", rev = "4c032eeb7c51b2467064d7cd10fc6f8008ae51e4" }
+proteus-module-protocol = { git = "https://github.com/Proteus-harness/Proteus-core.git", rev = "4c032eeb7c51b2467064d7cd10fc6f8008ae51e4" }
+proteus-process-host = { git = "https://github.com/Proteus-harness/Proteus-core.git", rev = "4c032eeb7c51b2467064d7cd10fc6f8008ae51e4" }
+proteus-core = { git = "https://github.com/Proteus-harness/Proteus-core.git", rev = "4c032eeb7c51b2467064d7cd10fc6f8008ae51e4" }
 
 [profile.dev]
 debug = "line-tables-only"

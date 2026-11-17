@@ -111,7 +111,7 @@ async fn check_large_current_input_preflight(cold_preflight: bool) {
         FINAL_TEXT
     );
     drop(runtime);
-    let cold = SessionStore::open(session_dir.clone())
+    let cold = crate::session_storage::open(session_dir.clone())
         .unwrap()
         .load_projection()
         .unwrap();

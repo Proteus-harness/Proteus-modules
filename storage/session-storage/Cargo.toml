@@ -1,0 +1,20 @@
+[package]
+name = "session-storage"
+version = "0.1.0-alpha.3"
+edition = "2024"
+license = "MIT"
+publish = false
+
+[dependencies]
+proteus-contracts = { workspace = true }
+proteus-session-semantics = { workspace = true }
+anyhow = "1"
+base64 = "0.22"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+ring = "0.17"
+rusqlite = { version = "=0.41.0", default-features = false, features = ["bundled", "cache"] }
+uuid = { version = "1", features = ["v4", "serde"] }
+
+[dev-dependencies]
+tempfile = "3"

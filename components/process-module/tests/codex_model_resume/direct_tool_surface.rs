@@ -8,7 +8,7 @@ use std::{
 use async_trait::async_trait;
 use proteus_contracts::contracts::{ApprovalRequest, ApprovalResponse, ApprovalTransport};
 use proteus_core::core::{
-    AgentRuntime, AppConfig, JournalEntry, ModuleCatalog, SessionStore, ToolCallRecordPhase,
+    AgentRuntime, AppConfig, JournalEntry, ModuleCatalog, ToolCallRecordPhase,
     TurnSettlementStatus, WorkflowReplayOptions, replay_workflow,
 };
 use proteus_core::process_adapters::ProcessComponentConfig;
@@ -67,7 +67,7 @@ pub(super) fn read_effect(path: &Path, fixture: &Path, session: &Path) -> String
         }
         let fixture_copy = copy_files(fixture, &evidence.join("fixture"));
         let session_copy = copy_files(session, &evidence.join("session"));
-        let results = SessionStore::open(session.to_owned())
+        let results = crate::session_storage::open(session.to_owned())
             .and_then(|store| store.load_projection())
             .map(|projection| projection.records.into_iter().filter_map(|record| {
                 if let JournalEntry::ToolResultRecorded(tool) = record.entry {
@@ -233,6 +233,7 @@ pub(super) async fn fixture_config(endpoint: &str) -> AppConfig {
     }
     config.runtime.model_timeout_ms = 5_000;
     config.runtime.workflow_timeout_ms = 15_000;
+    crate::session_storage::configure(&mut config);
     config
 }
 
@@ -482,7 +483,7 @@ async fn extended_codex_profile_exposes_and_executes_policy_visible_tools_direct
     let note: Value =
         serde_json::from_slice(&std::fs::read(root.path().join("resume.json")).unwrap()).unwrap();
     let session_dir = PathBuf::from(note["session_dir"].as_str().unwrap());
-    let projection = SessionStore::open(session_dir.clone())
+    let projection = crate::session_storage::open(session_dir.clone())
         .unwrap()
         .load_projection()
         .unwrap();

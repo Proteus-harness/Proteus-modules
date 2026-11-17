@@ -8,7 +8,7 @@ use std::{
 
 use proteus_contracts::model_standard::{ContentPart, MessagePhase, MessageRole, ModelFailureKind};
 use proteus_core::core::{
-    AgentRuntime, AppConfig, JournalEntry, ModuleCatalog, SessionStore, ToolCallRecordPhase,
+    AgentRuntime, AppConfig, JournalEntry, ModuleCatalog, ToolCallRecordPhase,
     TurnSettlementStatus, WorkflowReplayOptions, replay_workflow,
 };
 use serde_json::{Value, json};
@@ -252,7 +252,7 @@ fn assert_resume_request(request: &Value) {
 }
 
 async fn assert_final_state(config: &AppConfig, root: &Path, session_dir: &Path) {
-    let projection = SessionStore::open(session_dir.to_owned())
+    let projection = crate::session_storage::open(session_dir.to_owned())
         .unwrap()
         .load_projection()
         .unwrap();
@@ -376,7 +376,7 @@ async fn completed_messages_survive_partial_sse_and_warm_continuation() {
     let error = runtime.run(INITIAL_PROMPT.to_owned()).await.unwrap_err();
     assert!(format!("{error:#}").contains("stream ended without a terminal event"));
     let session_dir = runtime.session_dir().unwrap().to_owned();
-    let failed = SessionStore::open(session_dir.clone())
+    let failed = crate::session_storage::open(session_dir.clone())
         .unwrap()
         .load_projection()
         .unwrap();
@@ -393,7 +393,7 @@ async fn completed_messages_survive_partial_sse_and_warm_continuation() {
         .unwrap();
     assert_eq!(requests.len(), 3, "accepted partial SSE is not retried");
     assert_resume_request(&requests[1]);
-    let restored = SessionStore::open(session_dir.clone())
+    let restored = crate::session_storage::open(session_dir.clone())
         .unwrap()
         .load_projection()
         .unwrap();
@@ -507,7 +507,7 @@ async fn completed_messages_survive_partial_sse_and_cold_process_restart() {
     let note: Value =
         serde_json::from_slice(&std::fs::read(root.path().join("resume.json")).unwrap()).unwrap();
     let session_dir = PathBuf::from(note["session_dir"].as_str().unwrap());
-    let failed = SessionStore::open(session_dir.clone())
+    let failed = crate::session_storage::open(session_dir.clone())
         .unwrap()
         .load_projection()
         .unwrap();
@@ -523,7 +523,7 @@ async fn completed_messages_survive_partial_sse_and_cold_process_restart() {
         .unwrap();
     assert_eq!(requests.len(), 3, "accepted partial SSE is not retried");
     assert_resume_request(&requests[1]);
-    let restored = SessionStore::open(session_dir.clone())
+    let restored = crate::session_storage::open(session_dir.clone())
         .unwrap()
         .load_projection()
         .unwrap();

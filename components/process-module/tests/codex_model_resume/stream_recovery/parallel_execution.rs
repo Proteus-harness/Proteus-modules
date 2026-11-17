@@ -91,7 +91,7 @@ async fn wait_for(description: &str, mut ready: impl FnMut() -> bool) {
 }
 
 fn has_result(session: &Path, label: &str) -> bool {
-    SessionStore::open(session.to_owned()).unwrap().load_projection().unwrap().records.iter().any(|record| {
+    crate::session_storage::open(session.to_owned()).unwrap().load_projection().unwrap().records.iter().any(|record| {
         matches!(&record.entry, JournalEntry::ToolResultRecorded(tool) if tool.result.call_id == format!("call_{label}"))
     })
 }
@@ -145,7 +145,7 @@ async fn open_response(
     // An acknowledged checkpoint after all calls makes the fence assertion
     // deterministic: the model/workflow has consumed the queued calls.
     wait_for("all calls checkpointed", || {
-        SessionStore::open(session.to_owned())
+        crate::session_storage::open(session.to_owned())
             .unwrap()
             .load_projection()
             .unwrap()
@@ -281,7 +281,7 @@ async fn check(disconnect: bool, deny: bool, terminal_batch: bool) {
     } else {
         assert_eq!(std::fs::read_to_string(&effect).unwrap(), "write\n");
     }
-    let projection = SessionStore::open(session.clone())
+    let projection = crate::session_storage::open(session.clone())
         .unwrap()
         .load_projection()
         .unwrap();

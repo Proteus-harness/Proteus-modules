@@ -62,7 +62,7 @@ async fn cancel_long_poll_and_check_cold_history(tty: bool) {
     .await;
     let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
     loop {
-        let projection = SessionStore::open(session.clone())
+        let projection = crate::session_storage::open(session.clone())
             .unwrap()
             .load_projection()
             .unwrap();
@@ -97,7 +97,7 @@ async fn cancel_long_poll_and_check_cold_history(tty: bool) {
         );
         tokio::time::sleep(Duration::from_millis(10)).await;
     }
-    let projection = SessionStore::open(session.clone())
+    let projection = crate::session_storage::open(session.clone())
         .unwrap()
         .load_projection()
         .unwrap();
@@ -231,7 +231,7 @@ pathlib.Path("late-marker").write_text("late")
         !root.path().join("late-marker").exists(),
         "descendant survived cancellation and wrote its own late marker"
     );
-    let projection = SessionStore::open(session.clone())
+    let projection = crate::session_storage::open(session.clone())
         .unwrap()
         .load_projection()
         .unwrap();

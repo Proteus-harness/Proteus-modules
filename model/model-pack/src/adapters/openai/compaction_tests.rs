@@ -190,14 +190,23 @@ async fn checkpoint_survives_cold_history_and_cannot_be_sent_to_an_unsupported_e
     let response = from_openai_response(json!({"output":[checkpoint()]})).unwrap();
     let root = tempfile::tempdir().unwrap();
     let workspace = tempfile::tempdir().unwrap();
-    let store = SessionStore::new(root.path(), workspace.path(), new_session_id()).unwrap();
+    let store = SessionStore::new(
+        crate::test_storage::service(workspace.path()),
+        root.path(),
+        workspace.path(),
+        new_session_id(),
+    )
+    .unwrap();
     store
         .append_history(new_thread_id(), None, &response.messages)
         .await
         .unwrap();
     let path = store.session_dir().to_path_buf();
     drop(store);
-    let restored = SessionStore::open(path).unwrap().load_messages().unwrap();
+    let restored = SessionStore::open(crate::test_storage::service(workspace.path()), path)
+        .unwrap()
+        .load_messages()
+        .unwrap();
     assert_eq!(restored, response.messages);
     let request = CanonicalModelRequest::new(ModelRef::new("openai", "fixture"), restored);
     assert_eq!(

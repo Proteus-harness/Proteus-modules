@@ -9,8 +9,8 @@ use proteus_contracts::{
     model_standard::{ContentPart, ModelFailureKind},
 };
 use proteus_core::core::{
-    AgentRuntime, JournalEntry, ModelResponseOutcome, ModuleCatalog, SessionStore,
-    TurnSettlementStatus, WorkflowReplayOptions, replay_workflow,
+    AgentRuntime, JournalEntry, ModelResponseOutcome, ModuleCatalog, TurnSettlementStatus,
+    WorkflowReplayOptions, replay_workflow,
 };
 use serde_json::{Value, json};
 use tokio::{io::AsyncWriteExt, net::TcpListener, sync::Notify};
@@ -293,7 +293,7 @@ async fn check(mode: Mode) {
         "x"
     );
     let session_dir = runtime.session_dir().unwrap().to_owned();
-    let projection = SessionStore::open(session_dir.clone())
+    let projection = crate::session_storage::open(session_dir.clone())
         .unwrap()
         .load_projection()
         .unwrap();

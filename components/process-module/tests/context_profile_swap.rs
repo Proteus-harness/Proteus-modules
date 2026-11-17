@@ -1,4 +1,7 @@
 //! A config-only context swap through the real workflow/context/search workers.
+#[path = "fixtures/session_storage.rs"]
+mod session_storage;
+
 use std::{path::PathBuf, sync::Arc, time::Duration};
 
 use proteus_contracts::{
@@ -6,7 +9,7 @@ use proteus_contracts::{
     model_standard::ContentPart,
 };
 use proteus_core::core::{
-    AgentRuntime, AppConfig, JournalEntry, ModuleCatalog, SessionStore, TurnSettlementStatus,
+    AgentRuntime, AppConfig, JournalEntry, ModuleCatalog, TurnSettlementStatus,
     WorkflowReplayOptions, replay_workflow,
 };
 use serde_json::json;
@@ -58,7 +61,11 @@ async fn context_search_profile_prefetches_code_and_preserves_workflow_replay() 
         }
         std::fs::write(&config_path, serde_json::to_vec(&profile).unwrap()).unwrap();
         let mut config = AppConfig::load(Some(&config_path)).await.unwrap();
-        for component in config.components.values_mut() {
+        crate::session_storage::configure(&mut config);
+        for (component_id, component) in &mut config.components {
+            if component_id == "fixture-session-storage" {
+                continue;
+            }
             let mut value = serde_json::to_value(&*component).unwrap();
             // The pinned production profile uses independent packages. Resolve
             // their actual Cargo artifacts instead of depending on the user's
@@ -108,7 +115,7 @@ async fn context_search_profile_prefetches_code_and_preserves_workflow_replay() 
             .unwrap();
         let session_dir: PathBuf = runtime.session_dir().unwrap().into();
         drop(runtime);
-        let projection = SessionStore::open(session_dir.clone())
+        let projection = crate::session_storage::open(session_dir.clone())
             .unwrap()
             .load_projection()
             .unwrap();

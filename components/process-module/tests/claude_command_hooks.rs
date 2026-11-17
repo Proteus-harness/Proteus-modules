@@ -1,4 +1,7 @@
 //! Exercise the foreign command adapter through the real Rust host and worker.
+#[path = "fixtures/session_storage.rs"]
+mod session_storage;
+
 use std::{
     path::{Path, PathBuf},
     sync::{
@@ -15,7 +18,7 @@ use proteus_contracts::{
     domain::{ToolCall, new_call_id},
 };
 use proteus_core::core::{
-    AgentRuntime, AppConfig, JournalEntry, ModuleCatalog, SessionStore, TurnSettlementStatus,
+    AgentRuntime, AppConfig, JournalEntry, ModuleCatalog, TurnSettlementStatus,
 };
 use serde_json::json;
 
@@ -105,7 +108,8 @@ fn tool_config() -> AppConfig {
     config
 }
 
-async fn runtime(config: AppConfig, workspace: &Path, approval: Arc<Approval>) -> AgentRuntime {
+async fn runtime(mut config: AppConfig, workspace: &Path, approval: Arc<Approval>) -> AgentRuntime {
+    crate::session_storage::configure(&mut config);
     let catalog = ModuleCatalog::from_config(&config).unwrap();
     AgentRuntime::builder(config, workspace.into())
         .with_module_catalog(catalog)
@@ -218,7 +222,7 @@ async fn stop_continues_the_same_turn_then_persists_its_success() {
     )
     .await;
     runtime.run("check the project".into()).await.unwrap();
-    let projection = SessionStore::open(runtime.session_dir().unwrap().to_path_buf())
+    let projection = crate::session_storage::open(runtime.session_dir().unwrap().to_path_buf())
         .unwrap()
         .load_projection()
         .unwrap();

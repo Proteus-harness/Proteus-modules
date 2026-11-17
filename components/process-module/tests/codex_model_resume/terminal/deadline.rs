@@ -44,7 +44,7 @@ async fn explicit_export_timeout_constrains_terminal_and_replays_recorded_error(
     assert_eq!(output.text, "Export deadline observed.");
     server.await.unwrap();
     let session = runtime.session_dir().unwrap().to_owned();
-    let projection = SessionStore::open(session.clone())
+    let projection = crate::session_storage::open(session.clone())
         .unwrap()
         .load_projection()
         .unwrap();
