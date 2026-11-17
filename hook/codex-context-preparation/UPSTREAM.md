@@ -19,7 +19,9 @@ OpenAI Codex на commit `67cc3c318dc8b5532db6ade4182b1dc6f3870889`.
 SHA256 сохранены в `provenance.json`; Apache-2.0 LICENSE находится рядом.
 
 `codex_base_instructions` выбирает шаблон по точному model ID на `BeforeModel`
-прямого model call. Пользовательские instructions и messages сохраняются.
+прямого model call и auxiliary-запроса с typed operation `Compact`. Обычный
+auxiliary summary этот hook пропускает. Пользовательские instructions и messages
+сохраняются.
 Перед выдачей модели устаревший пример `apply_patch` с `command:[...]` из
 fallback-шаблона переводится в фактический binding из `request.tools`:
 function с `patch:string` получает JSON arguments, freeform с `input:string` —
@@ -31,9 +33,9 @@ function с `patch:string` получает JSON arguments, freeform с `input:s
 Каталог native CLI, полученный с сервера, может отличаться от этого публичного
 pin. Равенство установленному CLI проверяется отдельным differential gate.
 
-`codex_compact` продолжает реализовывать локальный алгоритм предыдущего pin.
-Текущая native remote compaction и lifecycle code-mode-host имеют отдельные
-границы исполнения и не подтверждаются тестом выбора base instructions.
+`codex_compact` реализует локальную и remote V2 ветки compactor pin `67cc3c3`.
+Lifecycle code-mode-host имеет отдельную границу исполнения и не подтверждается
+тестом выбора base instructions.
 
 ## Локальная И Удалённая Компактация
 
@@ -43,20 +45,51 @@ provider использует прежний `POST responses/compact`, а provid
 capability — локальный summary. Источники: [выбор ветки](https://github.com/openai/codex/blob/67cc3c318dc8b5532db6ade4182b1dc6f3870889/codex-rs/core/src/tasks/compact.rs#L41-L76),
 [capability провайдера](https://github.com/openai/codex/blob/67cc3c318dc8b5532db6ade4182b1dc6f3870889/codex-rs/model-provider/src/provider.rs#L353-L364)
 и [default feature](https://github.com/openai/codex/blob/67cc3c318dc8b5532db6ade4182b1dc6f3870889/codex-rs/features/src/lib.rs#L1656-L1661).
-Локальная реализация Proteus — выбранная ветка этого pin, а не полный паритет
-компактации нативного ChatGPT-профиля Codex.
+Proteus выбирает remote V2 по typed capability `supports_compaction`, которую
+selected model передаёт в host-owned событии `BeforeContext`. Модель без этой
+capability использует прежнюю локальную ветку. Выбор не зависит от имени
+провайдера. Legacy `responses/compact` и speculative/background compaction
+нового pin не реализуются этим hook.
 
 V2 добавляет последним input item `compaction_trigger` в обычный Responses
 запрос и получает `compaction` с `encrypted_content`; это непрозрачный
 checkpoint для следующих запросов, а не текстовый summary. Такой explicit
 trigger также описан в [официальном Responses API](https://developers.openai.com/api/docs/guides/compaction#request-compaction-with-an-explicit-trigger).
-Наш [summary request](src/summary.rs) делает обычный completion без tools.
-У `openai_codex` уже есть OAuth-транспорт `chatgpt.com/backend-api/codex/responses`,
-но удалённая компактация требует операции/capability в model contract,
-кодирования trigger, чтения и повторной отправки checkpoint через model adapter.
-Сейчас OpenAI adapter отклоняет canonical `Opaque` на входе и не декодирует
-compaction item на выходе; напрямую вызывать HTTP из hook в обход model boundary
-нельзя.
+Локальный [summary request](src/summary.rs) делает обычный completion без tools.
+Удалённый [request](src/remote.rs) сохраняет исходные messages, model-visible
+тулы, instructions, reasoning/cache/client metadata; выбирает `Compact`,
+`tool_choice:auto`, текстовый response format без output schema и не добавляет
+локальный summary prompt. Операция проходит существующий bound model callback:
+его owner, отмена, journal и учёт auxiliary usage сохраняются. HTTP и OAuth
+принадлежат model adapter; hook не вызывает сеть напрямую.
+
+Успешный результат — `Stop` без tool calls и ровно один assistant `Opaque`.
+Model adapter дополнительно отвечает за terminal `response.completed`, точное
+число completed checkpoint items и проверку своего opaque format/schema.
+Зашифрованный payload сохраняется без преобразования в текст. Частичный ответ,
+ошибка протокола, отмена или исчерпание бюджета не устанавливают replacement.
+Remote ошибка не включает локальный fallback; повторяются только retryable
+ошибки/оборванный stream, не более `min(stream_max_retries,2)`, с provider retry
+advice и прерываемым backoff.
+
+Replacement сохраняет real user сообщения с бюджетом64k, вставляет request-scoped
+контекст перед последним пользователем и оставляет новый checkpoint последним.
+Старый checkpoint участвует во входе следующего compact, затем заменяется новым.
+Изображения сохраняются с native auto-detail оценкой1844 токена; на границе
+изображение и соседние `<image>` labels атомарны, более поздние части сообщения
+имеют приоритет, старые сообщения после не поместившегося изображения не
+добавляются. Обрезанный user получает новые canonical identities и явную связь
+с исходным user anchor. Локальный text-only бюджет20k не меняется.
+Непрозрачные форматы учитываются в грубой оценке контекста по serialized payload;
+точную стоимость конкретного checkpoint определяет provider usage.
+
+При известном переполненном окне [preflight](src/remote_window.rs) заменяет вывод
+только непрерывного хвоста tool results на pinned placeholder, сохраняя call IDs
+и результат success/error. Он не удаляет вызовы и не меняет исходную durable
+историю. При включённом `codex_base_instructions` проверка повторяется после
+вставки фактических base instructions с итоговым host-shaped context limit.
+Все изменения становятся историей только после успешной проверки
+всего результата model call и обычного commit context preparation.
 
 Для DeepSeek через OpenCode Go поддержка remote-компактации Codex не заявлена;
 локальная ветка соответствует fallback для provider без этой capability.

@@ -206,7 +206,7 @@ pub(crate) fn message_text(message: &CanonicalMessage) -> Option<String> {
     }
 }
 
-fn part_text(part: &ContentPart) -> Option<String> {
+pub(crate) fn part_text(part: &ContentPart) -> Option<String> {
     match part {
         ContentPart::Text { text } => Some(text.clone()),
         ContentPart::Context { chunk } => Some(chunk.content.clone()),

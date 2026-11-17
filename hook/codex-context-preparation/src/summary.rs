@@ -99,7 +99,7 @@ fn model_summary_request(
 /// The core-only marker prevents the invisible compaction completion from
 /// producing ordinary assistant stream events. It is not sent by adapters as
 /// prompt content and preserves every caller-provided metadata entry.
-fn suppress_stream_deltas(request: &mut CanonicalModelRequest) {
+pub(crate) fn suppress_stream_deltas(request: &mut CanonicalModelRequest) {
     if request.metadata.is_null() {
         request.metadata = serde_json::json!({ "suppress_stream_deltas": true });
     } else if let Some(metadata) = request.metadata.as_object_mut() {

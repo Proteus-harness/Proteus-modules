@@ -15,6 +15,7 @@ use crate::{
 pub(crate) fn compact(
     input: ContextPreparationInput,
     config: &crate::config::CompactorConfig,
+    remote: bool,
     host: &mut dyn HookModuleHost,
 ) -> Result<ContextPreparationOutput, ProcessModuleError> {
     let token_estimate = input
@@ -48,6 +49,17 @@ pub(crate) fn compact(
             trigger_tokens,
             "no_persistent_history_to_compact",
         ));
+    }
+
+    if remote {
+        return crate::remote::compact(
+            input,
+            config,
+            history,
+            token_estimate,
+            trigger_tokens,
+            host,
+        );
     }
 
     let user_messages = collect_user_messages(&history.compactable_history);

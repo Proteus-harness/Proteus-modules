@@ -121,6 +121,7 @@ use crate::{
 };
 
 mod history_recovery;
+mod remote;
 mod stream_recovery;
 
 #[derive(Default)]
@@ -251,7 +252,7 @@ fn compact(
 ) -> Result<ContextPreparationOutput, ProcessModuleError> {
     let config =
         crate::config::CompactorConfig::parse(&input.config).map_err(ProcessModuleError::new)?;
-    compact_algorithm(input.preparation(), &config, host)
+    compact_algorithm(input.preparation(), &config, false, host)
 }
 fn resolve_trigger_tokens(input: &TestInput) -> Result<Option<u32>, String> {
     let config = crate::config::CompactorConfig::parse(&input.config)?;
@@ -591,6 +592,7 @@ fn preparation_hook_preserves_a_preceding_changed_candidate_when_below_threshold
         event: HookEvent::BeforeContext {
             input,
             output: prior,
+            model_capabilities: None,
             target: None,
         },
         attribution: ExecutionAttribution::detached(proteus_contracts::domain::new_execution_id()),

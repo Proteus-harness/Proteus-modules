@@ -4,7 +4,7 @@ use std::borrow::Cow;
 use proteus_contracts::{
     contracts::{HookEvent, HookInput, HookResponse, ModelCallOrigin},
     domain::{ToolSpec, ToolSurface},
-    model_standard::{InstructionBlock, InstructionKind},
+    model_standard::{InstructionBlock, InstructionKind, ModelOperation},
     process_module::{HookModule, HookModuleHost, ProcessModuleError},
 };
 
@@ -71,11 +71,10 @@ impl HookModule for CodexBaseInstructions {
 fn prepare(event: HookEvent) -> HookResponse {
     match event {
         HookEvent::BeforeModel {
-            origin: ModelCallOrigin::Direct,
-            request,
-        } => {
-            let mut instructions = request.instructions;
-            instructions.insert(
+            origin,
+            mut request,
+        } if origin == ModelCallOrigin::Direct || request.operation == ModelOperation::Compact => {
+            request.instructions.insert(
                 0,
                 InstructionBlock::new(
                     InstructionKind::Developer,
@@ -83,9 +82,19 @@ fn prepare(event: HookEvent) -> HookResponse {
                     100,
                 ),
             );
+            if request.operation == ModelOperation::Compact {
+                // The initial compaction hook sees the pending request before
+                // this configured transform. Recheck with the actual base
+                // instructions and the final host-shaped context limit.
+                crate::remote_window::trim_trailing_tool_outputs(
+                    &mut request.messages,
+                    &request.instructions,
+                    request.limits.max_input_tokens,
+                );
+            }
             HookResponse::ModelContext {
                 messages: request.messages,
-                instructions,
+                instructions: request.instructions,
             }
         }
         _ => HookResponse::Continue,
@@ -95,6 +104,104 @@ fn prepare(event: HookEvent) -> HookResponse {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn auxiliary_compaction_uses_the_same_model_instructions_as_direct_completion() {
+        use proteus_contracts::{domain::ModelRef, model_standard::CanonicalModelRequest};
+        let request = CanonicalModelRequest::new(ModelRef::new("fixture", "gpt-6.1-sol"), vec![]);
+        let direct = prepare(HookEvent::BeforeModel {
+            origin: ModelCallOrigin::Direct,
+            request: request.clone(),
+        });
+        let auxiliary = prepare(HookEvent::BeforeModel {
+            origin: ModelCallOrigin::Auxiliary,
+            request: request.with_operation(ModelOperation::Compact),
+        });
+        assert_eq!(direct, auxiliary);
+    }
+
+    #[test]
+    fn compaction_preflight_accounts_for_the_injected_base_instructions() {
+        use proteus_contracts::{
+            domain::{ModelRef, ToolResult},
+            model_standard::{CanonicalMessage, CanonicalModelRequest, ContentPart, MessageRole},
+        };
+        let result = CanonicalMessage::new(
+            MessageRole::Tool,
+            vec![ContentPart::ToolResult {
+                result: ToolResult::ok("fixture-call".into(), "x".repeat(2000)),
+            }],
+        );
+        let mut request = CanonicalModelRequest::new(
+            ModelRef::new("fixture", "gpt-6.1-sol"),
+            vec![result.clone()],
+        )
+        .with_operation(ModelOperation::Compact);
+        let base = crate::budget::estimate_text_tokens(template("gpt-6.1-sol"));
+        request.limits.max_input_tokens = Some(u32::try_from(base + 50).unwrap());
+        assert!(
+            crate::remote_history::estimate_messages(&request.messages)
+                < request.limits.max_input_tokens.unwrap()
+        );
+        let HookResponse::ModelContext {
+            mut messages,
+            instructions,
+        } = prepare(HookEvent::BeforeModel {
+            origin: ModelCallOrigin::Auxiliary,
+            request,
+        })
+        else {
+            panic!("expected model context")
+        };
+        assert_ne!(messages[0], result);
+        assert!(
+            matches!(&messages[0].parts[0].payload, ContentPart::ToolResult {result} if result.output=="Output exceeded the available model context and was truncated")
+        );
+        assert!(crate::remote_history::estimate_messages(&messages) as usize + base <= base + 50);
+        let once = messages.clone();
+        crate::remote_window::trim_trailing_tool_outputs(
+            &mut messages,
+            &instructions,
+            Some((base + 50) as u32),
+        );
+        assert_eq!(
+            messages, once,
+            "a second preflight must be a no-op when the final request fits"
+        );
+    }
+
+    #[test]
+    fn compaction_keeps_fitting_tool_outputs_and_plain_auxiliary_requests_unchanged() {
+        use proteus_contracts::{
+            domain::{ModelRef, ToolResult},
+            model_standard::{CanonicalMessage, CanonicalModelRequest, ContentPart, MessageRole},
+        };
+        let result = CanonicalMessage::new(
+            MessageRole::Tool,
+            vec![ContentPart::ToolResult {
+                result: ToolResult::ok("fixture-call".into(), "short"),
+            }],
+        );
+        let mut request = CanonicalModelRequest::new(
+            ModelRef::new("fixture", "gpt-6.1-sol"),
+            vec![result.clone()],
+        );
+        request.limits.max_input_tokens = Some(100_000);
+        assert_eq!(
+            prepare(HookEvent::BeforeModel {
+                origin: ModelCallOrigin::Auxiliary,
+                request: request.clone(),
+            }),
+            HookResponse::Continue
+        );
+        let HookResponse::ModelContext { messages, .. } = prepare(HookEvent::BeforeModel {
+            origin: ModelCallOrigin::Auxiliary,
+            request: request.with_operation(ModelOperation::Compact),
+        }) else {
+            panic!("expected model context")
+        };
+        assert_eq!(messages, vec![result]);
+    }
 
     #[test]
     fn legacy_patch_example_follows_the_actual_function_or_freeform_binding() {

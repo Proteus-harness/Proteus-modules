@@ -7,6 +7,9 @@ pub use config_schema::config_schema;
 mod base_instructions;
 mod history;
 mod recovery;
+mod remote;
+mod remote_history;
+mod remote_window;
 mod summary;
 
 use proteus_contracts::{
@@ -27,14 +30,18 @@ impl HookModule for CodexPreparationHook {
         let hook: HookInput = serde_json::from_str(&input_json).map_err(error)?;
         let response = match hook.event {
             HookEvent::BeforeContext {
-                mut input, output, ..
+                mut input,
+                output,
+                model_capabilities,
+                ..
             } => {
                 // Every participant transforms the validated preceding candidate.
                 input.messages = output.messages;
                 if output.changed {
                     input.token_estimate = output.token_estimate;
                 }
-                let prepared = compaction::compact(input, &self.0, host)?;
+                let remote = model_capabilities.is_some_and(|value| value.supports_compaction);
+                let prepared = compaction::compact(input, &self.0, remote, host)?;
                 if output.changed && !prepared.changed {
                     HookResponse::Continue
                 } else {
