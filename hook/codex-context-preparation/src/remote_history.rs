@@ -1,5 +1,6 @@
 //! Remote V2 retained history, adapted from Codex 67cc3c3
 //! compact_remote_v2.rs and compact_remote_v2_images.rs (Apache-2.0).
+use proteus_contracts::model_standard::input_estimates::ModelInputEstimate;
 use proteus_contracts::{
     domain::{CompactionUserMessageReplacement, ToolContent, new_message_id},
     model_standard::{CanonicalMessage, CanonicalPart, ContentPart, PartProvenance, PartScope},
@@ -15,10 +16,33 @@ use crate::{
 const AUTO_IMAGE_TOKENS: usize = 7373usize.div_ceil(4);
 
 pub(crate) fn estimate_messages(messages: &[CanonicalMessage]) -> u32 {
+    estimate_messages_with_estimates(messages, &ModelInputEstimate::default())
+}
+
+pub(crate) fn estimate_messages_with_estimates(
+    messages: &[CanonicalMessage],
+    estimates: &ModelInputEstimate,
+) -> u32 {
     let total = messages.iter().fold(0usize, |total, message| {
-        total.saturating_add(message_tokens(message).max(1))
+        let tokens = message.parts.iter().fold(0usize, |sum, part| {
+            sum.saturating_add(
+                estimates
+                    .tokens_for(part)
+                    .map_or_else(|| part_tokens(&part.payload), |tokens| tokens as usize),
+            )
+        });
+        let fully_estimated_opaque = !message.parts.is_empty()
+            && message.parts.iter().all(|part| {
+                matches!(part.payload, ContentPart::Opaque { .. })
+                    && estimates.tokens_for(part).is_some()
+            });
+        total.saturating_add(if fully_estimated_opaque {
+            tokens
+        } else {
+            tokens.max(1)
+        })
     });
-    u32::try_from(total.max(1)).unwrap_or(u32::MAX)
+    u32::try_from(if messages.is_empty() { 1 } else { total }).unwrap_or(u32::MAX)
 }
 
 fn message_tokens(message: &CanonicalMessage) -> usize {

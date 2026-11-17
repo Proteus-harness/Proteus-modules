@@ -7,8 +7,9 @@ use proteus_contracts::{
         CacheHints, ContextBundle, Event, HistoryCompactionReport, ToolCall, ToolResult, ToolSpec,
     },
     model_standard::{
-        CanonicalMessage, CanonicalModelRequest, CanonicalModelResponse, InstructionBlock,
-        InstructionKind, TokenUsage,
+        CanonicalMessage, CanonicalModelRequest, CanonicalModelResponse, ContentPart,
+        InstructionBlock, InstructionKind, TokenUsage,
+        input_estimates::{ContextTokenEstimateSource, ModelInputEstimate},
     },
     process_module::{ProcessModuleError, WorkflowModuleHostMut, WorkflowModuleInput},
 };
@@ -226,6 +227,31 @@ fn request_from_state_with_instruction_blocks_and_options(
         }
     };
     request.messages = compacted.messages;
+    // Advisory estimates travel with the preparation report, never the durable
+    // canonical payload. Continuations reuse their recorded report without a new
+    // provider callback or another context preparation.
+    let estimates = compacted
+        .report
+        .as_ref()
+        .and_then(|report| ModelInputEstimate::from_metadata(&report.metadata))
+        .or_else(|| {
+            input
+                .runtime
+                .continuation
+                .as_ref()
+                .and_then(|continuation| {
+                    continuation
+                        .history
+                        .compactions
+                        .iter()
+                        .rev()
+                        .find_map(|report| ModelInputEstimate::from_metadata(&report.metadata))
+                })
+        });
+    if let Some(mut estimates) = estimates {
+        estimates.retain_for(&request.messages);
+        estimates.write_metadata(&mut request.metadata);
+    }
     // Порог автокомпакта считает компактор (он владеет конфигом), а возвращает
     // его в отчёте. Кладём в metadata запроса, чтобы снимок взял именно его —
     // тогда метка на индикаторе контекста совпадает с реальным триггером.
@@ -272,15 +298,34 @@ fn compact_messages(
     context_hint: Option<u32>,
 ) -> Result<CompactedMessages, ProcessModuleError> {
     ensure_not_cancelled(host)?;
-    let token_estimate = [
-        effective_token_estimate(&request.messages, last_usage),
-        context_hint,
-    ]
-    .into_iter()
-    .flatten()
-    .max();
+    let valid_usage = last_usage.is_some_and(|usage| usage.message_count <= request.messages.len());
+    let observed = context_hint.is_some() || valid_usage;
+    let usage_estimate = effective_token_estimate(&request.messages, last_usage);
+    let has_opaque = request
+        .messages
+        .iter()
+        .flat_map(|message| &message.parts)
+        .any(|part| matches!(part.payload, ContentPart::Opaque { .. }));
+    let token_estimate = if has_opaque && observed {
+        // A restored usage hint covers the checkpoint even when the generic
+        // canonical estimate cannot interpret it.
+        if valid_usage {
+            usage_estimate
+        } else {
+            context_hint
+        }
+    } else {
+        [usage_estimate, context_hint].into_iter().flatten().max()
+    };
+    let mut preparation_request = request.clone();
+    let source = if observed {
+        ContextTokenEstimateSource::Observed
+    } else {
+        ContextTokenEstimateSource::Estimated
+    };
+    source.write_metadata(&mut preparation_request.metadata);
     let compaction_input =
-        ContextPreparationInput::new(request.messages.clone(), Some(request.clone()))
+        ContextPreparationInput::new(request.messages.clone(), Some(preparation_request))
             .with_reason(reason)
             .with_token_estimate(token_estimate)
             .with_window_tokens(input.runtime.max_input_tokens);

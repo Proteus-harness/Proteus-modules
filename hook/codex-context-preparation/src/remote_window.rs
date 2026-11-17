@@ -7,21 +7,39 @@ use proteus_contracts::{
 };
 
 use crate::{budget::estimate_text_tokens, remote_history::estimate_messages};
+use proteus_contracts::model_standard::input_estimates::ModelInputEstimate;
 
 const TRUNCATED_OUTPUT: &str = "Output exceeded the available model context and was truncated";
 
+#[cfg(test)]
 pub(crate) fn trim_trailing_tool_outputs(
     messages: &mut [CanonicalMessage],
     instructions: &[InstructionBlock],
     window_tokens: Option<u32>,
 ) {
+    trim_trailing_tool_outputs_with_estimates(
+        messages,
+        instructions,
+        window_tokens,
+        &ModelInputEstimate::default(),
+    );
+}
+
+pub(crate) fn trim_trailing_tool_outputs_with_estimates(
+    messages: &mut [CanonicalMessage],
+    instructions: &[InstructionBlock],
+    window_tokens: Option<u32>,
+    estimates: &ModelInputEstimate,
+) {
     let Some(window) = window_tokens else { return };
     let base_tokens = instructions.iter().fold(0usize, |total, block| {
         total.saturating_add(estimate_text_tokens(&block.text))
     });
-    let mut estimate = usize::try_from(estimate_messages(messages))
-        .unwrap_or(usize::MAX)
-        .saturating_add(base_tokens);
+    let mut estimate = usize::try_from(crate::remote_history::estimate_messages_with_estimates(
+        messages, estimates,
+    ))
+    .unwrap_or(usize::MAX)
+    .saturating_add(base_tokens);
     for message in messages.iter_mut().rev() {
         if estimate <= window as usize {
             break;

@@ -61,14 +61,31 @@ impl HookModule for CodexBaseInstructions {
     fn invoke_json(
         &self,
         input: String,
-        _host: &mut dyn HookModuleHost,
+        host: &mut dyn HookModuleHost,
     ) -> Result<String, ProcessModuleError> {
         let input: HookInput = serde_json::from_str(&input).map_err(super::error)?;
-        serde_json::to_string(&prepare(input.event)).map_err(super::error)
+        let estimates = match &input.event {
+            HookEvent::BeforeModel { request, .. }
+                if request.operation == ModelOperation::Compact =>
+            {
+                crate::input_estimates::for_messages(&request.model, &request.messages, host)?
+            }
+            _ => Default::default(),
+        };
+        serde_json::to_string(&prepare_with_estimates(input.event, &estimates))
+            .map_err(super::error)
     }
 }
 
+#[cfg(test)]
 fn prepare(event: HookEvent) -> HookResponse {
+    prepare_with_estimates(event, &Default::default())
+}
+
+fn prepare_with_estimates(
+    event: HookEvent,
+    estimates: &proteus_contracts::model_standard::input_estimates::ModelInputEstimate,
+) -> HookResponse {
     match event {
         HookEvent::BeforeModel {
             origin,
@@ -86,10 +103,11 @@ fn prepare(event: HookEvent) -> HookResponse {
                 // The initial compaction hook sees the pending request before
                 // this configured transform. Recheck with the actual base
                 // instructions and the final host-shaped context limit.
-                crate::remote_window::trim_trailing_tool_outputs(
+                crate::remote_window::trim_trailing_tool_outputs_with_estimates(
                     &mut request.messages,
                     &request.instructions,
                     request.limits.max_input_tokens,
+                    estimates,
                 );
             }
             HookResponse::ModelContext {

@@ -121,6 +121,7 @@ use crate::{
 };
 
 mod history_recovery;
+mod input_estimates;
 mod remote;
 mod stream_recovery;
 
@@ -129,6 +130,9 @@ struct TestHost {
     responses: Mutex<Vec<Result<CanonicalModelResponse, ProcessModuleError>>>,
     cancelled: bool,
     requests: Mutex<Vec<CanonicalModelRequest>>,
+    estimate_tokens: Option<u32>,
+    estimate_requests:
+        Mutex<Vec<proteus_contracts::model_standard::input_estimates::ModelInputEstimateRequest>>,
 }
 
 impl TestHost {
@@ -157,6 +161,29 @@ impl TestHost {
 }
 
 impl HookModuleHost for TestHost {
+    fn estimate_model_input_json(
+        &self,
+        request_json: String,
+    ) -> Result<String, ProcessModuleError> {
+        use proteus_contracts::model_standard::input_estimates::{
+            ModelInputEstimate, ModelInputEstimateRequest, ModelPartTokenEstimate,
+        };
+        let request: ModelInputEstimateRequest = serde_json::from_str(&request_json).unwrap();
+        request.validate().unwrap();
+        let estimate = self.estimate_tokens.map(|tokens| ModelInputEstimate {
+            parts: request
+                .parts
+                .iter()
+                .map(|part| ModelPartTokenEstimate {
+                    part_id: part.part_id,
+                    tokens,
+                })
+                .collect(),
+        });
+        self.estimate_requests.lock().unwrap().push(request);
+        Ok(serde_json::to_string(&estimate).unwrap())
+    }
+
     fn is_cancelled(&self) -> Result<bool, ProcessModuleError> {
         Ok(self.cancelled)
     }

@@ -12,7 +12,7 @@ use proteus_contracts::{
     process_module::HookModule,
 };
 
-fn checkpoint(value: &str) -> CanonicalModelResponse {
+pub(super) fn checkpoint(value: &str) -> CanonicalModelResponse {
     CanonicalModelResponse::new(
         CanonicalMessage::new(
             MessageRole::Assistant,
@@ -26,7 +26,7 @@ fn checkpoint(value: &str) -> CanonicalModelResponse {
     )
 }
 
-fn remote(
+pub(super) fn remote(
     input: TestInput,
     host: &mut dyn HookModuleHost,
 ) -> Result<ContextPreparationOutput, ProcessModuleError> {

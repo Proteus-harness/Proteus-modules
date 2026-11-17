@@ -8,6 +8,7 @@ use proteus_contracts::{
     model_standard::{
         CanonicalMessage, CanonicalModelRequest, CanonicalModelResponse, ContentPart, FinishReason,
         MessageRole, ModelFailureKind, ModelOperation, PartProvenance, PartScope,
+        input_estimates::ModelInputEstimate,
     },
     process_module::{HookModuleHost, ProcessModuleError},
 };
@@ -17,7 +18,7 @@ use crate::{
     config::CompactorConfig,
     history::{HistoryParts, collect_user_messages},
     recovery::{retry_delay, wait_for_retry},
-    remote_history::{estimate_messages, select_recent_users},
+    remote_history::{estimate_messages_with_estimates, select_recent_users},
     summary::{ensure_not_cancelled, suppress_stream_deltas},
 };
 
@@ -27,11 +28,12 @@ pub(crate) fn compact(
     history: HistoryParts,
     token_estimate: u32,
     trigger_tokens: u32,
+    estimates: &ModelInputEstimate,
     host: &mut dyn HookModuleHost,
 ) -> Result<ContextPreparationOutput, ProcessModuleError> {
     let users = collect_user_messages(&history.compactable_history);
     let retained = select_recent_users(&users, 64_000);
-    let request = request(&input, history.summary_history)?;
+    let request = request(&input, history.summary_history, estimates)?;
     let checkpoint = complete_checkpoint(request, config, host)?;
     ensure_not_cancelled(host)?;
 
@@ -43,7 +45,16 @@ pub(crate) fn compact(
         history.ephemeral_context.iter().cloned(),
     );
     messages.push(checkpoint);
-    let output_estimate = estimate_messages(&messages);
+    let estimates = crate::input_estimates::for_messages(
+        &input
+            .request
+            .as_ref()
+            .expect("remote request template")
+            .model,
+        &messages,
+        host,
+    )?;
+    let output_estimate = estimate_messages_with_estimates(&messages, &estimates);
     let mut output = ContextPreparationOutput::changed(messages, None);
     output.user_message_replacements = retained.replacements;
     output.token_estimate = Some(output_estimate);
@@ -56,20 +67,23 @@ pub(crate) fn compact(
         "ephemeral_context_messages": history.ephemeral_context.len(),
         "remote_compaction": true,
     });
+    estimates.write_metadata(&mut output.metadata);
     Ok(output)
 }
 
 fn request(
     input: &ContextPreparationInput,
     mut messages: Vec<CanonicalMessage>,
+    estimates: &ModelInputEstimate,
 ) -> Result<CanonicalModelRequest, ProcessModuleError> {
     let template = input.request.as_ref().ok_or_else(|| {
         ProcessModuleError::new("remote compaction requires a model request template")
     })?;
-    crate::remote_window::trim_trailing_tool_outputs(
+    crate::remote_window::trim_trailing_tool_outputs_with_estimates(
         &mut messages,
         &template.instructions,
         input.window_tokens,
+        estimates,
     );
     // No summary prompt and no loss of model-visible tools. The adapter owns
     // encoding the operation as its native compaction request/trigger.

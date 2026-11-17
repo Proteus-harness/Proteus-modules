@@ -389,3 +389,172 @@ fn image_only_current_user_survives_first_request_and_mid_turn_text_only_replace
         ContentPart::Image { .. }
     ));
 }
+
+#[test]
+fn opaque_checkpoint_is_context_without_metadata_tax_or_zero_wrapper() {
+    use proteus_contracts::model_standard::input_estimates::{
+        ModelInputEstimate, ModelPartTokenEstimate,
+    };
+    for tokens in [0, 433] {
+        let checkpoint = CanonicalMessage::new(
+            MessageRole::Assistant,
+            vec![ContentPart::Opaque {
+                format: "fixture.v1".into(),
+                data: json!({"ciphertext": "x".repeat(3172)}),
+            }],
+        );
+        let mut request =
+            CanonicalModelRequest::new(ModelRef::new("fixture", "model"), vec![checkpoint.clone()]);
+        ModelInputEstimate {
+            parts: vec![ModelPartTokenEstimate {
+                part_id: checkpoint.parts[0].part_id,
+                tokens,
+            }],
+        }
+        .write_metadata(&mut request.metadata);
+        request.metadata["unrelated_accounting"] = json!("x".repeat(10000));
+        let snapshot = request_token_usage_snapshot(&request, None, "execute");
+        assert_eq!(snapshot.estimated_input_tokens, tokens);
+        assert_eq!(
+            category_tokens(&snapshot, "context"),
+            (tokens > 0).then_some(tokens)
+        );
+        assert_eq!(category_tokens(&snapshot, "messages"), None);
+        assert_eq!(request.messages, vec![checkpoint]);
+    }
+}
+
+#[test]
+fn opaque_checkpoint_without_native_hint_uses_generic_nonzero_fallback() {
+    let request = CanonicalModelRequest::new(
+        ModelRef::new("fixture", "model"),
+        vec![CanonicalMessage::new(
+            MessageRole::Assistant,
+            vec![ContentPart::Opaque {
+                format: "external.v1".into(),
+                data: json!({"ciphertext": "x".repeat(3172)}),
+            }],
+        )],
+    );
+    assert!(
+        category_tokens(
+            &request_token_usage_snapshot(&request, None, "execute"),
+            "context"
+        )
+        .unwrap()
+            > 433
+    );
+}
+
+#[test]
+fn preparation_sources_and_recorded_estimates_survive_request_building_and_resume() {
+    use proteus_contracts::{
+        contracts::{ContextPreparationOutput, WorkflowContinuation, WorkflowHistoryUpdate},
+        model_standard::input_estimates::{
+            ContextTokenEstimateSource, ModelInputEstimate, ModelPartTokenEstimate,
+        },
+    };
+    let checkpoint = CanonicalMessage::new(
+        MessageRole::Assistant,
+        vec![ContentPart::Opaque {
+            format: "fixture.v1".into(),
+            data: json!({"ciphertext": "x".repeat(3172)}),
+        }],
+    );
+    let estimates = ModelInputEstimate {
+        parts: vec![ModelPartTokenEstimate {
+            part_id: checkpoint.parts[0].part_id,
+            tokens: 433,
+        }],
+    };
+    let input = workflow_input("continue");
+    for hint in [None, Some(0), Some(214)] {
+        let mut output = ContextPreparationOutput::unchanged(vec![checkpoint.clone()]);
+        estimates.write_metadata(&mut output.metadata);
+        let host = FakeHost::default().with_compaction_outputs(vec![output]);
+        let prepared =
+            crate::host::pre_turn_request(&input, &host, &[checkpoint.clone()], hint).unwrap();
+        assert_eq!(
+            ModelInputEstimate::from_metadata(&prepared.request.metadata),
+            Some(estimates.clone())
+        );
+        let compactions = host.compactions.lock().unwrap();
+        let material = &compactions[0];
+        assert_eq!(
+            ContextTokenEstimateSource::from_metadata(&material.request.as_ref().unwrap().metadata),
+            Some(if hint.is_some() {
+                ContextTokenEstimateSource::Observed
+            } else {
+                ContextTokenEstimateSource::Estimated
+            })
+        );
+        if hint.is_some() {
+            assert_eq!(material.token_estimate, hint);
+        }
+        let mut resumed = input.clone();
+        resumed.runtime.continuation = Some(WorkflowContinuation {
+            attempt: 1,
+            reason: "resume".into(),
+            current_user_message_id: input.history[0].id,
+            history: WorkflowHistoryUpdate::new(vec![])
+                .with_compactions(vec![prepared.compaction.unwrap()]),
+        });
+        let replay_host = FakeHost::default();
+        let replay = crate::host::first_sampling_request(
+            &resumed,
+            &replay_host,
+            &[checkpoint.clone()],
+            None,
+        )
+        .unwrap();
+        assert_eq!(
+            ModelInputEstimate::from_metadata(&replay.request.metadata),
+            Some(estimates.clone())
+        );
+        assert!(
+            replay_host.compactions.lock().unwrap().is_empty(),
+            "resume must not repeat preparation"
+        );
+        let replay_without_checkpoint =
+            crate::host::first_sampling_request(&resumed, &replay_host, &input.history, None)
+                .unwrap();
+        assert!(
+            ModelInputEstimate::from_metadata(&replay_without_checkpoint.request.metadata)
+                .unwrap()
+                .parts
+                .is_empty()
+        );
+    }
+}
+
+#[test]
+fn fresh_usage_takes_precedence_over_an_older_restored_hint_for_checkpoint_history() {
+    let input = workflow_input("continue");
+    let checkpoint = CanonicalMessage::new(
+        MessageRole::Assistant,
+        vec![ContentPart::Opaque {
+            format: "fixture".into(),
+            data: json!({"ciphertext":"x".repeat(3172)}),
+        }],
+    );
+    let host = FakeHost::default();
+    let last = crate::token_accounting::LastModelUsage {
+        usage: TokenUsage::new(200, 14),
+        message_count: 1,
+    };
+    crate::host::request_from_state_with_instruction_blocks(
+        &input,
+        &host,
+        &[checkpoint],
+        vec![],
+        None,
+        "codex_loop",
+        Some(&last),
+        Some(100),
+    )
+    .unwrap();
+    assert_eq!(
+        host.compactions.lock().unwrap()[0].token_estimate,
+        Some(214)
+    );
+}

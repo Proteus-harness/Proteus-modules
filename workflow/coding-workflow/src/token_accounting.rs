@@ -2,6 +2,7 @@ use proteus_contracts::{
     domain::{TokenUsageCategory, TokenUsageSnapshot, TokenUsageSource},
     model_standard::{
         CanonicalMessage, CanonicalModelRequest, ContentPart, MessageRole, TokenUsage,
+        input_estimates::ModelInputEstimate,
     },
 };
 use serde_json::Value;
@@ -12,7 +13,9 @@ pub(crate) fn request_token_usage_snapshot(
     phase: &str,
 ) -> TokenUsageSnapshot {
     let mut categories = estimate_request_categories(request);
-    let estimated_input_tokens = categories.iter().map(|category| category.tokens).sum();
+    let estimated_input_tokens = categories
+        .iter()
+        .fold(0u32, |sum, category| sum.saturating_add(category.tokens));
     if let Some(actual_usage) = actual.as_ref() {
         append_provider_cache_categories(&mut categories, actual_usage);
     }
@@ -49,8 +52,20 @@ fn estimate_request_categories(request: &CanonicalModelRequest) -> Vec<TokenUsag
         bytes.instructions += request.instructions.len() * 8;
     }
 
+    let estimates = ModelInputEstimate::from_metadata(&request.metadata);
+    let mut opaque_tokens = 0u32;
     for message in &request.messages {
-        bytes.messages += message_envelope_bytes(message);
+        let checkpoint_only = !message.parts.is_empty()
+            && message.parts.iter().all(|part| {
+                matches!(part.payload, ContentPart::Opaque { .. })
+                    && estimates
+                        .as_ref()
+                        .and_then(|estimates| estimates.tokens_for(part))
+                        .is_some()
+            });
+        if !checkpoint_only {
+            bytes.messages += message_envelope_bytes(message);
+        }
         for part in &message.parts {
             match &part.payload {
                 ContentPart::Text { text }
@@ -84,6 +99,13 @@ fn estimate_request_categories(request: &CanonicalModelRequest) -> Vec<TokenUsag
                 ContentPart::Patch { patch } => {
                     bytes.patches += patch.content.len();
                 }
+                ContentPart::Opaque { data, .. } => {
+                    let tokens = estimates
+                        .as_ref()
+                        .and_then(|estimates| estimates.tokens_for(part))
+                        .unwrap_or_else(|| estimate_tokens_from_bytes(data.to_string().len()));
+                    opaque_tokens = opaque_tokens.saturating_add(tokens);
+                }
                 // OpenAI/other adapters replay the assistant text, not hosted
                 // activity records or source annotations, on the next request.
                 ContentPart::HostedToolActivity { .. } | ContentPart::Citation { .. } => {}
@@ -114,7 +136,11 @@ fn estimate_request_categories(request: &CanonicalModelRequest) -> Vec<TokenUsag
     ]
     .into_iter()
     .filter_map(|(name, bytes)| {
-        let tokens = estimate_tokens_from_bytes(bytes);
+        let tokens = estimate_tokens_from_bytes(bytes).saturating_add(if name == "context" {
+            opaque_tokens
+        } else {
+            0
+        });
         (tokens > 0)
             .then(|| TokenUsageCategory::new(name, tokens).with_source(TokenUsageSource::Estimated))
     })
@@ -174,7 +200,7 @@ fn estimate_tokens_from_bytes(bytes: usize) -> u32 {
     if bytes == 0 {
         0
     } else {
-        (bytes / 4).max(1) as u32
+        (bytes / 4).max(1).min(u32::MAX as usize) as u32
     }
 }
 
@@ -206,18 +232,38 @@ pub(crate) fn effective_token_estimate(
         .usage
         .input_tokens
         .saturating_add(last.usage.output_tokens);
-    let delta = estimate_message_tokens(&messages[last.message_count..]).unwrap_or(0);
+    let has_opaque = messages
+        .iter()
+        .flat_map(|message| &message.parts)
+        .any(|part| matches!(part.payload, ContentPart::Opaque { .. }));
+    let delta = if has_opaque && last.message_count == messages.len() {
+        0
+    } else {
+        estimate_message_tokens(&messages[last.message_count..]).unwrap_or(0)
+    };
     let usage_based = known.saturating_add(delta);
-    Some(char_estimate.unwrap_or(0).max(usage_based))
+    if has_opaque {
+        // The prior provider usage already covers the checkpoint. Only the new
+        // tail is additional input; a ciphertext fallback must not charge it again.
+        Some(usage_based)
+    } else {
+        Some(char_estimate.unwrap_or(0).max(usage_based))
+    }
 }
 
 pub(crate) fn estimate_message_tokens(messages: &[CanonicalMessage]) -> Option<u32> {
     let bytes = messages
         .iter()
         .flat_map(|message| &message.parts)
-        .map(|part| part_text_len(&part.payload))
-        .sum::<usize>();
-    Some((bytes / 4 + messages.len()).max(1) as u32)
+        .fold(0usize, |total, part| {
+            total.saturating_add(part_text_len(&part.payload))
+        });
+    Some(
+        (bytes / 4)
+            .saturating_add(messages.len())
+            .max(1)
+            .min(u32::MAX as usize) as u32,
+    )
 }
 
 fn part_text_len(part: &ContentPart) -> usize {
@@ -230,6 +276,7 @@ fn part_text_len(part: &ContentPart) -> usize {
             result.text_or_status().len() + result.metadata.to_string().len()
         }
         ContentPart::Patch { patch } => patch.content.len(),
+        ContentPart::Opaque { data, .. } => data.to_string().len(),
         ContentPart::ReasoningSummary { text } | ContentPart::Reasoning { text, .. } => text.len(),
         ContentPart::HostedToolActivity { .. } | ContentPart::Citation { .. } => 0,
         _ => 0,
@@ -242,6 +289,24 @@ mod effective_estimate_tests {
 
     fn text_message(text: &str) -> CanonicalMessage {
         CanonicalMessage::text(MessageRole::User, text.to_owned())
+    }
+
+    #[test]
+    fn actual_usage_covers_checkpoint_once_and_only_new_tail_grows() {
+        let mut messages = vec![CanonicalMessage::new(
+            MessageRole::Assistant,
+            vec![ContentPart::Opaque {
+                format: "fixture.v1".into(),
+                data: serde_json::json!({"ciphertext": "x".repeat(3172)}),
+            }],
+        )];
+        let last = LastModelUsage {
+            usage: TokenUsage::new(200, 14),
+            message_count: 1,
+        };
+        assert_eq!(effective_token_estimate(&messages, Some(&last)), Some(214));
+        messages.push(text_message(&"x".repeat(400)));
+        assert_eq!(effective_token_estimate(&messages, Some(&last)), Some(315));
     }
 
     #[test]
