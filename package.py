@@ -39,7 +39,7 @@ def model_connections(path, exports):
     identities = set()
     fields = {"id", "title", "description", "module_id", "module_config", "env_allowlist"}
     for entry in entries:
-        if (not isinstance(entry, dict) or set(entry) != fields
+        if (not isinstance(entry, dict) or set(entry) - {"auth"} != fields
                 or not all(isinstance(entry[key], str) and entry[key].strip()
                            for key in ("id", "title", "description", "module_id"))
                 or any(entry[key] != entry[key].strip() or any(ord(char) < 32 or ord(char) == 127 for char in entry[key])
@@ -50,6 +50,17 @@ def model_connections(path, exports):
                 or not all(isinstance(name, str) and re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", name)
                            for name in entry["env_allowlist"])):
             raise ValueError(f"Invalid model connection preset: {path}")
+        auth = entry.get("auth")
+        if auth is not None:
+            if (not isinstance(auth, dict) or set(auth) != {"command", "credential_file_key"}
+                    or not isinstance(auth["command"], list) or not 1 <= len(auth["command"]) <= 16
+                    or not all(isinstance(arg, str) and arg and len(arg) <= 1024
+                               and not any(ord(char) < 32 or ord(char) == 127 for char in arg)
+                               for arg in auth["command"])
+                    or not isinstance(auth["credential_file_key"], str)
+                    or not auth["credential_file_key"]
+                    or any(ord(char) < 32 or ord(char) == 127 for char in auth["credential_file_key"])):
+                raise ValueError(f"Invalid model connection authentication: {path}")
         if not any(value in exports.get("model", []) for value in ("*", entry["module_id"])):
             raise ValueError(f"Model connection preset is not exported: {path}")
         identities.add(entry["id"])

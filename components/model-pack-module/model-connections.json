@@ -53,8 +53,8 @@
   },
   {
     "id": "openai-compatible",
-    "title": "OpenAI-совместимый API",
-    "description": "Свой сервер или другой сервис с совместимым Responses API. После создания задайте адрес сервера и ключ.",
+    "title": "Своё подключение",
+    "description": "Свой сервер или другой сервис с OpenAI-совместимым Responses API. После создания задайте адрес сервера и ключ.",
     "module_id": "custom-api",
     "module_config": {
       "implementation": "openai_compatible"
@@ -80,7 +80,7 @@
   {
     "id": "chatgpt-subscription",
     "title": "Подписка ChatGPT",
-    "description": "Использует существующую авторизацию Proteus. Если вход ещё не выполнен, войдите через команду auth openai_codex login этого модуля. Создание записи не подтверждает вход.",
+    "description": "Вход с подпиской ChatGPT через браузер.",
     "module_id": "chatgpt",
     "module_config": {
       "implementation": "openai_codex"
@@ -100,6 +100,13 @@
       "https_proxy",
       "all_proxy",
       "no_proxy"
-    ]
+    ],
+    "auth": {
+      "command": [
+        "auth",
+        "openai_codex"
+      ],
+      "credential_file_key": "auth_file"
+    }
   }
 ]

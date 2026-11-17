@@ -19,6 +19,12 @@ use super::{
 struct Cli {
     #[arg(long, global = true, help = "Separate Proteus credential file")]
     auth_file: Option<PathBuf>,
+    #[arg(
+        long,
+        global = true,
+        help = "Machine-readable result without credentials"
+    )]
+    json: bool,
     #[command(subcommand)]
     action: Action,
 }
@@ -72,7 +78,14 @@ async fn execute(cli: Cli) -> Result<()> {
             .await
             .context("ChatGPT login timed out after 15 minutes")??;
             store::write(&path, &credentials)?;
-            println!("Вход ChatGPT сохранён: {}", path.display());
+            if cli.json {
+                println!("{}", serde_json::json!({"authenticated": true}));
+            } else {
+                println!("Вход ChatGPT сохранён: {}", path.display());
+            }
+        }
+        Action::Status if cli.json => {
+            println!("{}", status_value(&path)?);
         }
         Action::Status => match store::read(&path)? {
             Some(credential) => {
@@ -97,4 +110,44 @@ async fn execute(cli: Cli) -> Result<()> {
         }
     }
     Ok(())
+}
+
+fn status_value(path: &std::path::Path) -> Result<serde_json::Value> {
+    let credential = store::read(path)?;
+    Ok(serde_json::json!({
+        "authenticated": credential.is_some(),
+        "refresh_required": credential.as_ref().is_some_and(|value| value.expires_at <= now()),
+    }))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn json_status_reports_presence_without_returning_credentials() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("credentials.json");
+        assert_eq!(
+            status_value(&path).unwrap(),
+            serde_json::json!({
+                "authenticated": false, "refresh_required": false,
+            })
+        );
+        let credentials = super::super::store::Credentials {
+            access_token: "synthetic-access".into(),
+            refresh_token: "synthetic-refresh".into(),
+            account_id: "synthetic-account".into(),
+            expires_at: now() + 3600,
+        };
+        store::write(&path, &credentials).unwrap();
+        let status = status_value(&path).unwrap();
+        assert_eq!(
+            status,
+            serde_json::json!({
+                "authenticated": true, "refresh_required": false,
+            })
+        );
+        assert!(!status.to_string().contains("synthetic"));
+    }
 }

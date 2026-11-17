@@ -116,7 +116,8 @@ class PackageTests(unittest.TestCase):
         (component / "exports.json").write_text(json.dumps({"model": ["*"]}))
         preset = {"id": "third-party", "title": "Other service", "description": "Synthetic preset",
                   "module_id": "my-service", "module_config": {"implementation": "synthetic"},
-                  "env_allowlist": ["PATH", "SYNTHETIC_API_KEY"]}
+                  "env_allowlist": ["PATH", "SYNTHETIC_API_KEY"],
+                  "auth": {"command": ["local-auth"], "credential_file_key": "credential_file"}}
         (component / "model-connections.json").write_text(json.dumps([preset]))
         selected = package.packages(self.root)["one"]
         destination = self.root / "runtime"
@@ -133,7 +134,9 @@ class PackageTests(unittest.TestCase):
         (component / "exports.json").write_text(json.dumps({"model": ["one"]}))
         path = component / "model-connections.json"
         for presets in ([{**preset, "module_id": "not-exported"}], [{**preset, "env_allowlist": ["NOT AN ENV NAME"]}],
-                        [{**preset, "module_id": "*"}], [preset, preset]):
+                        [{**preset, "module_id": "*"}], [preset, preset],
+                        [{**preset, "auth": {"command": [], "credential_file_key": "auth_file"}}],
+                        [{**preset, "auth": {"command": ["auth\nlogin"], "credential_file_key": "auth_file"}}]):
             path.write_text(json.dumps(presets))
             with self.subTest(presets=presets), self.assertRaises(ValueError):
                 package.packages(self.root)
