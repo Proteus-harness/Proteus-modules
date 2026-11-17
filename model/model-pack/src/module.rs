@@ -83,6 +83,21 @@ fn build(id: &str, config: &Value, stream: bool) -> ProcessModuleResult<Arc<dyn 
 }
 
 impl ModelModule for ProviderModule {
+    fn supports_input_estimate(&self) -> bool {
+        self.streaming.supports_input_estimate()
+    }
+
+    fn estimate_input_json(&self, request_json: String) -> ProcessModuleResult<String> {
+        let request: proteus_contracts::contracts::ModelInputEstimateRequest =
+            serde_json::from_str(&request_json).map_err(error)?;
+        request.validate().map_err(error)?;
+        let estimate = self
+            .runtime
+            .block_on(self.streaming.estimate_input(request))
+            .map_err(error)?;
+        serde_json::to_string(&estimate).map_err(error)
+    }
+
     fn describe(&self, model: ModelRef) -> ProcessModuleResult<ProcessModelDescriptor> {
         Ok(ProcessModelDescriptor {
             adapter_id: self.streaming.id().into_owned(),
@@ -169,3 +184,6 @@ impl ModelModule for ProviderModule {
 fn error(value: impl std::fmt::Display) -> ProcessModuleError {
     ProcessModuleError::new(value.to_string())
 }
+
+#[cfg(test)]
+mod input_estimate_tests;

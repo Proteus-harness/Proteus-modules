@@ -26,6 +26,9 @@ use crate::{
 mod tools;
 use tools::ToolCatalog;
 
+#[cfg(all(test, unix))]
+mod input_estimate_tests;
+
 pub struct ModuleExport {
     binding: ProcessComponentExportInitialize,
     modules: CollectedModules,
@@ -74,11 +77,17 @@ impl ModuleExport {
                             .iter()
                             .any(|tool| tool.supports_terminal_control()))
                         || (self.binding.slot == "model"
-                            && matches!(
+                            && (matches!(
                                 feature.as_str(),
                                 proteus_contracts::contracts::MODEL_CATALOG_FEATURE
                                     | proteus_contracts::contracts::MODEL_QUOTA_FEATURE
-                            ))
+                            ) || (feature.as_str()
+                                == proteus_contracts::contracts::MODEL_INPUT_ESTIMATE_FEATURE
+                                && self
+                                    .modules
+                                    .models
+                                    .get(&self.binding.module_id)
+                                    .is_some_and(|model| model.supports_input_estimate()))))
                 })
                 .cloned()
                 .collect(),
@@ -188,7 +197,7 @@ impl ModuleExport {
     fn model(&self, method: &str, params: Value, bridge: &HostBridge) -> Result<Value> {
         use proteus_contracts::contracts::{
             PROCESS_MODEL_CATALOG_METHOD, PROCESS_MODEL_DESCRIBE_METHOD,
-            PROCESS_MODEL_QUOTA_METHOD, PROCESS_MODEL_STREAM_METHOD,
+            PROCESS_MODEL_ESTIMATE_METHOD, PROCESS_MODEL_QUOTA_METHOD, PROCESS_MODEL_STREAM_METHOD,
         };
         let model = self
             .modules
@@ -196,6 +205,25 @@ impl ModuleExport {
             .get(&self.binding.module_id)
             .ok_or_else(|| anyhow!("model module was not registered"))?;
         match method {
+            PROCESS_MODEL_ESTIMATE_METHOD => {
+                if !model.supports_input_estimate()
+                    || !self.binding.host_features.iter().any(|feature| {
+                        feature == proteus_contracts::contracts::MODEL_INPUT_ESTIMATE_FEATURE
+                    })
+                {
+                    bail!("model input estimate feature was not negotiated");
+                }
+                let input: proteus_contracts::contracts::ModelInputEstimateRequest =
+                    decode(params)?;
+                input.validate().map_err(anyhow::Error::msg)?;
+                let response = model.estimate_input_json(serde_json::to_string(&input)?)?;
+                let response: Option<proteus_contracts::contracts::ModelInputEstimate> =
+                    serde_json::from_str(&response)?;
+                if let Some(response) = &response {
+                    response.validate(&input).map_err(anyhow::Error::msg)?;
+                }
+                encode(response)
+            }
             PROCESS_MODEL_DESCRIBE_METHOD => {
                 let input: proteus_contracts::contracts::ProcessModelDescribeRequest =
                     decode(params)?;

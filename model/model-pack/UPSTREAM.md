@@ -42,6 +42,18 @@ Typed model operation `Compact` использует V2-путь Codex на
 hook/workflow через общий model contract. Адаптер не вызывает их напрямую и
 не читает credentials других приложений.
 
+Для encrypted checkpoint доступна отдельная локальная операция
+`model.input_estimate.v1`. Формула взята из
+[history.rs:656–674,699–712](https://github.com/openai/codex/blob/67cc3c318dc8b5532db6ade4182b1dc6f3870889/codex-rs/core/src/context_manager/history.rs#L656)
+на том же pin: UTF-8 длина `encrypted_content` умножается с насыщением на 3,
+делится на 4, затем с насыщением вычитается 650; результат округляется вверх
+при делении на 4 и ограничивается canonical `u32`. Base64 не декодируется,
+обёртка, id и status не учитываются; нулевой результат остаётся нулём.
+Операция работает и для ранее сохранённого `openai.responses.compaction.v1`,
+не добавляет hints, не меняет ciphertext и не читает credentials или сеть.
+Неизвестные opaque formats пропускаются, повреждённый известный checkpoint
+возвращает ошибку. Feature объявляется только при `supports_compaction`.
+
 ## Зафиксированные Источники
 
 - OpenCode `77429f59823c8c6df9cfee95d4c663043b017f46`:

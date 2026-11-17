@@ -42,6 +42,7 @@ mod hosted_tools;
 mod http_retry;
 #[cfg(test)]
 mod image_tests;
+mod input_estimate;
 mod model_profile;
 mod request;
 #[cfg(test)]
@@ -214,6 +215,21 @@ fn non_empty_config_string(config: &Value, key: &str) -> Option<String> {
 
 #[async_trait]
 impl Model for OpenAiResponsesClient {
+    fn supports_input_estimate(&self) -> bool {
+        self.model_profile.supports_compaction
+    }
+
+    async fn estimate_input(
+        &self,
+        request: crate::contracts::ModelInputEstimateRequest,
+    ) -> Result<Option<crate::contracts::ModelInputEstimate>> {
+        if !self.supports_input_estimate() {
+            return Ok(None);
+        }
+        request.validate().map_err(anyhow::Error::msg)?;
+        Ok(Some(input_estimate::estimate(&request)?))
+    }
+
     async fn quota(&self) -> Result<Option<proteus_contracts::contracts::ModelQuotaSnapshot>> {
         self.codex_quota().await
     }
