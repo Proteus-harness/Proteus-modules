@@ -2,6 +2,80 @@ use super::*;
 use proteus_contracts::contracts::ModelContextObservation;
 
 #[test]
+fn pre_turn_compaction_and_first_sampling_share_one_selected_freeform_tool_surface() {
+    let mut input = workflow_input("continue editing");
+    input
+        .history
+        .insert(0, CanonicalMessage::text(MessageRole::User, "prior task"));
+    let current_user = input.history.last().unwrap().clone();
+    let mut apply_patch = ToolSpec::new(
+        "apply_patch",
+        "Apply a patch",
+        json!({"type":"object", "properties":{"input":{"type":"string"}},
+            "required":["input"], "additionalProperties":false}),
+        ToolSafety::WritesFiles,
+    );
+    apply_patch.surface = ToolSurface::freeform_lark("start: /[\\s\\S]+/");
+    let hidden = test_tool("read_file", "Read file", ToolSafety::ReadOnly);
+    let checkpoint = CanonicalMessage::new(
+        MessageRole::Assistant,
+        vec![ContentPart::Opaque {
+            format: "fixture.compaction".into(),
+            data: json!({"checkpoint":"opaque"}),
+        }],
+    );
+    let mut prepared = proteus_contracts::contracts::ContextPreparationOutput::changed(
+        vec![checkpoint.clone()],
+        None,
+    );
+    prepared.trigger_tokens = Some(12_800);
+    let mut host = FakeHost::default()
+        .with_tools(vec![apply_patch.clone(), hidden], vec![apply_patch.clone()])
+        .with_compaction_outputs(vec![prepared]);
+    CodingCodexLoopWorkflow
+        .run_json(serde_json::to_string(&input).unwrap(), &mut host)
+        .unwrap();
+
+    let compactions = host.compactions.lock().unwrap();
+    assert_eq!(compactions.len(), 1);
+    assert_eq!(compactions[0].reason.as_deref(), Some("codex_pre_turn"));
+    let template = compactions[0].request.as_ref().unwrap();
+    assert!(
+        template.tools.contains(&apply_patch),
+        "native pre-turn compaction must receive the selected freeform binding"
+    );
+    assert!(
+        template
+            .tools
+            .iter()
+            .any(|tool| tool.name == dynamic_tools::TOOL_CALL)
+    );
+    assert!(!template.messages.contains(&current_user));
+    let requests = host.requests.lock().unwrap();
+    assert_eq!(requests.len(), 1);
+    assert_eq!(requests[0].tools, template.tools);
+    assert_eq!(requests[0].instructions, template.instructions);
+    assert_eq!(requests[0].reasoning, template.reasoning);
+    assert_eq!(requests[0].cache, template.cache);
+    assert_eq!(requests[0].metadata["compaction_trigger_tokens"], 12_800);
+    assert!(requests[0].messages.contains(&checkpoint));
+    assert!(requests[0].messages.contains(&current_user));
+    assert!(
+        requests[0]
+            .messages
+            .iter()
+            .any(|message| message.name.as_deref() == Some("context"))
+    );
+    let selections = host.tool_selections.lock().unwrap();
+    assert_eq!(
+        selections.len(),
+        1,
+        "reuse the pre-turn selection rather than selecting again for sampling"
+    );
+    assert_eq!(selections[0].phase.as_deref(), Some("codex_loop"));
+}
+
+#[test]
 fn codex_loop_carries_overflow_estimate_until_provider_reports_usage() {
     let mut input = workflow_input("continue");
     input.runtime.model_context = vec![

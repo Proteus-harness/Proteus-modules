@@ -33,11 +33,10 @@ struct CompactedMessages {
 
 #[derive(Clone, Copy)]
 struct RequestOptions<'a> {
-    expose_tools: bool,
     include_dynamic_meta_tools: bool,
     last_usage: Option<&'a LastModelUsage>,
     context_hint: Option<u32>,
-    check_compaction: bool,
+    compaction_reason: Option<&'a str>,
     compaction_trigger_tokens: Option<u32>,
 }
 
@@ -66,11 +65,10 @@ pub(super) fn request_from_state(
         developer_instructions,
         phase,
         RequestOptions {
-            expose_tools: true,
             include_dynamic_meta_tools: phase != "review",
             last_usage,
             context_hint: None,
-            check_compaction: true,
+            compaction_reason: Some(phase),
             compaction_trigger_tokens: None,
         },
     )
@@ -94,11 +92,10 @@ pub(super) fn request_from_state_with_instruction_blocks(
         developer_instructions,
         phase,
         RequestOptions {
-            expose_tools: true,
             include_dynamic_meta_tools: phase != "review",
             last_usage,
             context_hint,
-            check_compaction: true,
+            compaction_reason: Some(phase),
             compaction_trigger_tokens: None,
         },
     )
@@ -116,13 +113,12 @@ pub(super) fn pre_turn_request(
         prior_messages,
         input.runtime.instructions.clone(),
         None,
-        "codex_pre_turn",
+        "codex_loop",
         RequestOptions {
-            expose_tools: false,
-            include_dynamic_meta_tools: false,
+            include_dynamic_meta_tools: true,
             last_usage: None,
             context_hint,
-            check_compaction: true,
+            compaction_reason: Some("codex_pre_turn"),
             compaction_trigger_tokens: None,
         },
     )
@@ -142,11 +138,10 @@ pub(super) fn first_sampling_request(
         None,
         "codex_loop",
         RequestOptions {
-            expose_tools: true,
             include_dynamic_meta_tools: true,
             last_usage: None,
             context_hint: None,
-            check_compaction: false,
+            compaction_reason: None,
             compaction_trigger_tokens,
         },
     )
@@ -164,17 +159,13 @@ fn request_from_state_with_instruction_blocks_and_options(
     if let Some(text) = super::intents::instructions(input)? {
         instructions.push(InstructionBlock::new(InstructionKind::Developer, text, 95));
     }
-    let selected = if options.expose_tools {
-        visible_tools(host, input, phase)?
-    } else {
-        SelectedTools::empty()
-    };
+    let selected = visible_tools(host, input, phase)?;
     let selection_metadata = selected.metadata;
     let mut tools = selected.tools;
     if phase == "plan" {
         tools.retain(|tool| matches!(tool.safety, proteus_contracts::domain::ToolSafety::ReadOnly));
     }
-    let dynamic_tools_enabled = if options.expose_tools && options.include_dynamic_meta_tools {
+    let dynamic_tools_enabled = if options.include_dynamic_meta_tools {
         let mut all_candidate_tools = dynamic_tools::all_policy_visible_tools(host, input)?;
         if phase == "plan" {
             all_candidate_tools.retain(|tool| {
@@ -218,12 +209,12 @@ fn request_from_state_with_instruction_blocks_and_options(
     // TokenUsageUpdated нёс max_input_tokens (хост-шейпер правит свою копию
     // уже после того, как module собрал снимок, поэтому делаем это здесь).
     request.limits.max_input_tokens = input.runtime.max_input_tokens;
-    let compacted = if options.check_compaction {
+    let compacted = if let Some(reason) = options.compaction_reason {
         compact_messages(
             input,
             host,
             &request,
-            phase,
+            reason,
             options.last_usage,
             options.context_hint,
         )?
@@ -348,15 +339,6 @@ pub(super) fn complete_model(
 pub(super) struct SelectedTools {
     pub(super) tools: Vec<ToolSpec>,
     pub(super) metadata: serde_json::Value,
-}
-
-impl SelectedTools {
-    fn empty() -> Self {
-        Self {
-            tools: Vec::new(),
-            metadata: serde_json::Value::Null,
-        }
-    }
 }
 
 fn visible_tools(

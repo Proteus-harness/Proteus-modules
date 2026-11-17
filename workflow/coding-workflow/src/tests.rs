@@ -41,6 +41,7 @@ struct FakeHost {
     context_builds: Mutex<Vec<AgentTask>>,
     visible_tools: Mutex<Vec<ToolSpec>>,
     selected_tools: Mutex<Vec<ToolSpec>>,
+    tool_selections: Mutex<Vec<proteus_contracts::contracts::ToolSelectionRequest>>,
     executed_calls: Mutex<Vec<ToolCall>>,
     tool_results: Mutex<VecDeque<ToolResult>>,
     compactions: Mutex<Vec<ContextPreparationInput>>,
@@ -237,7 +238,11 @@ impl WorkflowModuleHost for FakeHost {
         ))
     }
 
-    fn select_tools_json(&self, _request_json: String) -> Result<String, ProcessModuleError> {
+    fn select_tools_json(&self, request_json: String) -> Result<String, ProcessModuleError> {
+        self.tool_selections
+            .lock()
+            .unwrap()
+            .push(serde_json::from_str(&request_json).unwrap());
         let output = proteus_contracts::contracts::ToolSelectionOutput::new(
             self.selected_tools.lock().expect("selected tools").clone(),
         );

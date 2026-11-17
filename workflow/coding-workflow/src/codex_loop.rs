@@ -12,7 +12,7 @@ use crate::{
     codex_sampling::{StreamRetryConfig, complete_sampling_request},
     codex_tools::CodexToolRun,
     host::{
-        emit_event, first_sampling_request, pre_turn_request,
+        PreparedRequest, emit_event, first_sampling_request, pre_turn_request,
         request_from_state_with_instruction_blocks,
     },
     metadata::output_metadata_with_extra,
@@ -57,7 +57,7 @@ fn run_loop(
     let mut context_hint = ModelContextAccounting::from_observations(&input.runtime.model_context)
         .preflight_estimate_hint();
 
-    let (trigger_tokens, context_position) = if input.runtime.continuation.is_some() {
+    let (mut first_request, context_position) = if input.runtime.continuation.is_some() {
         // Resume the full preceding candidate; the original user is already anchored.
         (None, 0)
     } else {
@@ -69,17 +69,13 @@ fn run_loop(
                     ProcessModuleError::new("pre-turn history dropped the current user message")
                 })?;
         let current_user = turn.model_messages[current_user_position].clone();
-        let prepared = pre_turn_request(
+        let mut prepared = pre_turn_request(
             input,
             host,
             &turn.model_messages[..current_user_position],
             context_hint,
         )?;
-        let trigger_tokens = prepared
-            .compaction
-            .as_ref()
-            .and_then(|report| report.trigger_tokens);
-        let mut compacted = prepared.request.messages;
+        let mut compacted = std::mem::take(&mut prepared.request.messages);
         compacted.push(current_user);
         let changed = turn.apply_compaction_report(
             prepared.compaction.as_ref(),
@@ -97,7 +93,10 @@ fn run_loop(
         } else {
             0
         };
-        (trigger_tokens, context_position)
+        // Native compaction needs the same model-visible tools as sampling.
+        // Keep that selection and its controls; only messages change after
+        // appending the current user and injecting fresh request context.
+        (Some(prepared.request), context_position)
     };
     turn.inject_context(host, input, context_position)?;
     let mut first_sampling = true;
@@ -105,7 +104,16 @@ fn run_loop(
     loop {
         let mut prepared = if first_sampling {
             first_sampling = false;
-            first_sampling_request(input, host, &turn.model_messages, trigger_tokens)?
+            if let Some(mut request) = first_request.take() {
+                request.messages = turn.model_messages.clone();
+                PreparedRequest {
+                    request,
+                    compaction: None,
+                    preparation_target: None,
+                }
+            } else {
+                first_sampling_request(input, host, &turn.model_messages, None)?
+            }
         } else {
             request_from_state_with_instruction_blocks(
                 input,
