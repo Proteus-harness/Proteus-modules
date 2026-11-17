@@ -1,6 +1,7 @@
 // Pure model/v13 -> @opencode/ai bridge. Agent prompts, model selection,
 // authentication and provider variants belong to their own slots.
 import { readFile } from 'node:fs/promises';
+import { contextText } from '../../components/model-runtime-js/context.mjs';
 import { LLM, Media } from '../../workflow/opencode-runtime/node_modules/@opencode/ai/dist/index.js';
 
 function unsupported(message) {
@@ -95,7 +96,7 @@ export async function toNativeRequest(request, model, { signal, modelInfo } = {}
             const payload = message.parts[index].payload;
             let native;
             if (payload.Text) native = { type: 'text', text: payload.Text.text };
-            else if (payload.Context) native = { type: 'text', text: payload.Context.chunk.content };
+            else if (payload.Context) native = { type: 'text', text: contextText(payload.Context.chunk) };
             else if (payload.FileRef && payload.FileRef.content != null)
                 native = { type: 'text', text: payload.FileRef.content };
             else if (payload.Image) native = await imagePart(payload.Image.image, signal);

@@ -88,6 +88,12 @@ Model-pack публикует OpenAI API, Anthropic API, совместимый 
 требуют задать модель отдельно. Вход ChatGPT остаётся поддержанной CLI-командой
 `proteus-model-pack-module auth openai_codex login`, не универсальным process OAuth API.
 
+Pi и OpenCode используют одну проекцию `ContextChunk`: `source_annotated`
+сохраняет источник и присутствующий путь перед содержимым, а `verbatim`
+передаёт содержимое без оболочки. Пустой присутствующий путь отображается как
+`()`, отсутствие пути не добавляет скобки. Metadata не выбирает режим;
+порядок частей, Unicode и переводы строк сохраняются.
+
 `model.quota.v1` объявляется только для `opencode-go`: Go usage windows и USD
 показатели используют тот же ключ и общий stateless helper
 `components/model-runtime-js/opencode-go-quota.mjs`. Это не выбор дополнительных

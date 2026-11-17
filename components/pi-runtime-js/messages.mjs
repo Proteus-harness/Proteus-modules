@@ -1,3 +1,5 @@
+import { contextText } from "../model-runtime-js/context.mjs";
+
 export function piContent(result) {
     const content = [];
     if (result.output || result.error)
@@ -32,13 +34,7 @@ export function piMessages(messages, model) {
         for (const [i, { payload }] of message.parts.entries()) {
             if (payload.Text) content.push({ type: "text", text: payload.Text.text });
             else if (payload.Context) {
-                const c = payload.Context.chunk;
-                const text =
-                    c.render_mode === "verbatim"
-                        ? c.content
-                        : `Context from ${c.source}${c.path ? " (" + c.path + ")" : ""}:
-${c.content}`;
-                content.push({ type: "text", text });
+                content.push({ type: "text", text: contextText(payload.Context.chunk) });
             } else if (payload.ToolCall) {
                 const { id, name, args } = payload.ToolCall.call;
                 names.set(id, name);
