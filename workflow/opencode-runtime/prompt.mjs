@@ -24,13 +24,13 @@ export async function nativeSystemPrompt(model, toolNames, agentSystem) {
 }
 
 export function createPromptExport(binding) {
-    if (binding.slot !== "hook" || binding.module_id !== "opencode_prompt" || binding.contract_version !== "v7" || binding.composition !== "ordered_many") {
-        throw new Error("Expected hook/opencode_prompt v7 ordered_many");
+    if (binding.slot !== "hook" || binding.module_id !== "opencode_prompt" || binding.contract_version !== "v8" || binding.composition !== "ordered_many") {
+        throw new Error("Expected hook/opencode_prompt v8 ordered_many");
     }
     if (Object.keys(binding.module_config).some(key => key !== "agent_system")) throw new Error("Unknown OpenCode prompt config field");
     if (binding.module_config.agent_system !== undefined && typeof binding.module_config.agent_system !== "string") throw new Error("agent_system must be a string");
     return {
-        manifest: { slot: "hook", module_id: "opencode_prompt", contract_version: "v7", composition: "ordered_many", module_features: [], config_schema: { fields: [{ key: "agent_system", title: "Agent system", description: "Explicit native agent.system override", value: { type: "string", multiline: true, secret: false }, default: null, required: false, advanced: true, unit: null }] } },
+        manifest: { slot: "hook", module_id: "opencode_prompt", contract_version: "v8", composition: "ordered_many", module_features: [], config_schema: { fields: [{ key: "agent_system", title: "Agent system", description: "Explicit native agent.system override", value: { type: "string", multiline: true, secret: false }, default: null, required: false, advanced: true, unit: null }] } },
         async invoke(method, input, { signal }) {
             if (method !== "hook.invoke") throw new Error(`Unsupported prompt hook method ${method}`);
             if (input.event.event !== "before_model") return { result: { action: "continue" } };

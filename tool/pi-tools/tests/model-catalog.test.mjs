@@ -33,13 +33,13 @@ function binding(slot, module_id, contract_version, module_config = {}) {
 }
 
 test('compaction binding uses its explicit Go catalog without a model request', async () => {
-    const hook = createExport(binding('hook', 'pi_compact', 'v7', {catalog_provider:'opencode-go'}));
+    const hook = createExport(binding('hook', 'pi_compact', 'v8', {catalog_provider:'opencode-go'}));
     const answer = await hook.invoke('hook.invoke', {event:{
         event:'before_context', input:{request:{model:{provider:'pi_codex', model:'deepseek-v4.1-flash'}}},
         output:{messages:[]},
     }}, {signal:new AbortController().signal, hostCall:() => {throw Error('unexpected network');}});
     assert.deepEqual(answer, {result:{action:'continue'}});
-    const unbound = createExport(binding('hook', 'pi_compact', 'v7'));
+    const unbound = createExport(binding('hook', 'pi_compact', 'v8'));
     await assert.rejects(unbound.invoke('hook.invoke', {event:{
         event:'before_context', input:{request:{model:{model:'deepseek-v4.1-flash'}}}, output:{messages:[]},
     }}, {}), /absent/);

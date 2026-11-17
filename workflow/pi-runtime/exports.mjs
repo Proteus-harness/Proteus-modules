@@ -4,7 +4,7 @@ import { context } from "./context.mjs";
 
 const slots = {
     workflow: { id: "pi_loop", version: "v21", method: "run", handle: workflow },
-    hook: { id: "pi_compact", version: "v7", method: "hook.invoke", handle: preparation },
+    hook: { id: "pi_compact", version: "v8", method: "hook.invoke", handle: preparation },
     context: { id: "pi_context", version: "v3", method: "build", handle: context },
 };
 

@@ -34,7 +34,7 @@ test("upstream honors an explicit agent system override", async () => {
 });
 
 test("hook applies actual prompt to the current request model and tool set", async () => {
-    const hook = createPromptExport({ slot: "hook", module_id: "opencode_prompt", contract_version: "v7", composition: "ordered_many", module_config: {} });
+    const hook = createPromptExport({ slot: "hook", module_id: "opencode_prompt", contract_version: "v8", composition: "ordered_many", module_config: {} });
     const request = { model: { provider: "openai", model: "gpt-6.1-sol" }, messages: [], instructions: [], tools: [{ name: "shell" }] };
     const output = await hook.invoke("hook.invoke", { event: { event: "before_model", request } }, { signal: new AbortController().signal });
     assert.equal(output.result.instructions[0].text, await nativeSystemPrompt(request.model, ["shell"]));
