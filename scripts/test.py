@@ -37,6 +37,12 @@ def main(args):
         ))
         env["PROTEUS_TEST_SESSION_STORAGE_MODULE"] = binaries["session-storage"]
         env["PROTEUS_TEST_MODULE_ARTIFACTS"] = str(ROOT / "dist/.artifacts/dev.json")
+        # Installer integration tests use the real pinned dependency trees.
+        # Fresh CI checkouts have no node_modules to copy into the fixture.
+        for relative, options in (("tool/pi-tools", ["--omit=dev"]),
+                                  ("workflow/opencode-runtime", [])):
+            subprocess.run(["npm", "ci", "--ignore-scripts", "--no-audit", "--no-fund", *options],
+                           cwd=ROOT / relative, env=env, check=True)
         subprocess.run([sys.executable, "-m", "unittest", "discover", "-s", "tests",
                         "-p", "test_*.py"], cwd=ROOT, env=env, check=True)
         env["PROTEUS_HOOK_SDK_ROOT"] = str(harness / "examples/modules/hook-process")

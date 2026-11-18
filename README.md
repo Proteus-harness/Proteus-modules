@@ -53,7 +53,8 @@ python3 -m unittest discover -s tests -p 'test_catalog.py'
 
 Нужны Rust, Git, Python 3.11+ и LLD на Linux x86_64; для сборки CodeMode
 также нужен C-компилятор. Gate Claude command hooks дополнительно требует
-Node.js 22.18+; сам CodeMode работает без Node.js.
+Node.js 22.19+ и npm. Проверка установки Pi/OpenCode в полном gate готовит
+их закреплённые npm-зависимости через `npm ci`; сам CodeMode работает без Node.js.
 Контракты и test harness подключены по фиксированному Git commit в Cargo.toml;
 соседний checkout harness для обычной сборки не требуется.
 
