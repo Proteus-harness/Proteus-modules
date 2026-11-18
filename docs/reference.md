@@ -135,8 +135,8 @@ policy/approval и authority остаётся на прежних граница
 upstream Lark grammar этой версии. Canonical input имеет `{input: string}`;
 проверка schema, policy и workspace выполняется до применения patch.
 Default `freeform=false` сохраняет function binding `{patch: string}`.
-Профиль Core `codex` выбирает freeform; `code-mode` явно сохраняет function
-binding для своего `tools.call` API.
+Основной профиль Core `config.toml` сохраняет function binding для
+`tools.call` в CodeMode.
 
 Внутренний parser `codex_patch` отдаёт streaming preview заимствованным slice,
 а завершение потребляет parser и передаёт готовые hunks и `environment_id`
@@ -251,10 +251,9 @@ sandbox всего worker-процесса. Уже допущенные host cal
 или откат их эффектов. Фоновое исполнение и состояние между скриптами отсутствуют.
 
 Установка пакета: `python3 package.py --package code-mode --install /path/to/Proteus`.
-После установки укажите command `proteus-code-mode-module`, export
+CodeMode уже подключён в [`config.toml` Core](https://github.com/Proteus-harness/Proteus-core/blob/main/configs/config.toml).
+В своём профиле укажите command `proteus-code-mode-module`, export
 `components.<id>.exports.tool.code_mode` и включите `code_mode` в `tools.enabled`.
-Самостоятельный профиль находится в
-[профиле Core `code-mode`](https://github.com/Proteus-harness/Proteus-core/blob/main/configs/code-mode.config.toml).
 При использовании `tool_selection.dynamic` добавьте `code_mode` в `always_include`.
 `tools.call` принимает настоящие registry tool names: workflow-операции
 `proteus_tool_search`, `proteus_tool_describe` и `proteus_tool_call` внутри скрипта
