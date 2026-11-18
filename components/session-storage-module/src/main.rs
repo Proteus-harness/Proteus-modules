@@ -46,6 +46,27 @@ fn main() {
         println!("{} {}", env!("CARGO_PKG_NAME"), env!("CARGO_PKG_VERSION"));
         return;
     }
+    if arguments
+        .get(1)
+        .is_some_and(|arg| arg == "--compact-archive")
+    {
+        let result = (|| -> Result<()> {
+            anyhow::ensure!(
+                arguments.len() == 3,
+                "usage: --compact-archive SESSION_DIRECTORY"
+            );
+            let report = session_storage::archive::compact_jsonl_archive(std::path::Path::new(
+                &arguments[2],
+            ))?;
+            println!("{}", serde_json::to_string(&report)?);
+            Ok(())
+        })();
+        if let Err(error) = result {
+            eprintln!("{}: {error:#}", env!("CARGO_PKG_NAME"));
+            std::process::exit(1);
+        }
+        return;
+    }
     if let Err(error) = proteus_module_sdk::run(load) {
         eprintln!("{}: {error:#}", env!("CARGO_PKG_NAME"));
         std::process::exit(1);

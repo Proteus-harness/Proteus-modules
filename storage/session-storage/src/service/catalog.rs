@@ -1,13 +1,15 @@
 //! Metadata-invalidated bounded catalog cache; never used to authorize execution.
 use super::*;
 use std::{fs::Metadata, time::UNIX_EPOCH};
+mod durable;
 
-#[derive(Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub(super) struct FileStamp {
     len: u64,
     modified: u128,
     device: u64,
     inode: u64,
+    changed: (i64, i64),
 }
 fn stamp(path: &Path) -> Result<Option<FileStamp>> {
     match std::fs::metadata(path) {
@@ -18,12 +20,12 @@ fn stamp(path: &Path) -> Result<Option<FileStamp>> {
 }
 fn file_stamp(meta: &Metadata) -> Result<FileStamp> {
     #[cfg(unix)]
-    let (device, inode) = {
+    let (device, inode, changed) = {
         use std::os::unix::fs::MetadataExt;
-        (meta.dev(), meta.ino())
+        (meta.dev(), meta.ino(), (meta.ctime(), meta.ctime_nsec()))
     };
     #[cfg(not(unix))]
-    let (device, inode) = (0, 0);
+    let (device, inode, changed) = (0, 0, (0, 0));
     Ok(FileStamp {
         len: meta.len(),
         modified: meta
@@ -33,6 +35,7 @@ fn file_stamp(meta: &Metadata) -> Result<FileStamp> {
             .as_nanos(),
         device,
         inode,
+        changed,
     })
 }
 pub(super) type SourceStamp = Vec<Option<FileStamp>>;
@@ -63,7 +66,13 @@ impl State {
                     return Ok(cached.summary.clone());
                 }
             }
+            if let Some((summary, prefix)) = durable::load(dir, &descriptor, &stamps) {
+                self.remember_prefix(descriptor.session.clone(), prefix);
+                self.remember_summary(stamps, summary.clone());
+                return Ok(summary);
+            }
         }
+        let blobs = durable::blob_stamps(dir);
         let mut source = self
             .kind
             .backend()
@@ -72,41 +81,41 @@ impl State {
         while let Some(record) = source.next()? {
             fold.apply(descriptor.session.session_id, &record)?;
         }
-        self.remember_prefix(
-            descriptor.session.clone(),
-            super::views::PrefixCache {
-                stamps: stamps.clone(),
-                revision: fold.revision(),
-                hint: crate::backend::PrefixHint {
-                    extent: source.extent(),
-                    fingerprint: source.fingerprint().to_owned(),
-                },
+        let prefix = super::views::PrefixCache {
+            stamps: stamps.clone(),
+            revision: fold.revision(),
+            hint: crate::backend::PrefixHint {
+                extent: source.extent(),
+                fingerprint: source.fingerprint().to_owned(),
             },
-        );
+        };
+        self.remember_prefix(descriptor.session.clone(), prefix.clone());
         let summary = StorageSessionSummary {
             descriptor: descriptor.clone(),
             message_count: fold.validation.history().len(),
             preview: crate::snapshot::preview(fold.validation.history()),
         };
         if !audit {
-            self.catalog_order
-                .retain(|session| session != &descriptor.session);
-            while self.catalog.len() >= 1024 {
-                if let Some(old) = self.catalog_order.pop_front() {
-                    self.catalog.remove(&old);
-                } else {
-                    break;
-                }
+            if let Some(blobs) = blobs {
+                durable::save(dir, &summary, &prefix, blobs);
             }
-            self.catalog_order.push_back(descriptor.session.clone());
-            self.catalog.insert(
-                descriptor.session,
-                CachedSummary {
-                    stamps,
-                    summary: summary.clone(),
-                },
-            );
+            self.remember_summary(stamps, summary.clone());
         }
         Ok(summary)
+    }
+
+    fn remember_summary(&mut self, stamps: SourceStamp, summary: StorageSessionSummary) {
+        let session = summary.descriptor.session.clone();
+        self.catalog_order.retain(|old| old != &session);
+        while self.catalog.len() >= 1024 {
+            if let Some(old) = self.catalog_order.pop_front() {
+                self.catalog.remove(&old);
+            } else {
+                break;
+            }
+        }
+        self.catalog_order.push_back(session.clone());
+        self.catalog
+            .insert(session, CachedSummary { stamps, summary });
     }
 }

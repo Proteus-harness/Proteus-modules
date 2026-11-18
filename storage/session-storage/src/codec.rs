@@ -70,11 +70,12 @@ pub(crate) fn encode(
         let path = session.join(&relative_path);
         if path.try_exists()? {
             ensure!(
-                bounded_read(&path, MAX_PAYLOAD_BYTES)? == bytes,
+                crate::blob_codec::unpack(session, &bounded_read(&path, MAX_PAYLOAD_BYTES)?)?
+                    == bytes,
                 "content-addressed blob collision"
             );
         } else {
-            atomic_write(&path, &bytes)?;
+            atomic_write(&path, &crate::blob_codec::pack(session, &bytes)?)?;
         }
         StoredPayload::Blob {
             sha256: hash,
@@ -129,9 +130,9 @@ pub(crate) fn decode(session: &Path, session_id: SessionId, line: &[u8]) -> Resu
                 bytes <= MAX_PAYLOAD_BYTES as u64,
                 "declared blob exceeds maximum"
             );
-            let content = bounded_read(&session.join(relative_path), MAX_PAYLOAD_BYTES)?;
-            ensure!(content.len() as u64 == bytes, "journal blob size mismatch");
-            ensure!(sha256_hex(&content) == sha256, "journal blob hash mismatch");
+            let stored_content = bounded_read(&session.join(relative_path), MAX_PAYLOAD_BYTES)?;
+            let content =
+                crate::blob_codec::unpack_expected(session, &stored_content, &sha256, bytes)?;
             JournalEntry::from_kind_and_bytes(stored.kind, &content)?
         }
     };

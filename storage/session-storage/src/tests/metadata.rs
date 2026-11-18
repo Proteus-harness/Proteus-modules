@@ -201,6 +201,156 @@ fn metadata_imports_old_filename_once_and_deletion_does_not_resurrect_it() {
 }
 
 #[test]
+fn durable_catalog_reopens_without_decoding_and_canonical_reads_remain_strict() {
+    for kind in backends() {
+        let mut f = Fixture::new(kind);
+        f.append(vec![text(&"long history ".repeat(30_000))]);
+        let request = SessionStorageRequest::List {
+            config_root: f.root.path().into(),
+            workspace_path: None,
+            audit: false,
+        };
+        let expected = f.service.execute(request.clone()).unwrap();
+        let cold = StorageService::new(kind);
+        crate::diagnostics::reset();
+        assert_eq!(cold.execute(request).unwrap(), expected);
+        assert_eq!(crate::diagnostics::get().decoded, 0);
+        assert_eq!(crate::diagnostics::get().fingerprint_bytes, 0);
+        let SessionStorageResponse::Snapshot { snapshot } = cold
+            .execute(SessionStorageRequest::OpenSnapshot {
+                session: f.descriptor.session.clone(),
+            })
+            .unwrap()
+        else {
+            panic!()
+        };
+        assert_eq!(crate::diagnostics::get().decoded, 0);
+        let SessionStorageResponse::Conversation { conversation } = cold
+            .execute(SessionStorageRequest::ReadConversation {
+                snapshot,
+                point: StorageHistoryPoint::Current,
+            })
+            .unwrap()
+        else {
+            panic!()
+        };
+        assert_eq!(conversation.messages.len(), 1);
+        assert!(crate::diagnostics::get().decoded > 0);
+    }
+}
+
+#[test]
+fn durable_catalog_discards_damaged_index_and_rechecks_audit() {
+    for kind in backends() {
+        let mut f = Fixture::new(kind);
+        f.append(vec![text("unchanged title")]);
+        let config_root = f.root.path().to_owned();
+        let list = |audit| SessionStorageRequest::List {
+            config_root: config_root.clone(),
+            workspace_path: None,
+            audit,
+        };
+        let expected = f.service.execute(list(false)).unwrap();
+        let dir = f.descriptor.local_path.as_ref().unwrap();
+        std::fs::write(dir.join(".storage-catalog-v1.json"), b"{invalid").unwrap();
+        crate::diagnostics::reset();
+        assert_eq!(
+            StorageService::new(kind).execute(list(false)).unwrap(),
+            expected
+        );
+        assert!(crate::diagnostics::get().decoded > 0);
+        crate::diagnostics::reset();
+        assert_eq!(
+            StorageService::new(kind).execute(list(true)).unwrap(),
+            expected
+        );
+        assert!(crate::diagnostics::get().decoded > 0);
+        f.append(vec![text("updated history")]);
+        let SessionStorageResponse::Sessions { sessions } =
+            StorageService::new(kind).execute(list(false)).unwrap()
+        else {
+            panic!()
+        };
+        assert_eq!(sessions[0].message_count, 2);
+    }
+}
+
+#[test]
+fn compacted_catalog_reopens_and_invalidates_when_a_shared_chunk_is_corrupt() {
+    let mut f = Fixture::new(BackendKind::Jsonl);
+    f.append(vec![text(&"shared history ".repeat(30_000))]);
+    let dir = f.descriptor.local_path.as_ref().unwrap().clone();
+    f.service
+        .execute(SessionStorageRequest::ReleaseWriter {
+            lease: f.lease.clone(),
+        })
+        .unwrap();
+    crate::archive::compact_jsonl_archive(&dir).unwrap();
+    let list = SessionStorageRequest::List {
+        config_root: f.root.path().into(),
+        workspace_path: None,
+        audit: false,
+    };
+    crate::diagnostics::reset();
+    let SessionStorageResponse::Sessions { sessions } = StorageService::new(BackendKind::Jsonl)
+        .execute(list.clone())
+        .unwrap()
+    else {
+        panic!()
+    };
+    assert_eq!(sessions.len(), 1);
+    assert_eq!(crate::diagnostics::get().decoded, 0);
+    let chunk = std::fs::read_dir(dir.join("blobs/shared"))
+        .unwrap()
+        .next()
+        .unwrap()
+        .unwrap()
+        .path();
+    let bytes = std::fs::read(&chunk).unwrap();
+    std::fs::write(chunk, vec![b'!'; bytes.len()]).unwrap();
+    let SessionStorageResponse::Sessions { sessions } = StorageService::new(BackendKind::Jsonl)
+        .execute(list)
+        .unwrap()
+    else {
+        panic!()
+    };
+    assert!(sessions.is_empty());
+}
+
+#[test]
+fn durable_catalog_rejects_rewritten_blob_even_with_unchanged_size_and_mtime() {
+    let mut f = Fixture::new(BackendKind::Jsonl);
+    f.append(vec![text(&"large payload ".repeat(30_000))]);
+    let list = SessionStorageRequest::List {
+        config_root: f.root.path().into(),
+        workspace_path: None,
+        audit: false,
+    };
+    f.service.execute(list.clone()).unwrap();
+    let blob = std::fs::read_dir(f.descriptor.local_path.as_ref().unwrap().join("blobs"))
+        .unwrap()
+        .next()
+        .unwrap()
+        .unwrap()
+        .path();
+    let old_modified = std::fs::metadata(&blob).unwrap().modified().unwrap();
+    let mut bytes = std::fs::read(&blob).unwrap();
+    bytes[0] = b'!';
+    std::fs::write(&blob, bytes).unwrap();
+    std::fs::File::open(&blob)
+        .unwrap()
+        .set_modified(old_modified)
+        .unwrap();
+    let SessionStorageResponse::Sessions { sessions } = StorageService::new(BackendKind::Jsonl)
+        .execute(list)
+        .unwrap()
+    else {
+        panic!()
+    };
+    assert!(sessions.is_empty());
+}
+
+#[test]
 fn catalog_cache_invalidates_after_committed_history_changes() {
     for kind in backends() {
         let mut f = Fixture::new(kind);

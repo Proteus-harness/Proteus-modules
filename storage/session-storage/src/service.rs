@@ -89,6 +89,21 @@ impl StorageService {
             .map_err(|_| anyhow::anyhow!("storage service lock poisoned"))?
             .execute(request)
     }
+
+    /// Validate one session and persist its disposable catalog index.
+    pub fn prime_catalog(&self, path: &Path) -> Result<()> {
+        let mut state = self
+            .state
+            .lock()
+            .map_err(|_| anyhow::anyhow!("storage service lock poisoned"))?;
+        let descriptor = state.open(path)?;
+        let dir = descriptor
+            .local_path
+            .clone()
+            .context("session has no local path")?;
+        state.catalog_summary(&dir, descriptor, false)?;
+        Ok(())
+    }
 }
 impl State {
     fn execute(&mut self, request: SessionStorageRequest) -> Result<SessionStorageResponse> {
