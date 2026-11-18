@@ -14,9 +14,6 @@ process adapters принадлежат [Proteus-core](https://github.com/Proteu
 - components/<id>-module — независимые исполняемые пакеты. Общая обвязка
   components/module-runtime не зависит от implementations и использует Core SDK.
   components/process-module — aggregate fixture только для тестов, не поставка.
-- Правка одного пакета: `python3 package.py --package ID`; установка без сборки
-  хостов/остальных пакетов: `--package ID --install /path/to/Proteus`.
-  Не собирайте reference fixture, Core или Desktop для обычной правки пакета.
 - Не возвращайте dylib/native registrations, compatibility readers, старые
   aliases или новые behavior defaults в Core. Черновые producers и consumers
   обновляются вместе.
@@ -28,25 +25,9 @@ process adapters принадлежат [Proteus-core](https://github.com/Proteu
 
 ## Стоимость Runtime
 
-Для новых и изменяемых затратных путей применяйте общий стандарт
-[расхода ОЗУ](https://github.com/Proteus-harness/Proteus-core/blob/main/docs/development/memory.md):
-ownership/lifetime, совокупные бюджеты, ленивую подготовку, очереди и замеры.
-При соседних checkout документ находится в `../Proteus-core/docs/development/memory.md`.
-
-Следуйте [правилам стоимости runtime](docs/reference.md#стоимость-реализаций):
-
-- Большие owned данные передавайте move/borrow; snapshot/clone требует
-  конкретного инварианта, например frozen view или rollback.
-- Immutable schema готовьте на bound identity/generation; arguments,
-  policy/approval и authority проверяйте заново на каждом invocation.
-- Сохраняйте typed DTO/`Value` внутри процесса; encoding — на wire/storage.
-- Derived work считайте по изменениям; cache ограничивайте и инвалидируйте
-  явно, с сохранением error semantics; cache не заменяет authority check.
-- Admission и допустимое coalescing — до крупных allocation/clone/encoding,
-  без потери ordering, cancellation, backpressure и обязательных events.
-
-Это не запрет clone/JSON/cache и не повод ослаблять correctness.
-Устранение повторной работы видно по исходникам; runtime-выигрыш требует замера.
+Для затратных путей действуют [правила стоимости реализаций](docs/reference.md#стоимость-реализаций)
+и общий [стандарт расхода ОЗУ](https://github.com/Proteus-harness/Proteus-core/blob/main/docs/development/memory.md).
+Выигрыш в latency, памяти или CPU подтверждайте замером на сопоставимых входах.
 
 ## Проверка
 
@@ -61,11 +42,13 @@ DCP отложен в research/dcp и исключён из штатной сб�
 При расхождении модуля со стендом определите, какой участник нарушил контракт.
 [Разбор падений в Core](https://github.com/Proteus-harness/Proteus-core/blob/main/docs/development/testing.md#разбор-падений).
 
-При изменении публичной границы обновите harness и его module_swap gate.
-После завершённой правки приложения/backend пересоберите portable в соседнем
-Proteus-desktop (`../Proteus-desktop` при общей раскладке). Выбирайте только
-затронутые компоненты по его BUILDING.md: для одного модуля достаточно
-`python3 package.py --package ID --install /absolute/ready/Proteus` из Modules;
-для всего набора — `python3 scripts/portable.py --components modules --no-archive`
-из Desktop. `--fast` удалён; обычный профиль — release.
-Сохраняйте target и инкрементальные caches.
+При изменении публичного контракта обновите его производителей, потребителей
+и проверку заменяемости в Core. Для правки только документации достаточно
+проверить содержание, ссылки и `git diff --check`.
+
+Один изменённый модуль установите в готовую поставку из этого репозитория
+командой `python3 package.py --package ID --install /absolute/ready/Proteus`.
+Для передачи пакета в виде ZIP используйте `python3 package.py --package ID`.
+Если изменился набор поставляемых модулей, выберите компонент `modules` по
+[руководству по сборке Desktop](https://github.com/Proteus-harness/Proteus-desktop/blob/main/BUILDING.md#выбор-компонентов).
+Сохраняйте инкрементальные кэши.
