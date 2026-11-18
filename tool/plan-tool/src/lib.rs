@@ -205,43 +205,34 @@ mod tests {
         assert_eq!(result["output"], "Plan updated");
     }
 
-    #[test]
-    fn allows_fully_completed_plan_without_in_progress() {
+    fn assert_two_step_counts(status: &str, [pending, in_progress, completed]: [u64; 3]) {
         let result = invoke(json!({
             "plan": [
-                { "step": "a", "status": "completed" },
-                { "step": "b", "status": "completed" }
+                { "step": "a", "status": status },
+                { "step": "b", "status": status }
             ]
         }));
 
         assert_eq!(result["ok"], true);
+        let metadata = &result["metadata"];
+        assert_eq!(metadata["pending"], pending);
+        assert_eq!(metadata["in_progress"], in_progress);
+        assert_eq!(metadata["completed"], completed);
+    }
+
+    #[test]
+    fn allows_fully_completed_plan_without_in_progress() {
+        assert_two_step_counts("completed", [0, 0, 2]);
     }
 
     #[test]
     fn allows_pending_plan_without_in_progress_step() {
-        let result = invoke(json!({
-            "plan": [
-                { "step": "a", "status": "pending" },
-                { "step": "b", "status": "pending" }
-            ]
-        }));
-
-        assert_eq!(result["ok"], true);
-        assert_eq!(result["metadata"]["in_progress"], 0);
-        assert_eq!(result["metadata"]["pending"], 2);
+        assert_two_step_counts("pending", [2, 0, 0]);
     }
 
     #[test]
     fn accepts_multiple_in_progress_steps_like_upstream_handler() {
-        let result = invoke(json!({
-            "plan": [
-                { "step": "a", "status": "in_progress" },
-                { "step": "b", "status": "in_progress" }
-            ]
-        }));
-
-        assert_eq!(result["ok"], true);
-        assert_eq!(result["metadata"]["in_progress"], 2);
+        assert_two_step_counts("in_progress", [0, 2, 0]);
     }
 
     #[test]

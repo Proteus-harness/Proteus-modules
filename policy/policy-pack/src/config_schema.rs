@@ -80,7 +80,8 @@ pub fn config_schema(id: &str) -> ModuleConfigSchema {
             }
             fields.push(
                 ConfigField::new(key, title, description, ConfigValueSchema::strings())
-                    .with_default(serde_json::json!([])),
+                    .with_default(serde_json::json!([]))
+                    .suggest_tools(),
             );
         }
     }
