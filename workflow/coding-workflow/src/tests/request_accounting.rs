@@ -480,6 +480,15 @@ fn preparation_sources_and_recorded_estimates_survive_request_building_and_resum
         );
         let compactions = host.compactions.lock().unwrap();
         let material = &compactions[0];
+        let template = material.request.as_ref().unwrap();
+        assert!(template.messages.is_empty());
+        assert_eq!(material.messages, vec![checkpoint.clone()]);
+        let mut expected_controls = prepared.request.clone();
+        expected_controls.messages.clear();
+        // Preparation supplies the estimate source before the returned report
+        // adds its own accounting metadata to the sampling request.
+        expected_controls.metadata = template.metadata.clone();
+        assert_eq!(template, &expected_controls);
         assert_eq!(
             ContextTokenEstimateSource::from_metadata(&material.request.as_ref().unwrap().metadata),
             Some(if hint.is_some() {

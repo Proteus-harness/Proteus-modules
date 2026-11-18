@@ -265,8 +265,9 @@ impl TestInput {
         self
     }
     fn preparation(&self) -> ContextPreparationInput {
-        let mut input =
-            ContextPreparationInput::new(self.request.messages.clone(), Some(self.request.clone()));
+        let mut template = self.request.clone();
+        template.messages.clear();
+        let mut input = ContextPreparationInput::new(self.request.messages.clone(), Some(template));
         input.token_estimate = self.token_estimate;
         input.window_tokens = self.window_tokens;
         input.reason = self.reason.clone();
@@ -636,6 +637,56 @@ fn preparation_hook_preserves_a_preceding_changed_candidate_when_below_threshold
     assert_eq!(
         serde_json::from_str::<HookResponse>(&result).unwrap(),
         HookResponse::Continue
+    );
+    assert!(host.requests.lock().unwrap().is_empty());
+}
+
+#[test]
+fn below_threshold_hook_returns_diagnostics_without_repeating_history() {
+    use proteus_contracts::{
+        contracts::{
+            ExecutionAttribution, HookEvent, HookInput, HookResponse, apply_hook_response,
+        },
+        process_module::HookModule,
+    };
+    let source = CanonicalMessage::text(MessageRole::User, "history payload".repeat(500));
+    let input =
+        ContextPreparationInput::new(vec![source.clone()], None).with_token_estimate(Some(20));
+    let hook = HookInput {
+        event: HookEvent::BeforeContext {
+            output: ContextPreparationOutput::unchanged(input.messages.clone()),
+            input,
+            model_capabilities: None,
+            target: None,
+        },
+        attribution: ExecutionAttribution::detached(proteus_contracts::domain::new_execution_id()),
+        cwd: "/repo".into(),
+        conversation: None,
+    };
+    let module = crate::CodexPreparationHook(
+        crate::config::CompactorConfig::parse(&json!({"trigger_tokens": 100})).unwrap(),
+    );
+    let mut host = TestHost::unavailable();
+    let wire = module
+        .invoke_json(serde_json::to_string(&hook).unwrap(), &mut host)
+        .unwrap();
+    assert!(!wire.contains("history payload"));
+    let response: HookResponse = serde_json::from_str(&wire).unwrap();
+    assert!(matches!(
+        response,
+        HookResponse::ContextPreparationDiagnostics { .. }
+    ));
+    let HookEvent::BeforeContext { output, .. } =
+        apply_hook_response(&hook.event, &response).unwrap()
+    else {
+        panic!()
+    };
+    assert_eq!(output.messages, vec![source]);
+    assert!(!output.changed);
+    assert_eq!(output.token_estimate, Some(20));
+    assert_eq!(
+        output.skipped_reason.as_deref(),
+        Some("below_trigger_threshold")
     );
     assert!(host.requests.lock().unwrap().is_empty());
 }

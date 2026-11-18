@@ -56,7 +56,7 @@ pub(crate) fn encode(
     blob_threshold: usize,
 ) -> Result<Vec<u8>> {
     let kind = record.entry.kind();
-    let value = record.entry.payload_value()?;
+    let value = record.entry.stored_payload_value()?;
     let bytes = serde_json::to_vec(&value)?;
     ensure!(
         bytes.len() <= MAX_PAYLOAD_BYTES,
@@ -118,7 +118,7 @@ pub(crate) fn decode(session: &Path, session_id: SessionId, line: &[u8]) -> Resu
                 serde_json::to_vec(&value)?.len() <= MAX_PAYLOAD_BYTES,
                 "inline payload exceeds maximum"
             );
-            JournalEntry::from_kind_and_payload(stored.kind, value)?
+            JournalEntry::from_stored_kind_and_payload(stored.kind, value)?
         }
         StoredPayload::Blob {
             sha256,
@@ -133,7 +133,7 @@ pub(crate) fn decode(session: &Path, session_id: SessionId, line: &[u8]) -> Resu
             let stored_content = bounded_read(&session.join(relative_path), MAX_PAYLOAD_BYTES)?;
             let content =
                 crate::blob_codec::unpack_expected(session, &stored_content, &sha256, bytes)?;
-            JournalEntry::from_kind_and_bytes(stored.kind, &content)?
+            JournalEntry::from_stored_kind_and_bytes(stored.kind, &content)?
         }
     };
     Ok(JournalRecord {

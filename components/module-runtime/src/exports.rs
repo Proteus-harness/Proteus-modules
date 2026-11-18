@@ -1,14 +1,14 @@
 use anyhow::{Result, anyhow, bail};
 use proteus_contracts::{
     contracts::{
-        PROCESS_POLICY_EVALUATE_METHOD, PROCESS_POLICY_VISIBILITY_METHOD,
-        PROCESS_TOOL_INVOKE_METHOD, PROCESS_TOOL_LIST_METHOD, PROCESS_TOOL_TERMINAL_METHOD,
-        ProcessComponentExportInitialize, ProcessComponentExportManifest,
-        ProcessContextChunksResponse, ProcessContextInput, ProcessContextResponse,
-        ProcessPolicyEvaluateInput, ProcessPolicyResponse, ProcessPolicyVisibilityInput,
-        ProcessToolInvokeInput, ProcessToolInvokeResponse, ProcessToolListResponse,
-        ProcessToolTerminalInput, ProcessWorkflowInput, ProcessWorkflowResponse,
-        TOOL_TERMINAL_FEATURE, WorkflowOutput,
+        HOOK_CONTEXT_PREPARATION_DIAGNOSTICS_FEATURE, PROCESS_POLICY_EVALUATE_METHOD,
+        PROCESS_POLICY_VISIBILITY_METHOD, PROCESS_TOOL_INVOKE_METHOD, PROCESS_TOOL_LIST_METHOD,
+        PROCESS_TOOL_TERMINAL_METHOD, ProcessComponentExportInitialize,
+        ProcessComponentExportManifest, ProcessContextChunksResponse, ProcessContextInput,
+        ProcessContextResponse, ProcessPolicyEvaluateInput, ProcessPolicyResponse,
+        ProcessPolicyVisibilityInput, ProcessToolInvokeInput, ProcessToolInvokeResponse,
+        ProcessToolListResponse, ProcessToolTerminalInput, ProcessWorkflowInput,
+        ProcessWorkflowResponse, TOOL_TERMINAL_FEATURE, WorkflowOutput,
     },
     process_module::{
         ContextBuilderModuleInput, PolicyModuleInvocationContext, PolicyModuleVisibilityContext,
@@ -28,6 +28,9 @@ use tools::ToolCatalog;
 
 #[cfg(all(test, unix))]
 mod input_estimate_tests;
+
+#[cfg(all(test, unix))]
+mod hook_diagnostics_tests;
 
 pub struct ModuleExport {
     binding: ProcessComponentExportInitialize,
@@ -69,13 +72,15 @@ impl ModuleExport {
                 .host_features
                 .iter()
                 .filter(|feature| {
-                    (self.binding.slot == "tool"
-                        && feature.as_str() == TOOL_TERMINAL_FEATURE
-                        && self
-                            .modules
-                            .tools
-                            .iter()
-                            .any(|tool| tool.supports_terminal_control()))
+                    (self.binding.slot == "hook"
+                        && feature.as_str() == HOOK_CONTEXT_PREPARATION_DIAGNOSTICS_FEATURE)
+                        || (self.binding.slot == "tool"
+                            && feature.as_str() == TOOL_TERMINAL_FEATURE
+                            && self
+                                .modules
+                                .tools
+                                .iter()
+                                .any(|tool| tool.supports_terminal_control()))
                         || (self.binding.slot == "model"
                             && (matches!(
                                 feature.as_str(),
@@ -135,6 +140,19 @@ impl ModuleExport {
         )?;
         let response: proteus_contracts::contracts::HookResponse = serde_json::from_str(&output)?;
         proteus_contracts::contracts::apply_hook_response(&input.event, &response)?;
+        let response = if self
+            .binding
+            .host_features
+            .iter()
+            .any(|feature| feature == HOOK_CONTEXT_PREPARATION_DIAGNOSTICS_FEATURE)
+        {
+            response
+        } else {
+            proteus_contracts::contracts::expand_context_preparation_response(
+                &input.event,
+                &response,
+            )?
+        };
         encode(proteus_contracts::contracts::ProcessHookResponse { result: response })
     }
 

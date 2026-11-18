@@ -51,10 +51,15 @@ impl HookModule for CodexPreparationHook {
                     if let Some(estimates) = ModelInputEstimate::from_metadata(&prepared.metadata) {
                         estimates.write_metadata(&mut output.metadata);
                         output.token_estimate = prepared.token_estimate;
-                        output.messages = prepared.messages;
-                        HookResponse::ContextPreparation { output }
+                        HookResponse::ContextPreparationDiagnostics {
+                            diagnostics: output.diagnostics(),
+                        }
                     } else {
                         HookResponse::Continue
+                    }
+                } else if !prepared.changed {
+                    HookResponse::ContextPreparationDiagnostics {
+                        diagnostics: prepared.diagnostics(),
                     }
                 } else {
                     HookResponse::ContextPreparation { output: prepared }

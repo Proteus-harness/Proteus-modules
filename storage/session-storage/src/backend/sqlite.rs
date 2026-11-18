@@ -4,6 +4,7 @@ use anyhow::{Context, ensure};
 use ring::digest::{Context as HashContext, SHA256};
 use rusqlite::{Connection, OpenFlags, OptionalExtension, params};
 use std::path::PathBuf;
+mod record;
 
 const FILE: &str = "journal.sqlite";
 
@@ -137,7 +138,7 @@ impl JournalBackend for Sqlite {
             .writer
             .as_mut()
             .context("SQLite writer must recover before append")?;
-        let payload = serde_json::to_vec(record)?;
+        let payload = record::encode(record)?;
         let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
         tx.execute("INSERT OR IGNORE INTO journal_identity(singleton,schema_version,session_id) VALUES(1,?1,?2)",
             params![JOURNAL_SCHEMA_VERSION, record.session_id.to_string()])?;
@@ -207,7 +208,7 @@ impl RecordSnapshot for SqliteSnapshot {
             bytes.len() <= crate::io::MAX_PAYLOAD_BYTES * 2,
             "SQLite record exceeds maximum"
         );
-        let record: JournalRecord = serde_json::from_slice(&bytes)?;
+        let record = record::decode(&bytes)?;
         ensure!(
             record.session_seq == sequence
                 && record.session_id == self.id

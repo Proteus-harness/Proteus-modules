@@ -200,7 +200,13 @@ fn preceding_changed_hook_invalidates_observed_floor_and_preserves_map() {
     let response = module
         .invoke_json(serde_json::to_string(&input).unwrap(), &mut host)
         .unwrap();
-    let HookResponse::ContextPreparation { output } = serde_json::from_str(&response).unwrap()
+    let response: HookResponse = serde_json::from_str(&response).unwrap();
+    assert!(matches!(
+        response,
+        HookResponse::ContextPreparationDiagnostics { .. }
+    ));
+    let HookEvent::BeforeContext { output, .. } =
+        proteus_contracts::contracts::apply_hook_response(&input.event, &response).unwrap()
     else {
         panic!("preparation")
     };

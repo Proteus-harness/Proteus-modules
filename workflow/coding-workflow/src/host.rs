@@ -324,11 +324,10 @@ fn compact_messages(
         ContextTokenEstimateSource::Estimated
     };
     source.write_metadata(&mut preparation_request.metadata);
-    let compaction_input =
-        ContextPreparationInput::new(request.messages.clone(), Some(preparation_request))
-            .with_reason(reason)
-            .with_token_estimate(token_estimate)
-            .with_window_tokens(input.runtime.max_input_tokens);
+    let compaction_input = ContextPreparationInput::from_request(preparation_request)
+        .with_reason(reason)
+        .with_token_estimate(token_estimate)
+        .with_window_tokens(input.runtime.max_input_tokens);
     let input_json = to_json_string(&compaction_input)?;
     let output_json = match host.prepare_context_json(String::from(input_json)) {
         Ok(json) => json,
