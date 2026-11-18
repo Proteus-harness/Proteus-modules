@@ -323,3 +323,12 @@ fn extract_search_queries_dedupes_case_insensitively() {
 
     assert_eq!(queries, vec!["Workflow", "ToolSafety", "tool_safety"]);
 }
+
+#[test]
+fn extract_search_queries_splits_filenames_before_selecting_terms() {
+    assert_eq!(
+        extract_search_queries("Cargo.toml lib.rs guide.md"),
+        vec!["Cargo", "toml", "guide"]
+    );
+    assert_eq!(extract_search_queries(" lib.rs "), vec!["lib.rs"]);
+}

@@ -102,16 +102,16 @@ enum PlanStepStatus {
 }
 
 fn invoke_impl(call_json: &str) -> Result<String, String> {
-    let call: Value = serde_json::from_str(call_json)
+    let mut call: Value = serde_json::from_str(call_json)
         .map_err(|error| format!("invalid ToolCall JSON: {error}"))?;
     let call_id = call
         .get("id")
         .and_then(Value::as_str)
         .unwrap_or("")
         .to_owned();
-    let args = call.get("args").cloned().unwrap_or(Value::Null);
+    let args = call.get_mut("args").map(Value::take).unwrap_or(Value::Null);
 
-    match validate_plan(&args) {
+    match validate_plan(args) {
         Ok(plan_args) => {
             let counts = status_counts(&plan_args.plan);
             let result = json!({
@@ -165,8 +165,8 @@ fn status_counts(steps: &[PlanStep]) -> StatusCounts {
     counts
 }
 
-fn validate_plan(args: &Value) -> Result<PlanArgs, String> {
-    serde_json::from_value(args.clone()).map_err(|error| {
+fn validate_plan(args: Value) -> Result<PlanArgs, String> {
+    serde_json::from_value(args).map_err(|error| {
         format!("plan entries must be {{step, status: pending|in_progress|completed}}: {error}")
     })
 }
@@ -189,9 +189,9 @@ mod tests {
     #[test]
     fn accepts_valid_plan_and_reports_counts() {
         let result = invoke(json!({
-            "explanation": "starting",
+            "explanation": "  начало\n",
             "plan": [
-                { "step": "Read the failing test", "status": "completed" },
+                { "step": "Read \"test\" at C:\\repo\n", "status": "completed" },
                 { "step": "Fix the parser", "status": "in_progress" },
                 { "step": "Run the suite", "status": "pending" }
             ]
@@ -202,6 +202,11 @@ mod tests {
         assert_eq!(result["metadata"]["in_progress"], 1);
         assert_eq!(result["metadata"]["pending"], 1);
         assert_eq!(result["metadata"]["plan"][1]["status"], "in_progress");
+        assert_eq!(result["metadata"]["explanation"], "  начало\n");
+        assert_eq!(
+            result["metadata"]["plan"][0]["step"],
+            "Read \"test\" at C:\\repo\n"
+        );
         assert_eq!(result["output"], "Plan updated");
     }
 
