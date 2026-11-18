@@ -74,7 +74,13 @@ impl State {
             entry: canonical,
         };
         let dir = self.writer_path(&commit.lease)?;
+        let kind = self.kind;
         let writer = self.writer(&commit.lease)?;
+        if let Some(head) = writer.head.as_ref()
+            && catalog::source_stamp(&dir, kind).ok().as_ref() != Some(&head.stamps)
+        {
+            writer.head = None;
+        }
         // This state is private until ACK. On any failure discard it and replay
         // the durable prefix before the next operation, instead of cloning the
         // entire conversation for every non-history journal fact.
@@ -86,10 +92,19 @@ impl State {
                 .apply(record.session_id, &record)?;
             writer.backend.append(&dir, &record)
         })();
-        if let Err(error) = result {
-            writer.fold = None;
-            return Err(error);
-        }
+        match result {
+            Ok(append) => {
+                writer.head = writer.head.take().and_then(|mut head| {
+                    head.advance(&dir, kind, append)?;
+                    Some(head)
+                });
+            }
+            Err(error) => {
+                writer.fold = None;
+                writer.head = None;
+                return Err(error);
+            }
+        };
         let fold = writer.fold.as_ref().expect("writer initialized");
         Ok(SessionStorageResponse::Committed {
             ack: StorageCommitAck {

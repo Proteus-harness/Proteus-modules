@@ -10,11 +10,11 @@ use std::{
 pub(crate) const MAX_PAYLOAD_BYTES: usize = 64 * 1024 * 1024;
 
 pub(crate) fn sha256_hex(bytes: &[u8]) -> String {
-    digest(&SHA256, bytes)
-        .as_ref()
-        .iter()
-        .map(|b| format!("{b:02x}"))
-        .collect()
+    digest_hex(digest(&SHA256, bytes))
+}
+
+pub(crate) fn digest_hex(digest: ring::digest::Digest) -> String {
+    digest.as_ref().iter().map(|b| format!("{b:02x}")).collect()
 }
 
 pub(crate) fn sync_directory(path: &Path) -> Result<()> {

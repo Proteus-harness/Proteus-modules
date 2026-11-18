@@ -1,10 +1,24 @@
 use super::*;
 use crate::backend::PrefixHint;
+
 #[derive(Clone)]
 pub(super) struct PrefixCache {
     pub stamps: catalog::SourceStamp,
     pub revision: StorageRevision,
     pub hint: PrefixHint,
+    pub blob_digest: Option<catalog::durable::BlobStampDigest>,
+}
+
+impl PrefixCache {
+    pub fn valid_at(&self, dir: &Path, stamps: &catalog::SourceStamp) -> bool {
+        &self.stamps == stamps
+            && self.blob_digest.is_some_and(|digest| {
+                catalog::durable::blob_stamps(dir)
+                    .as_ref()
+                    .map(catalog::durable::blob_stamp_digest)
+                    == Some(digest)
+            })
+    }
 }
 impl State {
     pub(super) fn remember_prefix(&mut self, session: SessionLocator, cache: PrefixCache) {
@@ -22,20 +36,54 @@ impl State {
     pub(super) fn snapshot(&mut self, session: SessionLocator) -> Result<StorageSnapshot> {
         let dir = self.checked_path(&session)?;
         let stamps = catalog::source_stamp(&dir, self.kind)?;
-        let cached = self
+        let mut cached = self
             .prefixes
             .get(&session)
-            .filter(|cache| cache.stamps == stamps)
+            .filter(|cache| cache.valid_at(&dir, &stamps))
             .cloned();
-        let verified = cached.is_none();
+        let descriptor = self.describe(&session)?;
+        let mut verified = false;
+        if cached.is_none()
+            && let Some(writer) = self.writers.get(&session)
+            && let (Some(fold), Some(head)) = (&writer.fold, &writer.head)
+            && head.stamps == stamps
+            && let Some(blobs) = catalog::durable::blob_stamps(&dir)
+            && blobs == head.blobs
+        {
+            let messages = fold.validation.history();
+            let prefix = PrefixCache {
+                stamps: stamps.clone(),
+                revision: fold.revision(),
+                hint: PrefixHint {
+                    extent: head.extent,
+                    fingerprint: crate::io::digest_hex(head.hash.clone().finish()),
+                },
+                blob_digest: Some(catalog::durable::blob_stamp_digest(&blobs)),
+            };
+            let summary = StorageSessionSummary {
+                descriptor: descriptor.clone(),
+                message_count: messages.len(),
+                preview: crate::snapshot::preview(messages),
+            };
+            self.save_catalog_head(&dir, summary, &prefix, blobs);
+            cached = Some(prefix);
+            verified = true;
+        }
+        if cached.is_none() {
+            cached = self.load_catalog_head(&dir, &descriptor, &stamps);
+        }
         let (mut source, revision) = if let Some(cached) = cached {
-            (
+            let source =
                 self.kind
                     .backend()
-                    .snapshot_warm(&dir, session.session_id, &cached.hint)?,
-                cached.revision,
-            )
+                    .snapshot_warm(&dir, session.session_id, &cached.hint)?;
+            ensure!(
+                catalog::source_stamp(&dir, self.kind)? == cached.stamps,
+                "journal changed during snapshot capture"
+            );
+            (source, cached.revision)
         } else {
+            let blobs = catalog::durable::blob_stamps(&dir);
             let mut source = self.kind.backend().snapshot(&dir, session.session_id)?;
             let version = source.source_version()?;
             let mut state = Fold::default();
@@ -45,18 +93,30 @@ impl State {
             if source.source_version()? != version {
                 source.verify_fixed_prefix()?;
             }
-            let revision = state.revision();
-            self.remember_prefix(
-                session.clone(),
-                PrefixCache {
-                    stamps,
-                    revision,
-                    hint: PrefixHint {
-                        extent: source.extent(),
-                        fingerprint: source.fingerprint().to_owned(),
-                    },
+            let blobs =
+                blobs.filter(|blobs| catalog::durable::blob_stamps(&dir).as_ref() == Some(blobs));
+            let prefix = PrefixCache {
+                stamps,
+                revision: state.revision(),
+                hint: PrefixHint {
+                    extent: source.extent(),
+                    fingerprint: source.fingerprint().to_owned(),
                 },
-            );
+                blob_digest: blobs.as_ref().map(catalog::durable::blob_stamp_digest),
+            };
+            let revision = prefix.revision;
+            if let Some(blobs) = blobs
+                && catalog::source_stamp(&dir, self.kind)? == prefix.stamps
+            {
+                let messages = state.validation.history();
+                let summary = StorageSessionSummary {
+                    descriptor,
+                    message_count: messages.len(),
+                    preview: crate::snapshot::preview(messages),
+                };
+                self.save_catalog_head(&dir, summary, &prefix, blobs);
+            }
+            verified = true;
             (source, revision)
         };
         let identity = StorageSnapshot {
@@ -91,7 +151,11 @@ impl State {
         let resident = verified
             .then(|| self.writers.get(&snapshot.session))
             .flatten()
-            .and_then(|writer| writer.fold.as_ref())
+            .and_then(|writer| {
+                let head = writer.head.as_ref()?;
+                (crate::io::digest_hex(head.hash.clone().finish()) == snapshot.content_sha256)
+                    .then_some(writer.fold.as_ref())?
+            })
             .filter(|fold| fold.revision() == snapshot.revision);
         let observations = if let Some(fold) = resident {
             fold.model_context.before_turn(turn_id)

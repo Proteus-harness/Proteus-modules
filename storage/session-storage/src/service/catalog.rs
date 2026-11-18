@@ -1,7 +1,7 @@
 //! Metadata-invalidated bounded catalog cache; never used to authorize execution.
 use super::*;
 use std::{fs::Metadata, time::UNIX_EPOCH};
-mod durable;
+pub(super) mod durable;
 
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub(super) struct FileStamp {
@@ -44,7 +44,9 @@ pub(super) fn source_stamp(dir: &Path, kind: BackendKind) -> Result<SourceStamp>
     let wal = PathBuf::from(format!("{}-wal", journal.to_string_lossy()));
     Ok(vec![
         stamp(&journal)?,
-        stamp(&wal)?,
+        // Opening a read-only SQLite snapshot may create an empty WAL. It
+        // carries no committed data and is equivalent to a missing WAL.
+        stamp(&wal)?.filter(|stamp| stamp.len != 0),
         stamp(&dir.join("session.json"))?,
     ])
 }
@@ -52,7 +54,100 @@ pub(super) struct CachedSummary {
     stamps: Vec<Option<FileStamp>>,
     summary: StorageSessionSummary,
 }
+
+/// Authority for a resident fold starts at a verified replay and advances
+/// only across this writer's own successful appends.
+pub(super) struct WriterHead {
+    pub stamps: SourceStamp,
+    pub blobs: durable::BlobStamps,
+    pub extent: u64,
+    pub hash: ring::digest::Context,
+}
+
+impl WriterHead {
+    pub fn advance(
+        &mut self,
+        dir: &Path,
+        kind: BackendKind,
+        append: crate::backend::Append,
+    ) -> Option<()> {
+        self.stamps = source_stamp(dir, kind).ok()?;
+        durable::update_blobs(dir, &mut self.blobs, append.blobs)?;
+        self.extent = append.extent;
+        self.hash.update(&append.bytes);
+        Some(())
+    }
+}
+
 impl State {
+    pub(super) fn close_writer(&mut self, session: &SessionLocator, writer: Writer) {
+        let Writer {
+            backend,
+            _ownership,
+            ..
+        } = writer;
+        // SQLite may checkpoint and remove its WAL when the last writer
+        // connection closes. Rebind an already verified head while the
+        // session lease still excludes another writer.
+        let head = self.catalog_before_sqlite_close(session);
+        drop(backend);
+        if let Some((dir, mut prefix, summary)) = head
+            && let Ok(stamps) = source_stamp(&dir, self.kind)
+            && stamps != prefix.stamps
+            && stamps[2] == prefix.stamps[2]
+            && stamps[0]
+                .as_ref()
+                .zip(prefix.stamps[0].as_ref())
+                .is_some_and(|(new, old)| new.device == old.device && new.inode == old.inode)
+            && let Some(blobs) = durable::blob_stamps(&dir)
+            && Some(durable::blob_stamp_digest(&blobs)) == prefix.blob_digest
+        {
+            prefix.stamps = stamps;
+            self.save_catalog_head(&dir, summary, &prefix, blobs);
+        }
+    }
+
+    fn catalog_before_sqlite_close(
+        &self,
+        session: &SessionLocator,
+    ) -> Option<(PathBuf, super::views::PrefixCache, StorageSessionSummary)> {
+        if !matches!(self.kind, BackendKind::Sqlite) {
+            return None;
+        }
+        let cached = self.catalog.get(session)?;
+        let prefix = self.prefixes.get(session)?;
+        let dir = self.checked_path(session).ok()?;
+        let stamps = source_stamp(&dir, self.kind).ok()?;
+        if cached.stamps != stamps || !prefix.valid_at(&dir, &stamps) {
+            return None;
+        }
+        Some((dir, prefix.clone(), cached.summary.clone()))
+    }
+
+    pub(super) fn load_catalog_head(
+        &mut self,
+        dir: &Path,
+        descriptor: &StorageSessionDescriptor,
+        stamps: &SourceStamp,
+    ) -> Option<super::views::PrefixCache> {
+        let (summary, prefix) = durable::load(dir, descriptor, stamps)?;
+        self.remember_prefix(descriptor.session.clone(), prefix.clone());
+        self.remember_summary(stamps.clone(), summary);
+        Some(prefix)
+    }
+
+    pub(super) fn save_catalog_head(
+        &mut self,
+        dir: &Path,
+        summary: StorageSessionSummary,
+        prefix: &super::views::PrefixCache,
+        blobs: durable::BlobStamps,
+    ) {
+        durable::save(dir, &summary, prefix, blobs);
+        self.remember_prefix(summary.descriptor.session.clone(), prefix.clone());
+        self.remember_summary(prefix.stamps.clone(), summary);
+    }
+
     pub(super) fn catalog_summary(
         &mut self,
         dir: &Path,
@@ -61,10 +156,14 @@ impl State {
     ) -> Result<StorageSessionSummary> {
         let stamps = source_stamp(dir, self.kind)?;
         if !audit {
-            if let Some(cached) = self.catalog.get(&descriptor.session) {
-                if cached.stamps == stamps {
-                    return Ok(cached.summary.clone());
-                }
+            if let Some(cached) = self.catalog.get(&descriptor.session)
+                && cached.stamps == stamps
+                && self
+                    .prefixes
+                    .get(&descriptor.session)
+                    .is_some_and(|prefix| prefix.valid_at(dir, &stamps))
+            {
+                return Ok(cached.summary.clone());
             }
             if let Some((summary, prefix)) = durable::load(dir, &descriptor, &stamps) {
                 self.remember_prefix(descriptor.session.clone(), prefix);
@@ -88,6 +187,7 @@ impl State {
                 extent: source.extent(),
                 fingerprint: source.fingerprint().to_owned(),
             },
+            blob_digest: blobs.as_ref().map(durable::blob_stamp_digest),
         };
         self.remember_prefix(descriptor.session.clone(), prefix.clone());
         let summary = StorageSessionSummary {

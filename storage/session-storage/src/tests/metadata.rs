@@ -240,6 +240,115 @@ fn durable_catalog_reopens_without_decoding_and_canonical_reads_remain_strict() 
 }
 
 #[test]
+fn committed_snapshot_head_survives_writer_release_and_direct_reopen() {
+    for kind in backends() {
+        let mut f = Fixture::new(kind);
+        f.append(vec![text(&"first large message ".repeat(20_000))]);
+        let initial = f.snapshot();
+        f.service
+            .execute(SessionStorageRequest::ReleaseSnapshot { snapshot: initial })
+            .unwrap();
+        f.append(vec![text(&"second large message ".repeat(20_000))]);
+        crate::diagnostics::reset();
+        let head = f.snapshot();
+        assert_eq!(head.revision, f.revision);
+        assert_eq!(crate::diagnostics::get().decoded, 0);
+        assert_eq!(crate::diagnostics::get().fingerprint_bytes, 0);
+        f.service
+            .execute(SessionStorageRequest::ReleaseSnapshot {
+                snapshot: head.clone(),
+            })
+            .unwrap();
+        f.service
+            .execute(SessionStorageRequest::ReleaseWriter {
+                lease: f.lease.clone(),
+            })
+            .unwrap();
+
+        let cold = StorageService::new(kind);
+        let inspect = |service: &StorageService| {
+            let SessionStorageResponse::Snapshot { snapshot } = service
+                .execute(SessionStorageRequest::OpenSnapshot {
+                    session: f.descriptor.session.clone(),
+                })
+                .unwrap()
+            else {
+                panic!()
+            };
+            assert_eq!(snapshot.revision, head.revision);
+            assert_eq!(snapshot.content_sha256, head.content_sha256);
+            snapshot
+        };
+        crate::diagnostics::reset();
+        let snapshot = inspect(&cold);
+        let SessionStorageResponse::Sessions { sessions } = StorageService::new(kind)
+            .execute(SessionStorageRequest::List {
+                config_root: f.root.path().to_owned(),
+                workspace_path: None,
+                audit: false,
+            })
+            .unwrap()
+        else {
+            panic!()
+        };
+        assert_eq!(sessions[0].message_count, 2);
+        assert_eq!(crate::diagnostics::get().decoded, 0);
+        assert_eq!(crate::diagnostics::get().fingerprint_bytes, 0);
+
+        let SessionStorageResponse::Conversation { conversation } = cold
+            .execute(SessionStorageRequest::ReadConversation {
+                snapshot,
+                point: StorageHistoryPoint::Current,
+            })
+            .unwrap()
+        else {
+            panic!()
+        };
+        assert_eq!(conversation.messages.len(), 2);
+        assert_eq!(crate::diagnostics::get().decoded, 2);
+    }
+}
+
+#[test]
+fn direct_open_of_legacy_head_seeds_the_next_open_and_rejects_blob_corruption() {
+    let kind = BackendKind::Jsonl;
+    let mut f = Fixture::new(kind);
+    f.append(vec![text(&"large journal message ".repeat(20_000))]);
+    let open = SessionStorageRequest::OpenSnapshot {
+        session: f.descriptor.session.clone(),
+    };
+    let cold = StorageService::new(kind);
+    crate::diagnostics::reset();
+    cold.execute(open.clone()).unwrap();
+    assert!(crate::diagnostics::get().decoded > 0);
+    crate::diagnostics::reset();
+    StorageService::new(kind).execute(open.clone()).unwrap();
+    assert_eq!(crate::diagnostics::get().decoded, 0);
+    assert_eq!(crate::diagnostics::get().fingerprint_bytes, 0);
+
+    let chunk = std::fs::read_dir(
+        f.descriptor
+            .local_path
+            .as_ref()
+            .unwrap()
+            .join("blobs/shared"),
+    )
+    .unwrap()
+    .next()
+    .unwrap()
+    .unwrap()
+    .path();
+    let length = std::fs::metadata(&chunk).unwrap().len() as usize;
+    std::fs::write(chunk, vec![b'!'; length]).unwrap();
+    assert!(f.service.execute(open.clone()).is_err(), "resident writer");
+    assert!(cold.execute(open.clone()).is_err(), "warm index");
+    assert!(
+        StorageService::new(kind).execute(open).is_err(),
+        "cold index"
+    );
+}
+
+#[test]
 fn durable_catalog_discards_damaged_index_and_rechecks_audit() {
     for kind in backends() {
         let mut f = Fixture::new(kind);

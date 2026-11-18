@@ -133,7 +133,7 @@ impl JournalBackend for Sqlite {
         );
         Ok(())
     }
-    fn append(&mut self, _dir: &Path, record: &JournalRecord) -> Result<()> {
+    fn append(&mut self, _dir: &Path, record: &JournalRecord) -> Result<Append> {
         let conn = self
             .writer
             .as_mut()
@@ -161,7 +161,11 @@ impl JournalBackend for Sqlite {
             ],
         )?;
         tx.commit()?;
-        Ok(())
+        Ok(Append {
+            extent: record.session_seq,
+            bytes: payload,
+            blobs: Vec::new(),
+        })
     }
     fn description_path(&self, dir: &Path) -> PathBuf {
         dir.join(FILE)
@@ -220,6 +224,9 @@ impl RecordSnapshot for SqliteSnapshot {
     }
     fn fingerprint(&self) -> &str {
         &self.fingerprint
+    }
+    fn read_hash(&self) -> HashContext {
+        self.current_hash.clone()
     }
     fn extent(&self) -> u64 {
         self.end

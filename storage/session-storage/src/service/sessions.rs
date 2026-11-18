@@ -249,6 +249,7 @@ impl State {
                 _ownership: ownership,
                 backend: self.kind.backend(),
                 fold: None,
+                head: None,
             },
         );
         let result = self.writer_fold(&lease).map(|fold| fold.revision());

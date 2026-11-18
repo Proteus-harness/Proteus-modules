@@ -43,7 +43,7 @@ fn jsonl_persists_compact_hooks_inline_or_in_blobs_and_reads_old_inline_trace() 
     let dir = tempfile::tempdir().unwrap();
     let record = hook_record();
     for threshold in [0, usize::MAX] {
-        let line = crate::codec::encode(dir.path(), &record, threshold).unwrap();
+        let (line, _) = crate::codec::encode(dir.path(), &record, threshold).unwrap();
         assert_eq!(
             crate::codec::decode(dir.path(), record.session_id, &line).unwrap(),
             record

@@ -5,7 +5,8 @@ use std::{collections::BTreeMap, fs::OpenOptions, io::Write};
 const FILE: &str = ".storage-catalog-v1.json";
 const MAX_BYTES: usize = 4 * 1024 * 1024;
 const MAX_BLOBS: usize = 16_384;
-type BlobStamps = BTreeMap<PathBuf, FileStamp>;
+pub(in crate::service) type BlobStamps = BTreeMap<PathBuf, FileStamp>;
+pub(in crate::service) type BlobStampDigest = [u8; 32];
 
 #[derive(Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -25,7 +26,7 @@ struct Envelope {
     data: Index,
 }
 
-pub(super) fn blob_stamps(dir: &Path) -> Option<BlobStamps> {
+pub(in crate::service) fn blob_stamps(dir: &Path) -> Option<BlobStamps> {
     let root = dir.join("blobs");
     let mut stamps = BTreeMap::new();
     let mut pending = vec![(PathBuf::new(), 0)];
@@ -53,6 +54,53 @@ pub(super) fn blob_stamps(dir: &Path) -> Option<BlobStamps> {
         }
     }
     Some(stamps)
+}
+
+/// Keep only a fixed-size proof in the in-process catalog, including for
+/// archives with thousands of payload files.
+pub(in crate::service) fn blob_stamp_digest(stamps: &BlobStamps) -> BlobStampDigest {
+    let mut hash = ring::digest::Context::new(&ring::digest::SHA256);
+    for (path, stamp) in stamps {
+        let path = path.as_os_str().as_encoded_bytes();
+        hash.update(&(path.len() as u64).to_le_bytes());
+        hash.update(path);
+        hash.update(&stamp.len.to_le_bytes());
+        hash.update(&stamp.modified.to_le_bytes());
+        hash.update(&stamp.device.to_le_bytes());
+        hash.update(&stamp.inode.to_le_bytes());
+        hash.update(&stamp.changed.0.to_le_bytes());
+        hash.update(&stamp.changed.1.to_le_bytes());
+    }
+    hash.finish()
+        .as_ref()
+        .try_into()
+        .expect("SHA-256 digest length")
+}
+
+pub(super) fn update_blobs(
+    dir: &Path,
+    stamps: &mut BlobStamps,
+    touched: Vec<PathBuf>,
+) -> Option<()> {
+    let root = dir.join("blobs");
+    for file in touched {
+        for path in file.ancestors().filter(|p| !p.as_os_str().is_empty()) {
+            let meta = std::fs::symlink_metadata(root.join(path)).ok()?;
+            let expected_type = if path == file {
+                meta.is_file()
+            } else {
+                meta.is_dir()
+            };
+            if !expected_type {
+                return None;
+            }
+            stamps.insert(path.to_owned(), file_stamp(&meta).ok()?);
+        }
+        if stamps.len() > MAX_BLOBS {
+            return None;
+        }
+    }
+    Some(())
 }
 
 pub(super) fn load(
@@ -86,6 +134,7 @@ pub(super) fn load(
             extent: index.extent,
             fingerprint: index.fingerprint,
         },
+        blob_digest: Some(blob_stamp_digest(&index.blobs)),
     };
     let mut summary = index.summary;
     summary.descriptor = descriptor.clone();
@@ -138,6 +187,7 @@ pub(super) fn save(
             file.write_all(&bytes)?;
             file.sync_data()?;
             std::fs::rename(&temporary, dir.join(FILE))?;
+            crate::io::sync_directory(dir)?;
             Ok(())
         })();
         if write.is_err() {

@@ -2,7 +2,7 @@
 use crate::types::*;
 use anyhow::Result;
 use proteus_contracts::domain::SessionId;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 mod jsonl;
 mod sqlite;
@@ -13,6 +13,12 @@ pub(crate) use sqlite::Sqlite;
 pub(crate) struct PrefixHint {
     pub extent: u64,
     pub fingerprint: String,
+}
+
+pub(crate) struct Append {
+    pub extent: u64,
+    pub bytes: Vec<u8>,
+    pub blobs: Vec<PathBuf>,
 }
 
 #[derive(Clone, PartialEq, Eq)]
@@ -35,6 +41,8 @@ pub(crate) trait RecordSnapshot: Send {
     fn reset(&mut self) -> Result<()>;
     fn next(&mut self) -> Result<Option<JournalRecord>>;
     fn fingerprint(&self) -> &str;
+    /// Digest of bytes consumed by `next`. A complete validated replay seeds the writer head.
+    fn read_hash(&self) -> ring::digest::Context;
     fn extent(&self) -> u64;
     fn prefix_fingerprint(&mut self, sequence: u64) -> Result<Option<String>>;
 }
@@ -49,6 +57,6 @@ pub(crate) trait JournalBackend: Send {
     ) -> Result<Box<dyn RecordSnapshot>>;
     /// Caller holds the persistent writer lease. Only recovery may repair a torn tail.
     fn recover(&mut self, dir: &Path, id: SessionId) -> Result<()>;
-    fn append(&mut self, dir: &Path, record: &JournalRecord) -> Result<()>;
+    fn append(&mut self, dir: &Path, record: &JournalRecord) -> Result<Append>;
     fn description_path(&self, dir: &Path) -> std::path::PathBuf;
 }

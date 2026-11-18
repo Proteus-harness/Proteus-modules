@@ -381,7 +381,8 @@ fn warm_snapshot_open_uses_only_prefix_metadata_while_execution_recovery_stays_s
         crate::diagnostics::reset();
         f.append(vec![text("new history invalidates the prefix cache")]);
         let new = f.snapshot();
-        assert!(crate::diagnostics::get().decoded > 0);
+        assert_eq!(crate::diagnostics::get().decoded, 0);
+        assert_eq!(crate::diagnostics::get().fingerprint_bytes, 0);
         assert_eq!(new.revision.session_seq, 2);
     }
 }

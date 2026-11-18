@@ -42,11 +42,15 @@ const fn gear_table() -> [u64; 256] {
 const GEAR: [u64; 256] = gear_table();
 
 fn chunk_path(session: &Path, hash: &str) -> Result<PathBuf> {
+    Ok(session.join("blobs").join(chunk_file(hash)?))
+}
+
+fn chunk_file(hash: &str) -> Result<PathBuf> {
     ensure!(
         hash.len() == 64 && hash.bytes().all(|byte| byte.is_ascii_hexdigit()),
         "invalid shared blob hash"
     );
-    Ok(session.join("blobs/shared").join(format!("{hash}.bin")))
+    Ok(Path::new("shared").join(format!("{hash}.bin")))
 }
 
 /// Write all shared chunks before publishing the returned manifest. Journal
@@ -106,6 +110,19 @@ fn store_chunk(session: &Path, bytes: &[u8]) -> Result<Chunk> {
 /// chunk and as a complete payload before a caller parses canonical records.
 pub fn unpack<'a>(session: &Path, stored: &'a [u8]) -> Result<Cow<'a, [u8]>> {
     unpack_checked(session, stored, None)
+}
+
+/// The caller has already packed or verified these bytes.
+pub(crate) fn chunk_files(stored: &[u8]) -> Result<Vec<PathBuf>> {
+    let Some(body) = stored.strip_prefix(MAGIC) else {
+        return Ok(Vec::new());
+    };
+    let manifest: Manifest = serde_json::from_slice(body)?;
+    manifest
+        .chunks
+        .iter()
+        .map(|chunk| chunk_file(&chunk.sha256))
+        .collect()
 }
 
 pub(crate) fn unpack_expected<'a>(

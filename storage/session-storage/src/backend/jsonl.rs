@@ -60,13 +60,13 @@ impl JournalBackend for Jsonl {
         self.committed_offset = Some(length);
         Ok(())
     }
-    fn append(&mut self, dir: &Path, record: &JournalRecord) -> Result<()> {
+    fn append(&mut self, dir: &Path, record: &JournalRecord) -> Result<Append> {
         let path = dir.join(codec::JOURNAL_FILE);
         let committed = self
             .committed_offset
             .context("JSONL writer must recover before append")?;
         restore_offset(&path, committed)?;
-        let line = codec::encode(dir, record, self.blob_threshold)?;
+        let (line, blobs) = codec::encode(dir, record, self.blob_threshold)?;
         let next = committed
             .checked_add(line.len() as u64)
             .context("journal offset overflow")?;
@@ -85,7 +85,11 @@ impl JournalBackend for Jsonl {
             return Err(error);
         }
         self.committed_offset = Some(next);
-        Ok(())
+        Ok(Append {
+            extent: next,
+            bytes: line,
+            blobs,
+        })
     }
     fn description_path(&self, dir: &Path) -> PathBuf {
         dir.join(codec::JOURNAL_FILE)
@@ -290,6 +294,9 @@ impl RecordSnapshot for JsonlSnapshot {
     }
     fn fingerprint(&self) -> &str {
         &self.fingerprint
+    }
+    fn read_hash(&self) -> HashContext {
+        self.current_hash.clone()
     }
     fn extent(&self) -> u64 {
         self.length

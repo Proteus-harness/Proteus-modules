@@ -54,7 +54,7 @@ pub(crate) fn encode(
     session: &Path,
     record: &JournalRecord,
     blob_threshold: usize,
-) -> Result<Vec<u8>> {
+) -> Result<(Vec<u8>, Vec<PathBuf>)> {
     let kind = record.entry.kind();
     let value = record.entry.stored_payload_value()?;
     let bytes = serde_json::to_vec(&value)?;
@@ -62,21 +62,28 @@ pub(crate) fn encode(
         bytes.len() <= MAX_PAYLOAD_BYTES,
         "journal payload exceeds maximum"
     );
+    let mut blobs = Vec::new();
     let payload = if bytes.len() < blob_threshold {
         StoredPayload::Inline { value }
     } else {
         let hash = sha256_hex(&bytes);
-        let relative_path = PathBuf::from("blobs").join(format!("{hash}.json"));
+        let name = PathBuf::from(format!("{hash}.json"));
+        let relative_path = Path::new("blobs").join(&name);
         let path = session.join(&relative_path);
-        if path.try_exists()? {
+        let stored = if path.try_exists()? {
+            let stored = bounded_read(&path, MAX_PAYLOAD_BYTES)?;
             ensure!(
-                crate::blob_codec::unpack(session, &bounded_read(&path, MAX_PAYLOAD_BYTES)?)?
-                    == bytes,
+                crate::blob_codec::unpack(session, &stored)? == bytes,
                 "content-addressed blob collision"
             );
+            stored
         } else {
-            atomic_write(&path, &crate::blob_codec::pack(session, &bytes)?)?;
-        }
+            let stored = crate::blob_codec::pack(session, &bytes)?;
+            atomic_write(&path, &stored)?;
+            stored
+        };
+        blobs = crate::blob_codec::chunk_files(&stored)?;
+        blobs.push(name);
         StoredPayload::Blob {
             sha256: hash,
             bytes: bytes.len() as u64,
@@ -97,7 +104,7 @@ pub(crate) fn encode(
     };
     let mut line = serde_json::to_vec(&stored)?;
     line.push(b'\n');
-    Ok(line)
+    Ok((line, blobs))
 }
 
 pub(crate) fn decode(session: &Path, session_id: SessionId, line: &[u8]) -> Result<JournalRecord> {

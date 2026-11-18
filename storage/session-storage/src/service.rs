@@ -53,9 +53,10 @@ struct State {
 struct Writer {
     lease: StorageWriterLease,
     tokens: HashSet<Uuid>,
-    _ownership: SessionWriteOwnership,
     backend: Box<dyn JournalBackend>,
     fold: Option<Fold>,
+    head: Option<catalog::WriterHead>,
+    _ownership: SessionWriteOwnership,
 }
 impl BackendKind {
     fn backend(self) -> Box<dyn JournalBackend> {
@@ -131,12 +132,15 @@ impl State {
                 let writer = self.writer(&lease)?;
                 writer.tokens.remove(&lease.token);
                 if writer.tokens.is_empty() {
-                    self.writers.remove(&lease.session);
+                    let writer = self.writers.remove(&lease.session).expect("writer exists");
+                    self.close_writer(&lease.session, writer);
                 }
                 Ok(SessionStorageResponse::Done)
             }
             HibernateWriter { lease } => {
-                self.writer(&lease)?.fold = None;
+                let writer = self.writer(&lease)?;
+                writer.fold = None;
+                writer.head = None;
                 Ok(SessionStorageResponse::Done)
             }
             Commit { commit } => self.commit(commit),
@@ -306,14 +310,28 @@ impl State {
     }
     fn writer_fold(&mut self, lease: &StorageWriterLease) -> Result<&mut Fold> {
         let dir = self.writer_path(lease)?;
+        let kind = self.kind;
         let writer = self.writer(lease)?;
         if writer.fold.is_none() {
             writer.backend.recover(&dir, lease.session.session_id)?;
+            let stamps = catalog::source_stamp(&dir, kind)?;
+            let blobs = catalog::durable::blob_stamps(&dir);
             let mut source = writer.backend.snapshot(&dir, lease.session.session_id)?;
             let mut fold = Fold::default();
             while let Some(record) = source.next()? {
                 fold.apply(lease.session.session_id, &record)?;
             }
+            writer.head = blobs
+                .filter(|blobs| {
+                    catalog::source_stamp(&dir, kind).ok().as_ref() == Some(&stamps)
+                        && catalog::durable::blob_stamps(&dir).as_ref() == Some(blobs)
+                })
+                .map(|blobs| catalog::WriterHead {
+                    stamps,
+                    blobs,
+                    extent: source.extent(),
+                    hash: source.read_hash(),
+                });
             writer.fold = Some(fold);
         }
         Ok(writer.fold.as_mut().expect("writer fold initialized"))
