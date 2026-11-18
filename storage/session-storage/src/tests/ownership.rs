@@ -47,13 +47,36 @@ fn delete_recreate_fences_old_handles_and_cache_cannot_resurrect() {
         let mut f = Fixture::new(kind);
         f.append(vec![text("old")]);
         let old = f.snapshot();
+        let read_old_cache = SessionStorageRequest::ReadCache {
+            session: f.descriptor.session.clone(),
+            key: "view".into(),
+            source: Some(old.clone()),
+        };
+        assert!(matches!(
+            f.service
+                .execute(SessionStorageRequest::WriteCache {
+                    session: f.descriptor.session.clone(),
+                    key: "view".into(),
+                    source: old.clone(),
+                    value: serde_json::json!({"old": true}),
+                })
+                .unwrap(),
+            SessionStorageResponse::CacheWritten { etag: Some(_) }
+        ));
         let op = uuid::Uuid::new_v4();
         let delete = SessionStorageRequest::Delete {
             lease: f.lease.clone(),
             operation_id: op,
         };
         f.service.execute(delete.clone()).unwrap();
-        assert!(!f.descriptor.local_path.clone().unwrap().exists());
+        let path = f.descriptor.local_path.clone().unwrap();
+        assert!(!path.exists());
+        assert!(f.service.execute(read_old_cache.clone()).is_err());
+        let error = f
+            .service
+            .execute(SessionStorageRequest::Open { path: path.clone() })
+            .unwrap_err();
+        assert!(error.is::<SessionStorageFailure>());
         assert!(matches!(
             f.service
                 .execute(SessionStorageRequest::WriteCache {
@@ -88,6 +111,15 @@ fn delete_recreate_fences_old_handles_and_cache_cannot_resurrect() {
             panic!()
         };
         assert_ne!(lease.generation, f.lease.generation);
+        assert!(f.service.execute(read_old_cache).is_err());
+        let SessionStorageResponse::Session { descriptor: opened } = f
+            .service
+            .execute(SessionStorageRequest::Open { path })
+            .unwrap()
+        else {
+            panic!("expected current session descriptor");
+        };
+        assert_eq!(opened.session, descriptor.session);
         f.service.execute(delete).unwrap();
         assert!(
             descriptor.local_path.clone().unwrap().exists(),

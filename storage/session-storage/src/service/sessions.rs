@@ -7,20 +7,73 @@ fn milliseconds(time: SystemTime) -> i64 {
         .unwrap_or(0)
 }
 
-impl State {
-    fn check_selected_format(&self, path: &Path) -> Result<()> {
-        let other = match self.kind {
-            BackendKind::Jsonl => BackendKind::Sqlite,
-            BackendKind::Sqlite => BackendKind::Jsonl,
-        }
-        .backend()
-        .description_path(path);
-        ensure!(
-            !other.try_exists()?,
-            "session contains another canonical journal format; select its storage implementation or explicitly migrate it"
-        );
-        Ok(())
+fn check_selected_format(kind: BackendKind, path: &Path) -> Result<()> {
+    let other = match kind {
+        BackendKind::Jsonl => BackendKind::Sqlite,
+        BackendKind::Sqlite => BackendKind::Jsonl,
     }
+    .backend()
+    .description_path(path);
+    ensure!(
+        !other.try_exists()?,
+        "session contains another canonical journal format; select its storage implementation or explicitly migrate it"
+    );
+    Ok(())
+}
+pub(super) fn open(kind: BackendKind, path: &Path) -> Result<StorageSessionDescriptor> {
+    let path = if path
+        .file_name()
+        .is_some_and(|name| name == "journal.jsonl" || name == "journal.sqlite")
+    {
+        path.parent()
+            .context("record location has no session parent")?
+    } else {
+        path
+    };
+    let path = canonicalize_unmaterialized_path(path)?;
+    let control = super::control::load(&path)?;
+    if control.deleted || !path.try_exists()? {
+        return Err(SessionStorageFailure::MissingSession.into());
+    }
+    check_selected_format(kind, &path)?;
+    let identity = identity::resolve_session_identity(&path)?;
+    let workspace_path = workspace_dir::workspace_path_from_session_dir(&path)?;
+    let meta = std::fs::metadata(&path)?;
+    let journal = kind.backend().description_path(&path);
+    let mut modified = std::fs::metadata(&journal)
+        .and_then(|m| m.modified())
+        .or_else(|_| meta.modified())?;
+    if let Ok(wal_modified) =
+        std::fs::metadata(PathBuf::from(format!("{}-wal", journal.to_string_lossy())))
+            .and_then(|m| m.modified())
+    {
+        modified = modified.max(wal_modified);
+    }
+    let observed = super::control::load(&path)?;
+    ensure!(
+        !observed.deleted
+            && super::control::locator_incarnation(&observed)
+                == super::control::locator_incarnation(&control),
+        SessionStorageFailure::MissingSession
+    );
+    Ok(StorageSessionDescriptor {
+        session: super::locator::make(
+            path.clone(),
+            workspace_path.clone(),
+            identity.session_id,
+            identity.parent_session_id,
+            control.incarnation,
+        )?,
+        parent_session_id: identity.parent_session_id,
+        workspace_path,
+        record_location: Some(kind.backend().description_path(&path)),
+        local_path: Some(path),
+        created_at_ms: milliseconds(meta.created().unwrap_or(modified)),
+        updated_at_ms: milliseconds(modified),
+    })
+}
+
+impl State {
     pub(super) fn create(
         &mut self,
         root: PathBuf,
@@ -37,7 +90,7 @@ impl State {
                 .join(encoded)
                 .join(identity::short_session_directory_name(id)),
         )?;
-        self.check_selected_format(&path)?;
+        check_selected_format(self.kind, &path)?;
         let may_create = identity::validate_new_session_target(&path, id)?;
         let control = super::control::load(&path)?;
         let session = super::locator::make(
@@ -68,49 +121,7 @@ impl State {
         Ok(SessionStorageResponse::Session { descriptor })
     }
     pub(super) fn open(&self, path: &Path) -> Result<StorageSessionDescriptor> {
-        let path = if path
-            .file_name()
-            .is_some_and(|name| name == "journal.jsonl" || name == "journal.sqlite")
-        {
-            path.parent()
-                .context("record location has no session parent")?
-        } else {
-            path
-        };
-        let path = canonicalize_unmaterialized_path(path)?;
-        let control = super::control::load(&path)?;
-        if control.deleted || !path.try_exists()? {
-            return Err(SessionStorageFailure::MissingSession.into());
-        }
-        self.check_selected_format(&path)?;
-        let identity = identity::resolve_session_identity(&path)?;
-        let workspace_path = workspace_dir::workspace_path_from_session_dir(&path)?;
-        let meta = std::fs::metadata(&path)?;
-        let journal = self.kind.backend().description_path(&path);
-        let mut modified = std::fs::metadata(&journal)
-            .and_then(|m| m.modified())
-            .or_else(|_| meta.modified())?;
-        if let Ok(wal_modified) =
-            std::fs::metadata(PathBuf::from(format!("{}-wal", journal.to_string_lossy())))
-                .and_then(|m| m.modified())
-        {
-            modified = modified.max(wal_modified);
-        }
-        Ok(StorageSessionDescriptor {
-            session: super::locator::make(
-                path.clone(),
-                workspace_path.clone(),
-                identity.session_id,
-                identity.parent_session_id,
-                control.incarnation,
-            )?,
-            parent_session_id: identity.parent_session_id,
-            workspace_path,
-            record_location: Some(self.kind.backend().description_path(&path)),
-            local_path: Some(path),
-            created_at_ms: milliseconds(meta.created().unwrap_or(modified)),
-            updated_at_ms: milliseconds(modified),
-        })
+        open(self.kind, path)
     }
     pub(super) fn describe(&self, session: &SessionLocator) -> Result<StorageSessionDescriptor> {
         let path = self.checked_path(session)?;

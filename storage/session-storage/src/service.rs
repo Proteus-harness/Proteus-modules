@@ -38,6 +38,7 @@ pub enum BackendKind {
 }
 
 pub struct StorageService {
+    kind: BackendKind,
     state: Mutex<State>,
 }
 struct State {
@@ -69,6 +70,7 @@ impl BackendKind {
 impl StorageService {
     pub fn new(kind: BackendKind) -> Self {
         Self {
+            kind,
             state: Mutex::new(State {
                 kind,
                 writers: HashMap::new(),
@@ -81,14 +83,27 @@ impl StorageService {
             }),
         }
     }
-    /// Each admitted transaction completes under this service lock even if an
-    /// RPC caller stops waiting. Stable operation ids reconcile its durable result.
+    /// Durable operations finish under the service lock even if a caller stops
+    /// waiting. Session identity and disposable cache reads only consult disk
+    /// and can serve a pinned display while another request validates a journal.
     pub fn execute(&self, request: SessionStorageRequest) -> Result<SessionStorageResponse> {
+        use SessionStorageRequest::*;
         request.validate()?;
-        self.state
-            .lock()
-            .map_err(|_| anyhow::anyhow!("storage service lock poisoned"))?
-            .execute(request)
+        match request {
+            Open { path } => Ok(SessionStorageResponse::Session {
+                descriptor: sessions::open(self.kind, &path)?,
+            }),
+            ReadCache {
+                session,
+                key,
+                source,
+            } => cache::read_cache(session, key, source),
+            request => self
+                .state
+                .lock()
+                .map_err(|_| anyhow::anyhow!("storage service lock poisoned"))?
+                .execute(request),
+        }
     }
 
     /// Validate one session and persist its disposable catalog index.
@@ -116,9 +131,6 @@ impl State {
                 session_id,
                 parent_session_id,
             } => self.create(config_root, workspace_path, session_id, parent_session_id),
-            Open { path } => Ok(SessionStorageResponse::Session {
-                descriptor: self.open(&path)?,
-            }),
             Describe { session } => Ok(SessionStorageResponse::Session {
                 descriptor: self.describe(&session)?,
             }),
@@ -220,11 +232,7 @@ impl State {
                     .context("model context requested outside the latest admitted turn")?;
                 Ok(SessionStorageResponse::ModelContext { observations })
             }
-            ReadCache {
-                session,
-                key,
-                source,
-            } => self.read_cache(session, key, source),
+            Open { .. } | ReadCache { .. } => unreachable!("stateless storage request"),
             WriteCache {
                 session,
                 key,
@@ -274,23 +282,9 @@ impl State {
         }
     }
     fn checked_path(&self, session: &SessionLocator) -> Result<PathBuf> {
-        let key = locator::parse(session)?;
-        let control = control::load(&key.path)?;
-        ensure!(
-            key.incarnation == control::locator_incarnation(&control),
-            "session locator incarnation is retired"
-        );
-        if !key.path.try_exists()? {
-            return Ok(key.path);
-        }
-        let identity = identity::resolve_session_identity(&key.path)?;
-        ensure!(
-            identity.session_id == session.session_id
-                && identity.parent_session_id == key.parent_session_id,
-            "session locator identity changed"
-        );
-        Ok(key.path)
+        checked_path(session)
     }
+
     fn writer(&mut self, lease: &StorageWriterLease) -> Result<&mut Writer> {
         let writer = self
             .writers
@@ -335,5 +329,101 @@ impl State {
             writer.fold = Some(fold);
         }
         Ok(writer.fold.as_mut().expect("writer fold initialized"))
+    }
+}
+
+fn checked_path(session: &SessionLocator) -> Result<PathBuf> {
+    let key = locator::parse(session)?;
+    let control = control::load(&key.path)?;
+    ensure!(
+        key.incarnation == control::locator_incarnation(&control),
+        "session locator incarnation is retired"
+    );
+    if !key.path.try_exists()? {
+        return Ok(key.path);
+    }
+    let identity = identity::resolve_session_identity(&key.path)?;
+    ensure!(
+        identity.session_id == session.session_id
+            && identity.parent_session_id == key.parent_session_id,
+        "session locator identity changed"
+    );
+    Ok(key.path)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::{sync::mpsc, time::Duration};
+
+    #[test]
+    fn pinned_display_reads_do_not_wait_for_serialized_journal_work() {
+        use SessionStorageRequest::*;
+        use SessionStorageResponse as Response;
+
+        let root = tempfile::tempdir().unwrap();
+        let workspace = tempfile::tempdir().unwrap();
+        let service = StorageService::new(BackendKind::Jsonl);
+        let Response::Session { descriptor } = service
+            .execute(Create {
+                config_root: root.path().to_owned(),
+                workspace_path: workspace.path().to_owned(),
+                session_id: proteus_contracts::domain::new_session_id(),
+                parent_session_id: None,
+            })
+            .unwrap()
+        else {
+            panic!("expected session descriptor");
+        };
+        let session = descriptor.session.clone();
+        let _writer = service
+            .execute(AcquireWriter {
+                session: session.clone(),
+            })
+            .unwrap();
+        let Response::Snapshot { snapshot } = service
+            .execute(OpenSnapshot {
+                session: session.clone(),
+            })
+            .unwrap()
+        else {
+            panic!("expected snapshot");
+        };
+        let key = "pinned-display".to_owned();
+        let value = serde_json::json!({"rows": [0, 1, 2]});
+        let response = service
+            .execute(WriteCache {
+                session: session.clone(),
+                key: key.clone(),
+                source: snapshot.clone(),
+                value: value.clone(),
+            })
+            .unwrap();
+        assert!(matches!(response, Response::CacheWritten { etag: Some(_) }));
+
+        let (open, read) = std::thread::scope(|scope| {
+            let (tx, rx) = mpsc::channel();
+            // A strict fold holds this lock until its complete snapshot is verified.
+            let state = service.state.lock().unwrap();
+            let path = descriptor.local_path.unwrap();
+            let service = &service;
+            scope.spawn(move || {
+                let open = service.execute(Open { path });
+                let read = service.execute(ReadCache {
+                    session,
+                    key,
+                    source: Some(snapshot),
+                });
+                let _ = tx.send((open, read));
+            });
+            let result = rx.recv_timeout(Duration::from_secs(2));
+            drop(state);
+            result.expect("pinned display reads waited for the journal lock")
+        });
+        assert!(matches!(open.unwrap(), Response::Session { .. }));
+        assert!(matches!(
+            read.unwrap(),
+            Response::Metadata { document: Some(document) } if document.value == value
+        ));
     }
 }

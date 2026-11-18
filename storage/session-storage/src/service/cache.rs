@@ -19,37 +19,40 @@ fn path(dir: &Path, key: &str) -> PathBuf {
 fn same_prefix(a: &StorageSnapshot, b: &StorageSnapshot) -> bool {
     a.session == b.session && a.revision == b.revision && a.content_sha256 == b.content_sha256
 }
-impl State {
-    pub(super) fn read_cache(
-        &mut self,
-        session: SessionLocator,
-        key: String,
-        source: Option<StorageSnapshot>,
-    ) -> Result<SessionStorageResponse> {
-        let dir = self.checked_path(&session)?;
-        let bytes = match crate::io::bounded_read(&path(&dir, &key), MAX_CACHE_BYTES + 1024 * 1024)
-        {
-            Ok(bytes) => bytes,
-            Err(_) => return Ok(SessionStorageResponse::Metadata { document: None }),
-        };
-        let cache: Cache = match serde_json::from_slice(&bytes) {
-            Ok(value) => value,
-            Err(_) => return Ok(SessionStorageResponse::Metadata { document: None }),
-        };
-        if cache.source.session != session
-            || source
-                .as_ref()
-                .is_some_and(|source| !same_prefix(source, &cache.source))
-        {
-            return Ok(SessionStorageResponse::Metadata { document: None });
-        }
-        Ok(SessionStorageResponse::Metadata {
-            document: Some(StorageMetadataDocument {
-                etag: storage_value_etag(&cache.value)?,
-                value: cache.value,
-            }),
-        })
+pub(super) fn read_cache(
+    session: SessionLocator,
+    key: String,
+    source: Option<StorageSnapshot>,
+) -> Result<SessionStorageResponse> {
+    let dir = checked_path(&session)?;
+    let bytes = match crate::io::bounded_read(&path(&dir, &key), MAX_CACHE_BYTES + 1024 * 1024) {
+        Ok(bytes) => bytes,
+        Err(_) => return Ok(SessionStorageResponse::Metadata { document: None }),
+    };
+    let cache: Cache = match serde_json::from_slice(&bytes) {
+        Ok(value) => value,
+        Err(_) => return Ok(SessionStorageResponse::Metadata { document: None }),
+    };
+    if cache.source.session != session
+        || source
+            .as_ref()
+            .is_some_and(|source| !same_prefix(source, &cache.source))
+    {
+        return Ok(SessionStorageResponse::Metadata { document: None });
     }
+    let etag = storage_value_etag(&cache.value)?;
+    // Cache values are published by atomic rename. Recheck the locator after
+    // reading so a retired incarnation cannot cross a concurrent replacement.
+    checked_path(&session)?;
+    Ok(SessionStorageResponse::Metadata {
+        document: Some(StorageMetadataDocument {
+            etag,
+            value: cache.value,
+        }),
+    })
+}
+
+impl State {
     pub(super) fn write_cache(
         &mut self,
         session: SessionLocator,
