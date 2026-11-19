@@ -43,6 +43,21 @@ impl Fold {
             interrupted_turns: self.validation.interrupted_turns(),
         }
     }
+    pub fn into_resume(self, id: SessionId) -> StorageResumeState {
+        let revision = self.revision();
+        let last_history_turn = self.validation.last_history_turn();
+        let interrupted_turns = self.validation.interrupted_turns();
+        StorageResumeState {
+            conversation: StorageConversation {
+                messages: self.validation.into_history(),
+                revision,
+                model_context: self.model_context.snapshot(),
+            },
+            usage: self.usage.snapshot(id),
+            last_history_turn,
+            interrupted_turns,
+        }
+    }
 }
 
 pub(crate) struct SnapshotState {
@@ -52,6 +67,7 @@ pub(crate) struct SnapshotState {
     verified_version: Option<crate::backend::SourceVersion>,
     page_after: Option<u64>,
     pending: Option<JournalRecord>,
+    pub(crate) display: Option<crate::display::DisplayRecords>,
 }
 impl SnapshotState {
     pub fn new(
@@ -67,6 +83,7 @@ impl SnapshotState {
             verified_version,
             page_after: None,
             pending: None,
+            display: None,
         })
     }
     /// Reusing a resident semantic projection is safe only for a fully verified
@@ -178,6 +195,23 @@ impl SnapshotState {
             records,
             next_after_seq,
         })
+    }
+    pub fn display_page(&mut self, after: u64, limit: u32) -> Result<StorageRecordPage> {
+        let version = self.source.source_version()?;
+        if version != self.verified_version {
+            self.source.verify_fixed_prefix()?;
+            self.verified_version = self.source.source_version()?;
+        }
+        let page = self
+            .display
+            .as_mut()
+            .ok_or_else(|| anyhow::anyhow!("snapshot has no display projection"))?
+            .page(&self.identity, after, limit)?;
+        if self.source.source_version()? != self.verified_version {
+            self.source.verify_fixed_prefix()?;
+            self.verified_version = self.source.source_version()?;
+        }
+        Ok(page)
     }
     pub fn conversation_at(&mut self, point: StorageHistoryPoint) -> Result<StorageConversation> {
         if point == StorageHistoryPoint::Current {

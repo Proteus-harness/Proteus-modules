@@ -5,6 +5,7 @@ pub mod backend;
 pub mod blob_codec;
 mod codec;
 mod diagnostics;
+mod display;
 mod identity;
 mod io;
 mod lease;

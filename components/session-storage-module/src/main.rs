@@ -9,6 +9,10 @@ use session_storage::{BackendKind, StorageService};
 
 struct Backend(StorageService);
 impl SessionStorageModule for Backend {
+    fn supports_display_projection(&self) -> bool {
+        true
+    }
+
     fn execute(&self, request: SessionStorageRequest) -> Result<SessionStorageResponse> {
         self.0.execute(request)
     }

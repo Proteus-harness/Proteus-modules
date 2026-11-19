@@ -22,6 +22,7 @@ mod cache;
 mod catalog;
 mod commits;
 mod control;
+mod display;
 mod locator;
 mod objects;
 mod sessions;
@@ -177,6 +178,7 @@ impl State {
                 let snapshot = self.snapshot(session)?;
                 Ok(SessionStorageResponse::Snapshot { snapshot })
             }
+            OpenDisplaySnapshot { session } => self.open_display_snapshot(session),
             ReleaseSnapshot { snapshot } => {
                 self.get_snapshot(&snapshot)?;
                 self.snapshots.remove(&snapshot.snapshot_id);
@@ -193,6 +195,15 @@ impl State {
                 limit,
             } => Ok(SessionStorageResponse::Records {
                 page: self.get_snapshot(&snapshot)?.page(after_seq, limit)?,
+            }),
+            ReadDisplayRecords {
+                snapshot,
+                after_seq,
+                limit,
+            } => Ok(SessionStorageResponse::Records {
+                page: self
+                    .get_snapshot(&snapshot)?
+                    .display_page(after_seq, limit)?,
             }),
             ReadConversation { snapshot, point } => Ok(SessionStorageResponse::Conversation {
                 conversation: self.get_snapshot(&snapshot)?.conversation_at(point)?,

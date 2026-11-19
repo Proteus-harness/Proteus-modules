@@ -128,5 +128,6 @@ mod performance;
 
 mod paging;
 
+mod display;
 mod model_context;
 mod persisted_hooks;
