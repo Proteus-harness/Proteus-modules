@@ -2,7 +2,7 @@ use super::*;
 use proteus_contracts::domain::RecordId;
 impl State {
     pub(super) fn commit(&mut self, commit: StorageCommit) -> Result<SessionStorageResponse> {
-        let raw = JournalRecord {
+        let mut record = JournalRecord {
             schema_version: JOURNAL_SCHEMA_VERSION,
             record_id: commit.operation_id,
             session_seq: commit
@@ -17,34 +17,25 @@ impl State {
             turn_id: commit.attribution.turn_id,
             entry: commit.entry,
         };
-        if let JournalEntry::HookInvoked(trace) = &raw.entry {
-            proteus_session_semantics::journal::hooks::validate_raw_trace(&raw, trace)?;
+        if let JournalEntry::HookInvoked(trace) = &record.entry {
+            proteus_session_semantics::journal::hooks::validate_raw_trace(&record, trace)?;
         }
-        let canonical = crate::codec::canonicalize_entry(&raw.entry)?;
-        let actual = self.writer_fold(&commit.lease)?.revision();
-        if actual != commit.expected
-            || self
-                .writer_fold(&commit.lease)?
-                .validation
-                .contains_record_id(&commit.operation_id)
-        {
+        record.entry = crate::codec::canonicalize_entry(record.entry)?;
+        let fold = self.writer_fold(&commit.lease)?;
+        let actual = fold.revision();
+        if actual != commit.expected || fold.validation.contains_record_id(&record.record_id) {
             if let Some(ack) = self.commit_status(&commit.lease.session, commit.operation_id)? {
                 let previous_history = match &ack.record.entry {
                     JournalEntry::HistoryMutated(m) => m.previous_revision,
                     _ => ack.revision.history_revision,
                 };
                 ensure!(
-                    ack.record.session_seq
-                        == commit
-                            .expected
-                            .session_seq
-                            .checked_add(1)
-                            .context("sequence overflow")?
+                    ack.record.session_seq == record.session_seq
                         && previous_history == commit.expected.history_revision,
                     "operation retry changed its original expected revision"
                 );
                 ensure!(
-                    ack.record.entry == canonical
+                    ack.record.entry == record.entry
                         && ack.record.timestamp_ms == commit.timestamp_ms
                         && ack.record.execution_id == commit.attribution.execution_id
                         && ack.record.thread_id == commit.attribution.thread_id
@@ -59,20 +50,6 @@ impl State {
                 actual
             );
         }
-        let record = JournalRecord {
-            schema_version: JOURNAL_SCHEMA_VERSION,
-            record_id: commit.operation_id,
-            session_seq: actual
-                .session_seq
-                .checked_add(1)
-                .context("journal sequence overflow")?,
-            timestamp_ms: commit.timestamp_ms,
-            session_id: commit.lease.session.session_id,
-            execution_id: commit.attribution.execution_id,
-            thread_id: commit.attribution.thread_id,
-            turn_id: commit.attribution.turn_id,
-            entry: canonical,
-        };
         let dir = self.writer_path(&commit.lease)?;
         let kind = self.kind;
         let writer = self.writer(&commit.lease)?;

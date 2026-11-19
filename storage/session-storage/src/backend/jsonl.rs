@@ -96,6 +96,12 @@ impl JournalBackend for Jsonl {
     }
 }
 
+struct PageBoundary {
+    after: u64,
+    offset: u64,
+    hash: HashContext,
+}
+
 struct JsonlSnapshot {
     file: Option<BufReader<std::io::Take<File>>>,
     dir: PathBuf,
@@ -104,6 +110,10 @@ struct JsonlSnapshot {
     fingerprint: String,
     current_hash: HashContext,
     consumed: u64,
+    has_external_payloads: bool,
+    // A resident writer can attest semantics before this reader has scanned blobs.
+    fully_read: bool,
+    page_boundary: Option<PageBoundary>,
 }
 impl JsonlSnapshot {
     fn open(dir: &Path, id: SessionId, hint: Option<&PrefixHint>) -> Result<Self> {
@@ -168,7 +178,20 @@ impl JsonlSnapshot {
             fingerprint,
             current_hash: HashContext::new(&SHA256),
             consumed: 0,
+            has_external_payloads: false,
+            fully_read: false,
+            page_boundary: None,
         })
+    }
+    fn position(&mut self, offset: u64, hash: HashContext) -> Result<()> {
+        if let Some(reader) = &mut self.file {
+            reader.get_mut().get_mut().seek(SeekFrom::Start(offset))?;
+            reader.consume(reader.buffer().len());
+            reader.get_mut().set_limit(self.length - offset);
+        }
+        self.consumed = offset;
+        self.current_hash = hash;
+        Ok(())
     }
 }
 impl RecordSnapshot for JsonlSnapshot {
@@ -208,7 +231,7 @@ impl RecordSnapshot for JsonlSnapshot {
         let saved_position = fallback.stream_position()?;
         let verification = (|| {
             while offset < self.length {
-                let count = ((self.length - offset) as usize).min(block.len());
+                let count = (self.length - offset).min(block.len() as u64) as usize;
                 #[cfg(unix)]
                 let read = {
                     use std::os::unix::fs::FileExt;
@@ -241,14 +264,27 @@ impl RecordSnapshot for JsonlSnapshot {
         verification
     }
     fn reset(&mut self) -> Result<()> {
-        if let Some(reader) = self.file.take() {
-            let mut file = reader.into_inner().into_inner();
-            file.seek(SeekFrom::Start(0))?;
-            self.file = Some(BufReader::with_capacity(64 * 1024, file.take(self.length)));
+        self.position(0, HashContext::new(&SHA256))
+    }
+    fn remember_page_boundary(&mut self, after: u64) {
+        self.page_boundary = Some(PageBoundary {
+            after,
+            offset: self.consumed,
+            hash: self.current_hash.clone(),
+        });
+    }
+    fn reset_for_page(&mut self, after: u64) -> Result<()> {
+        if let Some(cut) = &self.page_boundary
+            && cut.after == after
+            && cut.offset >= self.length - cut.offset
+            && !self.has_external_payloads
+        {
+            // An offset is not authority: authenticate all pinned bytes before
+            // skipping older records. Resume hashing at the actual line boundary.
+            self.verify_fixed_prefix()?;
+            return self.position(cut.offset, cut.hash.clone());
         }
-        self.consumed = 0;
-        self.current_hash = HashContext::new(&SHA256);
-        Ok(())
+        self.reset()
     }
     fn next(&mut self) -> Result<Option<JournalRecord>> {
         let Some(reader) = &mut self.file else {
@@ -265,18 +301,12 @@ impl RecordSnapshot for JsonlSnapshot {
                 self.consumed == self.length && reader.get_ref().limit() == 0,
                 "journal shortened during snapshot read"
             );
-            let actual: String = self
-                .current_hash
-                .clone()
-                .finish()
-                .as_ref()
-                .iter()
-                .map(|b| format!("{b:02x}"))
-                .collect();
+            let actual = self.consumed_fingerprint();
             ensure!(
                 actual == self.fingerprint,
                 "journal complete prefix changed during snapshot read"
             );
+            self.fully_read = true;
             return Ok(None);
         }
         ensure!(
@@ -290,7 +320,20 @@ impl RecordSnapshot for JsonlSnapshot {
         self.current_hash.update(&line);
         line.pop();
         ensure!(!line.is_empty(), "journal contains an empty complete line");
-        codec::decode(&self.dir, self.id, &line).map(Some)
+        let (record, external) = codec::decode(&self.dir, self.id, &line)?;
+        self.has_external_payloads |= external;
+        Ok(Some(record))
+    }
+    fn consumed_fingerprint(&self) -> String {
+        crate::io::digest_hex(self.current_hash.clone().finish())
+    }
+    fn confirm_verified_data(&self) -> Result<bool> {
+        if !self.fully_read || self.has_external_payloads {
+            // Even an unchanged journal cannot prove blobs still exist.
+            return Ok(false);
+        }
+        self.verify_fixed_prefix()?;
+        Ok(true)
     }
     fn fingerprint(&self) -> &str {
         &self.fingerprint
@@ -306,15 +349,7 @@ impl RecordSnapshot for JsonlSnapshot {
         let mut found = (sequence == 0).then(|| crate::io::sha256_hex(b""));
         while let Some(record) = self.next()? {
             if record.session_seq == sequence {
-                found = Some(
-                    self.current_hash
-                        .clone()
-                        .finish()
-                        .as_ref()
-                        .iter()
-                        .map(|b| format!("{b:02x}"))
-                        .collect(),
-                );
+                found = Some(self.consumed_fingerprint());
             }
         }
         Ok(found)

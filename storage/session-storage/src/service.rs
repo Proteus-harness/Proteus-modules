@@ -41,6 +41,8 @@ pub enum BackendKind {
 pub struct StorageService {
     kind: BackendKind,
     state: Mutex<State>,
+    // Bound cold catalog work independently of foreground writers.
+    catalog_scan: Mutex<()>,
 }
 struct State {
     kind: BackendKind,
@@ -72,6 +74,7 @@ impl StorageService {
     pub fn new(kind: BackendKind) -> Self {
         Self {
             kind,
+            catalog_scan: Mutex::new(()),
             state: Mutex::new(State {
                 kind,
                 writers: HashMap::new(),
@@ -105,31 +108,36 @@ impl StorageService {
                     false,
                 )?,
             }),
+            List {
+                config_root,
+                workspace_path,
+                audit,
+            } => self.list(&config_root, workspace_path.as_deref(), audit),
             ReadCache {
                 session,
                 key,
                 source,
             } => cache::read_cache(session, key, source),
-            request => self
-                .state
-                .lock()
-                .map_err(|_| anyhow::anyhow!("storage service lock poisoned"))?
-                .execute(request),
+            request => self.lock_state()?.execute(request),
         }
+    }
+
+    fn lock_state(&self) -> Result<std::sync::MutexGuard<'_, State>> {
+        self.state
+            .lock()
+            .map_err(|_| anyhow::anyhow!("storage service lock poisoned"))
+    }
+
+    fn lock_catalog(&self) -> Result<std::sync::MutexGuard<'_, ()>> {
+        self.catalog_scan
+            .lock()
+            .map_err(|_| anyhow::anyhow!("catalog scan lock poisoned"))
     }
 
     /// Validate one session and persist its disposable catalog index.
     pub fn prime_catalog(&self, path: &Path) -> Result<()> {
-        let mut state = self
-            .state
-            .lock()
-            .map_err(|_| anyhow::anyhow!("storage service lock poisoned"))?;
-        let descriptor = state.open(path)?;
-        let dir = descriptor
-            .local_path
-            .clone()
-            .context("session has no local path")?;
-        state.catalog_summary(&dir, descriptor, false)?;
+        let _scan = self.lock_catalog()?;
+        self.catalog_summary(path, false)?;
         Ok(())
     }
 }
@@ -146,11 +154,6 @@ impl State {
             Describe { session } => Ok(SessionStorageResponse::Session {
                 descriptor: self.describe(&session)?,
             }),
-            List {
-                config_root,
-                workspace_path,
-                audit,
-            } => self.list(&config_root, workspace_path.as_deref(), audit),
             AcquireWriter { session } => self.acquire(session),
             ReleaseWriter { lease } => {
                 let writer = self.writer(&lease)?;
@@ -254,8 +257,8 @@ impl State {
                     .context("model context requested outside the latest admitted turn")?;
                 Ok(SessionStorageResponse::ModelContext { observations })
             }
-            Open { .. } | ReadCache { .. } | ListCandidates { .. } => {
-                unreachable!("stateless storage request")
+            Open { .. } | ReadCache { .. } | ListCandidates { .. } | List { .. } => {
+                unreachable!("handled by StorageService")
             }
             WriteCache {
                 session,

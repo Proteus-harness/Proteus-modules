@@ -8,6 +8,8 @@ use proteus_contracts::domain::{ExecutionId, RecordId, SessionId, ThreadId, Turn
 use serde::{Deserialize, Serialize};
 use std::path::{Component, Path, PathBuf};
 
+mod payload;
+
 pub(crate) const JOURNAL_FILE: &str = "journal.jsonl";
 pub(crate) const DEFAULT_BLOB_THRESHOLD: usize = 256 * 1024;
 
@@ -23,6 +25,7 @@ struct StoredRecord {
     thread_id: Option<ThreadId>,
     turn_id: Option<TurnId>,
     kind: JournalKind,
+    #[serde(deserialize_with = "payload::read")]
     payload: StoredPayload,
 }
 
@@ -39,12 +42,13 @@ enum StoredPayload {
     },
 }
 
-pub(crate) fn canonicalize_entry(entry: &JournalEntry) -> Result<JournalEntry> {
+pub(crate) fn canonicalize_entry(entry: JournalEntry) -> Result<JournalEntry> {
     let kind = entry.kind();
     let mut payload = entry.payload_value()?;
+    drop(entry);
     proteus_session_semantics::redact_sensitive_values(&mut payload);
     ensure!(
-        serde_json::to_vec(&payload)?.len() <= MAX_PAYLOAD_BYTES,
+        encoded_bytes(&payload)? <= MAX_PAYLOAD_BYTES,
         "journal payload exceeds maximum"
     );
     JournalEntry::from_kind_and_payload(kind, payload).map_err(Into::into)
@@ -107,7 +111,11 @@ pub(crate) fn encode(
     Ok((line, blobs))
 }
 
-pub(crate) fn decode(session: &Path, session_id: SessionId, line: &[u8]) -> Result<JournalRecord> {
+pub(crate) fn decode(
+    session: &Path,
+    session_id: SessionId,
+    line: &[u8],
+) -> Result<(JournalRecord, bool)> {
     crate::diagnostics::decoded();
     let stored: StoredRecord = serde_json::from_slice(line).context("invalid journal record")?;
     ensure!(
@@ -119,6 +127,7 @@ pub(crate) fn decode(session: &Path, session_id: SessionId, line: &[u8]) -> Resu
         stored.session_id == session_id,
         "journal record belongs to another session"
     );
+    let external = matches!(stored.payload, StoredPayload::Blob { .. });
     let entry = match stored.payload {
         StoredPayload::Inline { value } => {
             ensure!(
@@ -143,17 +152,20 @@ pub(crate) fn decode(session: &Path, session_id: SessionId, line: &[u8]) -> Resu
             JournalEntry::from_stored_kind_and_bytes(stored.kind, &content)?
         }
     };
-    Ok(JournalRecord {
-        schema_version: stored.schema_version,
-        record_id: stored.record_id,
-        session_seq: stored.session_seq,
-        timestamp_ms: stored.timestamp_ms,
-        session_id: stored.session_id,
-        execution_id: stored.execution_id,
-        thread_id: stored.thread_id,
-        turn_id: stored.turn_id,
-        entry,
-    })
+    Ok((
+        JournalRecord {
+            schema_version: stored.schema_version,
+            record_id: stored.record_id,
+            session_seq: stored.session_seq,
+            timestamp_ms: stored.timestamp_ms,
+            session_id: stored.session_id,
+            execution_id: stored.execution_id,
+            thread_id: stored.thread_id,
+            turn_id: stored.turn_id,
+            entry,
+        },
+        external,
+    ))
 }
 
 fn validate_blob(hash: &str, path: &Path) -> Result<()> {
@@ -170,4 +182,23 @@ fn validate_blob(hash: &str, path: &Path) -> Result<()> {
         }
         _ => bail!("journal blob path must be blobs/<sha256>.json"),
     }
+}
+
+pub(crate) fn encoded_bytes(value: &impl serde::Serialize) -> Result<usize> {
+    struct Counter(usize);
+    impl std::io::Write for Counter {
+        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+            self.0 = self
+                .0
+                .checked_add(bytes.len())
+                .ok_or_else(|| std::io::Error::other("encoded record size overflow"))?;
+            Ok(bytes.len())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+    let mut count = Counter(0);
+    serde_json::to_writer(&mut count, value)?;
+    Ok(count.0)
 }

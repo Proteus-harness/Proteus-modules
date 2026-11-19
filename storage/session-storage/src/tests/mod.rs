@@ -7,17 +7,17 @@ use proteus_contracts::{
     },
 };
 
-struct Fixture {
-    service: StorageService,
-    root: tempfile::TempDir,
+pub(crate) struct Fixture {
+    pub(crate) service: StorageService,
+    pub(crate) root: tempfile::TempDir,
     _workspace: tempfile::TempDir,
-    descriptor: StorageSessionDescriptor,
-    lease: StorageWriterLease,
+    pub(crate) descriptor: StorageSessionDescriptor,
+    pub(crate) lease: StorageWriterLease,
     revision: StorageRevision,
     thread: proteus_contracts::domain::ThreadId,
 }
 impl Fixture {
-    fn new(kind: BackendKind) -> Self {
+    pub(crate) fn new(kind: BackendKind) -> Self {
         let root = tempfile::tempdir().unwrap();
         let workspace = tempfile::tempdir().unwrap();
         let service = StorageService::new(kind);
@@ -54,7 +54,7 @@ impl Fixture {
             thread: new_thread_id(),
         }
     }
-    fn append(&mut self, messages: Vec<CanonicalMessage>) -> StorageCommit {
+    pub(crate) fn append(&mut self, messages: Vec<CanonicalMessage>) -> StorageCommit {
         let commit = StorageCommit {
             lease: self.lease.clone(),
             operation_id: new_record_id(),
@@ -113,10 +113,10 @@ impl Fixture {
         conversation
     }
 }
-fn backends() -> [BackendKind; 2] {
+pub(crate) fn backends() -> [BackendKind; 2] {
     [BackendKind::Jsonl, BackendKind::Sqlite]
 }
-fn text(value: &str) -> CanonicalMessage {
+pub(crate) fn text(value: &str) -> CanonicalMessage {
     CanonicalMessage::text(MessageRole::User, value)
 }
 
@@ -131,3 +131,6 @@ mod paging;
 mod display;
 mod model_context;
 mod persisted_hooks;
+
+mod prefix;
+mod seek;

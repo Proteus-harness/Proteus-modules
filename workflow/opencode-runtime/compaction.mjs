@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { Effect, Layer, Stream } from "effect";
 import { AIError, InvalidRequestError, LanguageModel, LLMClient, LLMEvent, LLMRequest } from "@opencode/ai";
-import { Service as Compaction, layer as compactionLayer, estimateContext, estimatePrompt } from "@opencode/core/session/compaction";
+import { Service as Compaction, layer as compactionLayer, estimatePrompt } from "@opencode/core/session/compaction";
 import { Service as Bus } from "@opencode/core/bus";
 import { Service as Database } from "@opencode/core/database/database";
 import { Service as ModelRequest } from "@opencode/core/session/model-request";
@@ -244,7 +244,7 @@ export function createCompactionExport(binding) {
             const input = { ...event.input, messages: event.output.messages,
                 token_estimate: event.output.changed ? event.output.token_estimate : event.input.token_estimate };
             const context = await nativeContext(input, input.messages, config);
-            const original = estimateContext(context);
+            const promptEstimate = estimatePrompt(context);
             const reason = input.reason === "manual" ? "manual" : ["overflow", "context_window_exceeded"].includes(input.reason) ? "overflow" : "auto";
             const { outcome, events } = await runNativeCompaction(context, input.request, config, invocation, reason);
             if (outcome.status === "skipped") return { result: { action: "continue" } };
@@ -261,10 +261,10 @@ export function createCompactionExport(binding) {
             const currentUser = input.messages.findLast(message => message.role === "User");
             return { result: { action: "context_preparation", output: { ...event.output, messages: [checkpoint], changed: true,
                 summary: completed.text, user_message_replacements: currentUser ? [{ source_message_id: currentUser.id, replacement_message_id: checkpoint.id }] : [],
-                original_token_estimate: original, token_estimate: null,
+                original_token_estimate: promptEstimate.measured + promptEstimate.estimated, token_estimate: null,
                 trigger_tokens: reason === "auto" ? events.find(event => event.type === "proteus.compaction.prepared")?.budget ?? null : null,
                 summary_source: "model", skipped_reason: null,
                 metadata: { upstream: "@opencode/core@2.0.22/session/compaction", native_service: true,
-                    prompt_estimate: estimatePrompt(context), provider_compaction: false } } } };
+                    prompt_estimate: promptEstimate, provider_compaction: false } } } };
         } };
 }

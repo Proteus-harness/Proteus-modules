@@ -63,6 +63,9 @@ impl Fold {
 pub(crate) struct SnapshotState {
     pub identity: StorageSnapshot,
     pub source: Box<dyn RecordSnapshot>,
+    // At most one historical boundary, derived inside the same validation
+    // pass as identity. No caller-supplied descriptor or Fold is retained.
+    previous_boundary: Option<(StorageRevision, String)>,
     verified: bool,
     verified_version: Option<crate::backend::SourceVersion>,
     page_after: Option<u64>,
@@ -74,12 +77,14 @@ impl SnapshotState {
         identity: StorageSnapshot,
         source: Box<dyn RecordSnapshot>,
         verified: bool,
+        previous_boundary: Option<(StorageRevision, String)>,
     ) -> Result<Self> {
         let verified_version = source.source_version()?;
         Ok(Self {
             identity,
             source,
             verified,
+            previous_boundary,
             verified_version,
             page_after: None,
             pending: None,
@@ -101,6 +106,21 @@ impl SnapshotState {
             || prefix.revision.session_seq > self.identity.revision.session_seq
         {
             return Ok(false);
+        }
+        if self.verified {
+            let known = if prefix.revision.session_seq == self.identity.revision.session_seq {
+                Some((&self.identity.revision, &self.identity.content_sha256))
+            } else {
+                self.previous_boundary
+                    .as_ref()
+                    .filter(|(revision, _)| revision.session_seq == prefix.revision.session_seq)
+                    .map(|(revision, hash)| (revision, hash))
+            };
+            if let Some((revision, hash)) = known
+                && self.source.confirm_verified_data()?
+            {
+                return Ok(*revision == prefix.revision && *hash == prefix.content_sha256);
+            }
         }
         let Some(hash) = self
             .source
@@ -151,13 +171,14 @@ impl SnapshotState {
         if !self.verified || self.source.source_version()? != self.verified_version {
             self.fold()?;
         }
-        if self.page_after != Some(after) {
-            self.source.reset()?;
-            self.pending = None;
-        }
-        // Failed pages leave no reusable cursor; a retry must restart safely.
-        self.page_after = None;
+        // Failed pages leave no reusable cursor. Cover repositioning as well
+        // as streaming with the same source-version check.
+        let continuing = self.page_after.take() == Some(after);
         let page_version = self.source.source_version()?;
+        if !continuing {
+            self.pending = None;
+            self.source.reset_for_page(after)?;
+        }
         let mut records = Vec::new();
         let mut bytes = 0_usize;
         while records.len() < limit as usize {
@@ -171,7 +192,7 @@ impl SnapshotState {
             if record.session_seq <= after {
                 continue;
             }
-            let record_bytes = encoded_bytes(&record)?;
+            let record_bytes = crate::codec::encoded_bytes(&record)?;
             ensure!(
                 record_bytes <= SESSION_STORAGE_MAX_RECORD_BYTES,
                 "canonical record exceeds maximum"
@@ -302,23 +323,4 @@ pub(crate) fn preview(messages: &[CanonicalMessage]) -> Option<String> {
     } else {
         format!("{}...", selected.chars().take(160).collect::<String>())
     })
-}
-
-fn encoded_bytes(value: &impl serde::Serialize) -> Result<usize> {
-    struct Counter(usize);
-    impl std::io::Write for Counter {
-        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
-            self.0 = self
-                .0
-                .checked_add(bytes.len())
-                .ok_or_else(|| std::io::Error::other("encoded record size overflow"))?;
-            Ok(bytes.len())
-        }
-        fn flush(&mut self) -> std::io::Result<()> {
-            Ok(())
-        }
-    }
-    let mut count = Counter(0);
-    serde_json::to_writer(&mut count, value)?;
-    Ok(count.0)
 }

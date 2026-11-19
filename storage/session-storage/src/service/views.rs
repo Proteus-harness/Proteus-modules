@@ -72,6 +72,7 @@ impl State {
         if cached.is_none() {
             cached = self.load_catalog_head(&dir, &descriptor, &stamps);
         }
+        let mut previous_boundary = None;
         let (mut source, revision) = if let Some(cached) = cached {
             let source =
                 self.kind
@@ -86,9 +87,20 @@ impl State {
             let blobs = catalog::durable::blob_stamps(&dir);
             let mut source = self.kind.backend().snapshot(&dir, session.session_id)?;
             let version = source.source_version()?;
+            let cut = self
+                .prefixes
+                .get(&session)
+                .map(|cache| cache.revision.session_seq);
             let mut state = Fold::default();
+            if cut == Some(0) {
+                previous_boundary = Some((state.revision(), source.consumed_fingerprint()));
+            }
             while let Some(record) = source.next()? {
                 state.apply(session.session_id, &record)?;
+                if cut == Some(record.session_seq) {
+                    source.remember_page_boundary(record.session_seq);
+                    previous_boundary = Some((state.revision(), source.consumed_fingerprint()));
+                }
             }
             if source.source_version()? != version {
                 source.verify_fixed_prefix()?;
@@ -126,7 +138,7 @@ impl State {
             content_sha256: source.fingerprint().to_owned(),
         };
         source.reset()?;
-        SnapshotState::new(identity, source, verified)
+        SnapshotState::new(identity, source, verified, previous_boundary)
     }
     pub(super) fn snapshot(&mut self, session: SessionLocator) -> Result<StorageSnapshot> {
         let prepared = self.prepare_snapshot(session)?;

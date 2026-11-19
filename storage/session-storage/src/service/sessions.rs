@@ -80,6 +80,25 @@ pub(super) fn candidates(
     workspace: Option<&Path>,
     audit: bool,
 ) -> Result<Vec<StorageSessionDescriptor>> {
+    let mut result = Vec::new();
+    for path in candidate_paths(root, workspace, audit)? {
+        match open(kind, &path) {
+            Ok(descriptor) => result.push(descriptor),
+            Err(error) if audit => return Err(error),
+            Err(_) => continue,
+        }
+    }
+    result.sort_by(catalog_order);
+    Ok(result)
+}
+
+fn catalog_order(a: &StorageSessionDescriptor, b: &StorageSessionDescriptor) -> std::cmp::Ordering {
+    b.updated_at_ms
+        .cmp(&a.updated_at_ms)
+        .then_with(|| b.session.key.cmp(&a.session.key))
+}
+
+fn candidate_paths(root: &Path, workspace: Option<&Path>, audit: bool) -> Result<Vec<PathBuf>> {
     let sessions = root.join("sessions");
     let workspace_dirs = if let Some(workspace) = workspace {
         vec![sessions.join(workspace_dir::encode_workspace_path(workspace)?)]
@@ -110,20 +129,33 @@ pub(super) fn candidates(
             if !path.is_dir() {
                 continue;
             }
-            let descriptor = match open(kind, &path) {
-                Ok(d) => d,
-                Err(error) if audit => return Err(error),
-                Err(_) => continue,
-            };
-            result.push(descriptor);
+            result.push(path);
         }
     }
-    result.sort_by(|a, b| {
-        b.updated_at_ms
-            .cmp(&a.updated_at_ms)
-            .then_with(|| b.session.key.cmp(&a.session.key))
-    });
     Ok(result)
+}
+
+impl StorageService {
+    pub(super) fn list(
+        &self,
+        root: &Path,
+        workspace: Option<&Path>,
+        audit: bool,
+    ) -> Result<SessionStorageResponse> {
+        let _scan = self.lock_catalog()?;
+        let mut result = Vec::new();
+        for path in candidate_paths(root, workspace, audit)? {
+            match self.catalog_summary(&path, audit) {
+                Ok(summary) => result.push(summary),
+                Err(error) if audit => return Err(error),
+                Err(_) => continue,
+            }
+        }
+        // A commit can reorder sessions while the list is being built. Sort the
+        // descriptors we actually return, not timestamps from discovery.
+        result.sort_by(|a, b| catalog_order(&a.descriptor, &b.descriptor));
+        Ok(SessionStorageResponse::Sessions { sessions: result })
+    }
 }
 
 impl State {
@@ -197,27 +229,6 @@ impl State {
         );
         Ok(descriptor)
     }
-    pub(super) fn list(
-        &mut self,
-        root: &Path,
-        workspace: Option<&Path>,
-        audit: bool,
-    ) -> Result<SessionStorageResponse> {
-        let mut result = Vec::new();
-        for descriptor in candidates(self.kind, root, workspace, audit)? {
-            let path = descriptor
-                .local_path
-                .clone()
-                .context("session has no local path")?;
-            match self.catalog_summary(&path, descriptor, audit) {
-                Ok(summary) => result.push(summary),
-                Err(error) if audit => return Err(error),
-                Err(_) => continue,
-            }
-        }
-        Ok(SessionStorageResponse::Sessions { sessions: result })
-    }
-
     pub(super) fn acquire(&mut self, session: SessionLocator) -> Result<SessionStorageResponse> {
         if let Some(writer) = self.writers.get_mut(&session) {
             let mut lease = writer.lease.clone();

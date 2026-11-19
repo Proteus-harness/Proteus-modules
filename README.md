@@ -14,6 +14,7 @@ alpha-выпусками не обещана; потребитель закре�
 | `policy/` | Разрешения и подтверждения |
 | `hook/` | Обработка истории, отбор инструментов |
 | `tool/` | Файлы, shell, git, patch, plan, skills, Rust LSP, CodeMode |
+| `storage/` | [Хранение истории сессий: JSONL и SQLite](storage/session-storage/README.md) |
 | `context_provider/` | Поиск и память; некоторые также экспортируют tool |
 | `components/` | Исполняемые сборки с несколькими exports |
 | `research/` | Эксперименты вне основного Cargo workspace |

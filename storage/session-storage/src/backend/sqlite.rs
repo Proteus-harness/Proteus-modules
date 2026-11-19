@@ -40,6 +40,14 @@ fn validate_identity(conn: &Connection, id: SessionId) -> Result<()> {
     Ok(())
 }
 
+// Both fingerprint scans select just the payload. Hash it while its row is live.
+fn fingerprint_payload<'r>(row: &'r rusqlite::Row<'_>) -> rusqlite::Result<&'r [u8]> {
+    let value = row.get_ref(0)?;
+    value
+        .as_blob()
+        .map_err(|_| rusqlite::Error::InvalidColumnType(0, "payload".into(), value.data_type()))
+}
+
 fn snapshot_source(
     dir: &Path,
     id: SessionId,
@@ -65,9 +73,9 @@ fn snapshot_source(
                 conn.prepare("SELECT payload FROM journal WHERE sequence<=?1 ORDER BY sequence")?;
             let mut rows = stmt.query([i64::try_from(end)?])?;
             while let Some(row) = rows.next()? {
-                let bytes: Vec<u8> = row.get(0)?;
+                let bytes = fingerprint_payload(row)?;
                 crate::diagnostics::fingerprint(bytes.len());
-                hash.update(&bytes);
+                hash.update(bytes);
             }
             end
         }
@@ -190,9 +198,15 @@ impl RecordSnapshot for SqliteSnapshot {
         let Some(conn) = &self.conn else {
             return Ok(None);
         };
-        let row: Option<(i64, Vec<u8>)> = conn.query_row(
+        let mut stmt = conn.prepare_cached(
             "SELECT sequence,payload FROM journal WHERE sequence>?1 AND sequence<=?2 ORDER BY sequence LIMIT 1",
-            params![i64::try_from(self.after)?, i64::try_from(self.end)?], |r| Ok((r.get(0)?,r.get(1)?))).optional()?;
+        )?;
+        let row: Option<(i64, Vec<u8>)> = stmt
+            .query_row(
+                params![i64::try_from(self.after)?, i64::try_from(self.end)?],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .optional()?;
         let Some((sequence, bytes)) = row else {
             let actual: String = self
                 .current_hash
@@ -222,6 +236,13 @@ impl RecordSnapshot for SqliteSnapshot {
         self.after = sequence;
         Ok(Some(record))
     }
+    fn consumed_fingerprint(&self) -> String {
+        crate::io::digest_hex(self.current_hash.clone().finish())
+    }
+    fn confirm_verified_data(&self) -> Result<bool> {
+        // The open read transaction pins both the payloads and their order.
+        Ok(true)
+    }
     fn fingerprint(&self) -> &str {
         &self.fingerprint
     }
@@ -242,8 +263,7 @@ impl RecordSnapshot for SqliteSnapshot {
             let mut rows = stmt.query([i64::try_from(sequence)?])?;
             let mut count = 0;
             while let Some(row) = rows.next()? {
-                let bytes: Vec<u8> = row.get(0)?;
-                hash.update(&bytes);
+                hash.update(fingerprint_payload(row)?);
                 count += 1;
             }
             ensure!(
@@ -258,5 +278,24 @@ impl RecordSnapshot for SqliteSnapshot {
                 .map(|b| format!("{b:02x}"))
                 .collect(),
         ))
+    }
+}
+
+#[cfg(test)]
+#[test]
+fn fingerprint_payload_matches_owned_blob_reads_and_errors() {
+    let conn = Connection::open_in_memory().unwrap();
+    let mut stmt = conn
+        .prepare(
+            "SELECT x'00ff' AS payload UNION ALL SELECT x'' UNION ALL SELECT 'text' \
+             UNION ALL SELECT 1 UNION ALL SELECT 1.5 UNION ALL SELECT NULL",
+        )
+        .unwrap();
+    let mut rows = stmt.query([]).unwrap();
+    while let Some(row) = rows.next().unwrap() {
+        assert_eq!(
+            fingerprint_payload(row).map(<[u8]>::to_vec),
+            row.get::<_, Vec<u8>>(0)
+        );
     }
 }

@@ -497,12 +497,11 @@ fn durable_catalog_rejects_rewritten_blob_even_with_unchanged_size_and_mtime() {
         audit: false,
     };
     f.service.execute(list.clone()).unwrap();
-    let blob = std::fs::read_dir(f.descriptor.local_path.as_ref().unwrap().join("blobs"))
-        .unwrap()
-        .next()
-        .unwrap()
-        .unwrap()
-        .path();
+    let dir = f.descriptor.local_path.as_ref().unwrap();
+    let stored: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(dir.join("journal.jsonl")).unwrap()).unwrap();
+    assert_eq!(stored["payload"]["storage"], "blob");
+    let blob = dir.join(stored["payload"]["relative_path"].as_str().unwrap());
     let old_modified = std::fs::metadata(&blob).unwrap().modified().unwrap();
     let mut bytes = std::fs::read(&blob).unwrap();
     bytes[0] = b'!';

@@ -2,6 +2,8 @@
 use super::*;
 use std::{fs::Metadata, time::UNIX_EPOCH};
 pub(super) mod durable;
+#[cfg(test)]
+mod tests;
 
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub(super) struct FileStamp {
@@ -148,60 +150,27 @@ impl State {
         self.remember_summary(prefix.stamps.clone(), summary);
     }
 
-    pub(super) fn catalog_summary(
+    fn cached_summary(
         &mut self,
         dir: &Path,
-        descriptor: StorageSessionDescriptor,
-        audit: bool,
-    ) -> Result<StorageSessionSummary> {
-        let stamps = source_stamp(dir, self.kind)?;
-        if !audit {
-            if let Some(cached) = self.catalog.get(&descriptor.session)
-                && cached.stamps == stamps
-                && self
-                    .prefixes
-                    .get(&descriptor.session)
-                    .is_some_and(|prefix| prefix.valid_at(dir, &stamps))
-            {
-                return Ok(cached.summary.clone());
-            }
-            if let Some((summary, prefix)) = durable::load(dir, &descriptor, &stamps) {
-                self.remember_prefix(descriptor.session.clone(), prefix);
-                self.remember_summary(stamps, summary.clone());
-                return Ok(summary);
-            }
+        descriptor: &StorageSessionDescriptor,
+        stamps: &SourceStamp,
+    ) -> Option<StorageSessionSummary> {
+        if let Some(cached) = self.catalog.get(&descriptor.session)
+            && &cached.stamps == stamps
+            && self
+                .prefixes
+                .get(&descriptor.session)
+                .is_some_and(|prefix| prefix.valid_at(dir, stamps))
+        {
+            let mut summary = cached.summary.clone();
+            summary.descriptor = descriptor.clone();
+            return Some(summary);
         }
-        let blobs = durable::blob_stamps(dir);
-        let mut source = self
-            .kind
-            .backend()
-            .snapshot(dir, descriptor.session.session_id)?;
-        let mut fold = Fold::default();
-        while let Some(record) = source.next()? {
-            fold.apply(descriptor.session.session_id, &record)?;
-        }
-        let prefix = super::views::PrefixCache {
-            stamps: stamps.clone(),
-            revision: fold.revision(),
-            hint: crate::backend::PrefixHint {
-                extent: source.extent(),
-                fingerprint: source.fingerprint().to_owned(),
-            },
-            blob_digest: blobs.as_ref().map(durable::blob_stamp_digest),
-        };
-        self.remember_prefix(descriptor.session.clone(), prefix.clone());
-        let summary = StorageSessionSummary {
-            descriptor: descriptor.clone(),
-            message_count: fold.validation.history().len(),
-            preview: crate::snapshot::preview(fold.validation.history()),
-        };
-        if !audit {
-            if let Some(blobs) = blobs {
-                durable::save(dir, &summary, &prefix, blobs);
-            }
-            self.remember_summary(stamps, summary.clone());
-        }
-        Ok(summary)
+        let (summary, prefix) = durable::load(dir, descriptor, stamps)?;
+        self.remember_prefix(descriptor.session.clone(), prefix);
+        self.remember_summary(stamps.clone(), summary.clone());
+        Some(summary)
     }
 
     fn remember_summary(&mut self, stamps: SourceStamp, summary: StorageSessionSummary) {
@@ -217,5 +186,124 @@ impl State {
         self.catalog_order.push_back(session.clone());
         self.catalog
             .insert(session, CachedSummary { stamps, summary });
+    }
+}
+
+// The readonly replay owns no service handles and publishes no state or files.
+struct CatalogRead {
+    descriptor: StorageSessionDescriptor,
+    stamps: SourceStamp,
+    blobs: Option<durable::BlobStamps>,
+}
+
+type Projection = (StorageSessionSummary, super::views::PrefixCache);
+
+impl CatalogRead {
+    fn replay(&self, kind: BackendKind, dir: &Path) -> Result<Projection> {
+        let session = self.descriptor.session.session_id;
+        let mut source = kind.backend().snapshot(dir, session)?;
+        let mut fold = Fold::default();
+        while let Some(record) = source.next()? {
+            fold.apply(session, &record)?;
+        }
+        let prefix = super::views::PrefixCache {
+            stamps: self.stamps.clone(),
+            revision: fold.revision(),
+            hint: crate::backend::PrefixHint {
+                extent: source.extent(),
+                fingerprint: source.fingerprint().to_owned(),
+            },
+            blob_digest: self.blobs.as_ref().map(durable::blob_stamp_digest),
+        };
+        Ok((
+            StorageSessionSummary {
+                descriptor: self.descriptor.clone(),
+                message_count: fold.validation.history().len(),
+                preview: crate::snapshot::preview(fold.validation.history()),
+            },
+            prefix,
+        ))
+    }
+
+    fn publish(
+        self,
+        state: &mut State,
+        dir: &Path,
+        result: Projection,
+        audit: bool,
+    ) -> StorageSessionSummary {
+        let (summary, prefix) = result;
+        state.remember_prefix(summary.descriptor.session.clone(), prefix.clone());
+        if !audit {
+            if let Some(blobs) = self.blobs {
+                durable::save(dir, &summary, &prefix, blobs);
+            }
+            state.remember_summary(self.stamps, summary.clone());
+        }
+        summary
+    }
+}
+
+impl StorageService {
+    pub(super) fn catalog_summary(
+        &self,
+        path: &Path,
+        audit: bool,
+    ) -> Result<StorageSessionSummary> {
+        let mut state = self.lock_state()?;
+        let descriptor = state.open(path)?;
+        // prime_catalog also accepts a journal path. Work only in the resolved directory.
+        let dir = descriptor
+            .local_path
+            .clone()
+            .context("session has no local path")?;
+        let stamps = source_stamp(&dir, self.kind)?;
+        if !audit && let Some(hit) = state.cached_summary(&dir, &descriptor, &stamps) {
+            return Ok(hit);
+        }
+        let read = CatalogRead {
+            descriptor,
+            stamps,
+            blobs: durable::blob_stamps(&dir),
+        };
+        if read.blobs.is_none() {
+            // Without a bounded inventory we cannot fence a detached replay.
+            let projection = read.replay(self.kind, &dir)?;
+            return Ok(read.publish(&mut state, &dir, projection, audit));
+        }
+        drop(state);
+        let projection = read.replay(self.kind, &dir);
+        self.finish_catalog(&dir, read, projection, audit)
+    }
+
+    fn finish_catalog(
+        &self,
+        dir: &Path,
+        read: CatalogRead,
+        projection: Result<Projection>,
+        audit: bool,
+    ) -> Result<StorageSessionSummary> {
+        let mut state = self.lock_state()?;
+        let descriptor = state.open(dir)?;
+        ensure!(
+            descriptor.session == read.descriptor.session,
+            "catalog session incarnation changed"
+        );
+        let stamps = source_stamp(dir, self.kind)?;
+        let blobs = durable::blob_stamps(dir);
+        if stamps != read.stamps || blobs != read.blobs {
+            // The same session changed during replay. Re-read this candidate
+            // once under the ordinary writer fence, never the entire catalog.
+            let current = CatalogRead {
+                descriptor,
+                stamps,
+                blobs,
+            };
+            let result = current.replay(self.kind, dir)?;
+            return Ok(current.publish(&mut state, dir, result, audit));
+        }
+        let (mut summary, prefix) = projection?;
+        summary.descriptor = descriptor;
+        Ok(read.publish(&mut state, dir, (summary, prefix), audit))
     }
 }

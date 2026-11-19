@@ -256,3 +256,21 @@ test("unsupported non-image tool content is explicit rather than silently discar
         await assert.rejects(nativeContext(input.event.input, input.event.output.messages), /only text and inline images/);
     }
 });
+
+test("completed compaction reports the same measured/estimated components used for its original total", async () => {
+    // No whole-request anchor: native estimation includes the transcript after historical usage.
+    const input = fixture(null);
+    input.event.input.reason = "manual";
+    input.event.output.messages[1].metadata = { opencode_tokens: {
+        input: 250, output: 17, reasoning: 3, cache: { read: 4, write: 2 },
+    } };
+    const context = await nativeContext(input.event.input, input.event.output.messages);
+    const expected = estimatePrompt(context);
+    assert.equal(expected.measured, 276);
+    assert.ok(expected.estimated > 0);
+    const host = fakeHost();
+    const { result: { output } } = await createCompactionExport(binding({})).invoke("hook.invoke", input, host.invocation);
+    assert.equal(host.requests.length, 1);
+    assert.deepEqual(output.metadata.prompt_estimate, expected);
+    assert.equal(output.original_token_estimate, estimateContext(context));
+});

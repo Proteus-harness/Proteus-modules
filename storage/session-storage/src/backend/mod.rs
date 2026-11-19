@@ -39,6 +39,19 @@ pub(crate) trait RecordSnapshot: Send {
         Ok(())
     }
     fn reset(&mut self) -> Result<()>;
+    /// One boundary recorded during a full validation of this immutable source.
+    fn remember_page_boundary(&mut self, _after: u64) {}
+    fn reset_for_page(&mut self, _after: u64) -> Result<()> {
+        self.reset()
+    }
+    /// Digest from the same validation stream used for the semantic fold.
+    fn consumed_fingerprint(&self) -> String {
+        crate::io::digest_hex(self.read_hash().finish())
+    }
+    /// Reconfirm all canonical data before reusing semantic validation.
+    fn confirm_verified_data(&self) -> Result<bool> {
+        Ok(false)
+    }
     fn next(&mut self) -> Result<Option<JournalRecord>>;
     fn fingerprint(&self) -> &str;
     /// Digest of bytes consumed by `next`. A complete validated replay seeds the writer head.

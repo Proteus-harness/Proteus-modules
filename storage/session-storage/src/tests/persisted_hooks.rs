@@ -45,7 +45,9 @@ fn jsonl_persists_compact_hooks_inline_or_in_blobs_and_reads_old_inline_trace() 
     for threshold in [0, usize::MAX] {
         let (line, _) = crate::codec::encode(dir.path(), &record, threshold).unwrap();
         assert_eq!(
-            crate::codec::decode(dir.path(), record.session_id, &line).unwrap(),
+            crate::codec::decode(dir.path(), record.session_id, &line)
+                .unwrap()
+                .0,
             record
         );
         if threshold == usize::MAX {
@@ -61,7 +63,8 @@ fn jsonl_persists_compact_hooks_inline_or_in_blobs_and_reads_old_inline_trace() 
                     record.session_id,
                     &serde_json::to_vec(&old).unwrap()
                 )
-                .unwrap(),
+                .unwrap()
+                .0,
                 record
             );
         }

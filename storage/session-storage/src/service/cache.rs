@@ -105,6 +105,8 @@ impl State {
     }
 }
 
+const CACHE_QUOTA_BYTES: u64 = 128 * 1024 * 1024;
+
 /// Quota applies across all content-addressed generations and page keys.
 fn evict(dir: &Path, keep: &Path) -> Result<()> {
     let mut files = Vec::new();
@@ -112,8 +114,8 @@ fn evict(dir: &Path, keep: &Path) -> Result<()> {
     for entry in std::fs::read_dir(dir)? {
         let entry = entry?;
         let name = entry.file_name();
-        let name = name.to_string_lossy();
-        if !name.starts_with(".storage-cache-") || !name.ends_with(".json") {
+        let label = name.to_string_lossy();
+        if !label.starts_with(".storage-cache-") || !label.ends_with(".json") {
             continue;
         }
         let meta = entry.metadata()?;
@@ -121,16 +123,19 @@ fn evict(dir: &Path, keep: &Path) -> Result<()> {
             continue;
         }
         total = total.saturating_add(meta.len());
-        if entry.path() != keep {
-            files.push((meta.modified()?, entry.path(), meta.len()));
+        if Some(name.as_os_str()) != keep.file_name() {
+            files.push((meta.modified()?, name, meta.len()));
         }
     }
+    if total <= CACHE_QUOTA_BYTES {
+        return Ok(());
+    }
     files.sort_by_key(|(modified, _, _)| *modified);
-    for (_, path, bytes) in files {
-        if total <= 128 * 1024 * 1024 {
+    for (_, name, bytes) in files {
+        if total <= CACHE_QUOTA_BYTES {
             break;
         }
-        match std::fs::remove_file(path) {
+        match std::fs::remove_file(dir.join(name)) {
             Ok(()) => total = total.saturating_sub(bytes),
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
             Err(e) => return Err(e.into()),

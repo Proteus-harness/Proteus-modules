@@ -13,7 +13,13 @@ impl State {
         let blobs = catalog::durable::blob_stamps(&dir);
         let mut source = self.kind.backend().snapshot(&dir, session.session_id)?;
         let version = source.source_version()?;
+        let cut = self
+            .prefixes
+            .get(&session)
+            .map(|cache| cache.revision.session_seq);
         let mut state = Fold::default();
+        let mut previous_boundary =
+            (cut == Some(0)).then(|| (state.revision(), source.consumed_fingerprint()));
         let staged: u64 = self
             .snapshots
             .values()
@@ -23,6 +29,10 @@ impl State {
         let mut display = DisplayWriter::new(MAX_STAGING_BYTES.saturating_sub(staged));
         while let Some(record) = source.next()? {
             state.apply(session.session_id, &record)?;
+            if cut == Some(record.session_seq) {
+                source.remember_page_boundary(record.session_seq);
+                previous_boundary = Some((state.revision(), source.consumed_fingerprint()));
+            }
             if record.entry.kind().is_display_record()
                 && let Some(writer) = &mut display
                 && writer.push(&record).is_err()
@@ -67,7 +77,7 @@ impl State {
         if !state_fits(&state) {
             return Ok(SessionStorageResponse::DisplaySnapshot { projection: None });
         }
-        let mut snapshot = SnapshotState::new(identity.clone(), source, true)?;
+        let mut snapshot = SnapshotState::new(identity.clone(), source, true, previous_boundary)?;
         snapshot.display = Some(display);
         self.remember_snapshot(snapshot);
         Ok(SessionStorageResponse::DisplaySnapshot {
