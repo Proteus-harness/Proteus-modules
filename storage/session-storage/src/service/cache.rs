@@ -68,11 +68,8 @@ impl State {
             Ok(dir) if dir.is_dir() => dir,
             _ => return Ok(SessionStorageResponse::CacheWritten { etag: None }),
         };
-        let current = self.snapshot(session.clone())?;
-        let matches = same_prefix(&current, &source);
-        self.snapshots.remove(&current.snapshot_id);
-        self.snapshot_order.retain(|id| id != &current.snapshot_id);
-        if !matches {
+        let current = self.prepare_snapshot(session.clone())?.identity;
+        if !same_prefix(&current, &source) {
             return Ok(SessionStorageResponse::CacheWritten { etag: None });
         }
         let cache = Cache { source, value };

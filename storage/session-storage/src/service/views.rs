@@ -33,7 +33,7 @@ impl State {
         self.prefix_order.push_back(session.clone());
         self.prefixes.insert(session, cache);
     }
-    pub(super) fn snapshot(&mut self, session: SessionLocator) -> Result<StorageSnapshot> {
+    pub(super) fn prepare_snapshot(&mut self, session: SessionLocator) -> Result<SnapshotState> {
         let dir = self.checked_path(&session)?;
         let stamps = catalog::source_stamp(&dir, self.kind)?;
         let mut cached = self
@@ -126,6 +126,11 @@ impl State {
             content_sha256: source.fingerprint().to_owned(),
         };
         source.reset()?;
+        SnapshotState::new(identity, source, verified)
+    }
+    pub(super) fn snapshot(&mut self, session: SessionLocator) -> Result<StorageSnapshot> {
+        let prepared = self.prepare_snapshot(session)?;
+        let identity = prepared.identity.clone();
         while self.snapshots.len() >= MAX_SNAPSHOTS {
             if let Some(id) = self.snapshot_order.pop_front() {
                 self.snapshots.remove(&id);
@@ -134,10 +139,8 @@ impl State {
             }
         }
         self.snapshot_order.push_back(identity.snapshot_id.clone());
-        self.snapshots.insert(
-            identity.snapshot_id.clone(),
-            SnapshotState::new(identity.clone(), source, verified)?,
-        );
+        self.snapshots
+            .insert(identity.snapshot_id.clone(), prepared);
         Ok(identity)
     }
     pub(super) fn read_model_context_before_turn(

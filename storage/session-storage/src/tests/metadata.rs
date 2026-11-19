@@ -135,6 +135,67 @@ fn cache_is_disposable_source_bound_and_does_not_acquire_writer() {
 }
 
 #[test]
+fn cache_writes_leave_public_snapshot_handles_alone() {
+    for kind in backends() {
+        for stale in [false, true] {
+            let mut f = Fixture::new(kind);
+            let mut other = Fixture::new(kind);
+            other.append(vec![text("other session")]);
+            let SessionStorageResponse::Snapshot {
+                snapshot: other_snapshot,
+            } = f
+                .service
+                .execute(SessionStorageRequest::OpenSnapshot {
+                    session: other.descriptor.session.clone(),
+                })
+                .unwrap()
+            else {
+                panic!("expected the other session's snapshot");
+            };
+            let mut held = vec![other_snapshot];
+            f.append(vec![text("before")]);
+            held.push(f.snapshot());
+            f.append(vec![text("after")]);
+            held.extend((2..32).map(|_| f.snapshot()));
+
+            let source = if stale { &held[1] } else { &held[31] };
+            let SessionStorageResponse::CacheWritten { etag } = f
+                .service
+                .execute(SessionStorageRequest::WriteCache {
+                    session: f.descriptor.session.clone(),
+                    key: "view.head".into(),
+                    source: source.clone(),
+                    value: serde_json::json!("cached"),
+                })
+                .unwrap()
+            else {
+                panic!("expected a cache write result");
+            };
+            assert_eq!(etag.is_some(), !stale);
+            for (i, snapshot) in held.iter().enumerate() {
+                let state = f.conversation(snapshot.clone(), StorageHistoryPoint::Current);
+                assert_eq!(state.messages.len(), if i < 2 { 1 } else { 2 });
+            }
+
+            let extra = f.snapshot();
+            let release = |snapshot| {
+                f.service
+                    .execute(SessionStorageRequest::ReleaseSnapshot { snapshot })
+            };
+            let error = release(held.remove(0)).unwrap_err();
+            assert!(
+                error
+                    .to_string()
+                    .contains("snapshot handle expired or unknown")
+            );
+            for snapshot in held.into_iter().chain([extra]) {
+                release(snapshot).unwrap();
+            }
+        }
+    }
+}
+
+#[test]
 fn metadata_imports_old_filename_once_and_deletion_does_not_resurrect_it() {
     for kind in backends() {
         let f = Fixture::new(kind);

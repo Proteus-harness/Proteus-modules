@@ -181,7 +181,12 @@ impl SnapshotState {
     }
     pub fn conversation_at(&mut self, point: StorageHistoryPoint) -> Result<StorageConversation> {
         if point == StorageHistoryPoint::Current {
-            return Ok(self.fold()?.conversation());
+            let state = self.fold()?;
+            return Ok(StorageConversation {
+                revision: state.revision(),
+                model_context: state.model_context.snapshot(),
+                messages: state.validation.into_history(),
+            });
         }
         self.reset_page_cursor();
         self.source.reset()?;
