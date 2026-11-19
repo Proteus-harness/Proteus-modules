@@ -73,6 +73,59 @@ pub(super) fn open(kind: BackendKind, path: &Path) -> Result<StorageSessionDescr
     })
 }
 
+/// Enumerate identities and metadata without reading canonical records.
+pub(super) fn candidates(
+    kind: BackendKind,
+    root: &Path,
+    workspace: Option<&Path>,
+    audit: bool,
+) -> Result<Vec<StorageSessionDescriptor>> {
+    let sessions = root.join("sessions");
+    let workspace_dirs = if let Some(workspace) = workspace {
+        vec![sessions.join(workspace_dir::encode_workspace_path(workspace)?)]
+    } else {
+        match std::fs::read_dir(&sessions) {
+            Ok(entries) => entries
+                .filter_map(|entry| entry.ok())
+                .filter(|e| e.path().is_dir())
+                .map(|e| e.path())
+                .collect(),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Vec::new(),
+            Err(error) => return Err(error.into()),
+        }
+    };
+    let mut result = Vec::new();
+    for dir in workspace_dirs {
+        let entries = match std::fs::read_dir(&dir) {
+            Ok(entries) => entries,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(error) => return Err(error.into()),
+        };
+        for entry in entries {
+            let path = match entry {
+                Ok(entry) => entry.path(),
+                Err(error) if audit => return Err(error.into()),
+                Err(_) => continue,
+            };
+            if !path.is_dir() {
+                continue;
+            }
+            let descriptor = match open(kind, &path) {
+                Ok(d) => d,
+                Err(error) if audit => return Err(error),
+                Err(_) => continue,
+            };
+            result.push(descriptor);
+        }
+    }
+    result.sort_by(|a, b| {
+        b.updated_at_ms
+            .cmp(&a.updated_at_ms)
+            .then_with(|| b.session.key.cmp(&a.session.key))
+    });
+    Ok(result)
+}
+
 impl State {
     pub(super) fn create(
         &mut self,
@@ -150,56 +203,21 @@ impl State {
         workspace: Option<&Path>,
         audit: bool,
     ) -> Result<SessionStorageResponse> {
-        let sessions = root.join("sessions");
-        let workspace_dirs = if let Some(workspace) = workspace {
-            vec![sessions.join(workspace_dir::encode_workspace_path(workspace)?)]
-        } else {
-            match std::fs::read_dir(&sessions) {
-                Ok(entries) => entries
-                    .filter_map(|entry| entry.ok())
-                    .filter(|e| e.path().is_dir())
-                    .map(|e| e.path())
-                    .collect(),
-                Err(error) if error.kind() == std::io::ErrorKind::NotFound => Vec::new(),
-                Err(error) => return Err(error.into()),
-            }
-        };
         let mut result = Vec::new();
-        for dir in workspace_dirs {
-            let entries = match std::fs::read_dir(&dir) {
-                Ok(entries) => entries,
-                Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
-                Err(error) => return Err(error.into()),
-            };
-            for entry in entries {
-                let path = match entry {
-                    Ok(entry) => entry.path(),
-                    Err(error) if audit => return Err(error.into()),
-                    Err(_) => continue,
-                };
-                if !path.is_dir() {
-                    continue;
-                }
-                let descriptor = match self.open(&path) {
-                    Ok(d) => d,
-                    Err(error) if audit => return Err(error),
-                    Err(_) => continue,
-                };
-                match self.catalog_summary(&path, descriptor, audit) {
-                    Ok(summary) => result.push(summary),
-                    Err(error) if audit => return Err(error),
-                    Err(_) => continue,
-                }
+        for descriptor in candidates(self.kind, root, workspace, audit)? {
+            let path = descriptor
+                .local_path
+                .clone()
+                .context("session has no local path")?;
+            match self.catalog_summary(&path, descriptor, audit) {
+                Ok(summary) => result.push(summary),
+                Err(error) if audit => return Err(error),
+                Err(_) => continue,
             }
         }
-        result.sort_by(|a, b| {
-            b.descriptor
-                .updated_at_ms
-                .cmp(&a.descriptor.updated_at_ms)
-                .then_with(|| b.descriptor.session.key.cmp(&a.descriptor.session.key))
-        });
         Ok(SessionStorageResponse::Sessions { sessions: result })
     }
+
     pub(super) fn acquire(&mut self, session: SessionLocator) -> Result<SessionStorageResponse> {
         if let Some(writer) = self.writers.get_mut(&session) {
             let mut lease = writer.lease.clone();

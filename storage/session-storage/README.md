@@ -1,6 +1,6 @@
 # Session Storage
 
-Внешнее хранилище сессий через callback-free `session_storage/v1`.
+Внешнее хранилище сессий через callback-free `session_storage/v2`.
 `proteus-core` не является зависимостью реализации. Общие DTO принадлежат
 `proteus-contracts`, проверка канонических фактов — `proteus-session-semantics`.
 

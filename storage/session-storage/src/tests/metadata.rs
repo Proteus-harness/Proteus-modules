@@ -633,3 +633,51 @@ fn normal_catalog_skips_corrupt_entries_but_audit_reports_them() {
         }
     }
 }
+
+#[test]
+fn candidate_discovery_never_decodes_history_and_strict_list_still_validates() {
+    for kind in backends() {
+        let mut f = Fixture::new(kind);
+        f.append(vec![text("one message")]);
+        let path = f.descriptor.local_path.clone().unwrap();
+        // Force catalog recovery. Display discovery must remain bounded even
+        // when this disposable index is missing.
+        let _ = std::fs::remove_file(path.join(".storage-catalog-v1.json"));
+        let service = StorageService::new(kind);
+        crate::diagnostics::reset();
+        let request = SessionStorageRequest::ListCandidates {
+            config_root: f.root.path().into(),
+            workspace_path: Some(f.descriptor.workspace_path.clone()),
+        };
+        let response = service.execute(request.clone()).unwrap();
+        request.validate_response(&response).unwrap();
+        let SessionStorageResponse::Candidates { sessions } = response else {
+            panic!("expected candidates");
+        };
+        assert_eq!(sessions.len(), 1);
+        assert_eq!(sessions[0].session, f.descriptor.session);
+        assert_eq!(crate::diagnostics::get().decoded, 0);
+        let wrong_workspace = tempfile::tempdir().unwrap();
+        let response = service
+            .execute(SessionStorageRequest::ListCandidates {
+                config_root: f.root.path().into(),
+                workspace_path: Some(wrong_workspace.path().into()),
+            })
+            .unwrap();
+        assert!(
+            matches!(response, SessionStorageResponse::Candidates { sessions } if sessions.is_empty())
+        );
+        let SessionStorageResponse::Sessions { sessions } = service
+            .execute(SessionStorageRequest::List {
+                config_root: f.root.path().into(),
+                workspace_path: Some(f.descriptor.workspace_path.clone()),
+                audit: true,
+            })
+            .unwrap()
+        else {
+            panic!("expected verified catalog");
+        };
+        assert_eq!(sessions[0].message_count, 1);
+        assert!(crate::diagnostics::get().decoded > 0);
+    }
+}

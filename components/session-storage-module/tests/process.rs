@@ -37,7 +37,7 @@ impl Client {
         };
         let init = json!({"jsonrpc":"2.0","id":"h:1:0","method":"initialize","params":{
             "protocol_version":"v3","component_id":"storage-test","exports":[{"slot":"session_storage","module_id":module,
-            "contract_version":"v1","composition":"select_one","module_config":{},"host_features":[]}]}});
+            "contract_version":"v2","composition":"select_one","module_config":{},"host_features":[]}]}});
         this.send_frame(&init);
         let response = this.receive();
         assert!(response.get("result").is_some(), "{response}");

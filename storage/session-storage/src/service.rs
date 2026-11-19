@@ -93,6 +93,17 @@ impl StorageService {
             Open { path } => Ok(SessionStorageResponse::Session {
                 descriptor: sessions::open(self.kind, &path)?,
             }),
+            ListCandidates {
+                config_root,
+                workspace_path,
+            } => Ok(SessionStorageResponse::Candidates {
+                sessions: sessions::candidates(
+                    self.kind,
+                    &config_root,
+                    workspace_path.as_deref(),
+                    false,
+                )?,
+            }),
             ReadCache {
                 session,
                 key,
@@ -232,7 +243,9 @@ impl State {
                     .context("model context requested outside the latest admitted turn")?;
                 Ok(SessionStorageResponse::ModelContext { observations })
             }
-            Open { .. } | ReadCache { .. } => unreachable!("stateless storage request"),
+            Open { .. } | ReadCache { .. } | ListCandidates { .. } => {
+                unreachable!("stateless storage request")
+            }
             WriteCache {
                 session,
                 key,
@@ -401,12 +414,13 @@ mod tests {
             .unwrap();
         assert!(matches!(response, Response::CacheWritten { etag: Some(_) }));
 
-        let (open, read) = std::thread::scope(|scope| {
+        let (open, read, candidates) = std::thread::scope(|scope| {
             let (tx, rx) = mpsc::channel();
             // A strict fold holds this lock until its complete snapshot is verified.
             let state = service.state.lock().unwrap();
             let path = descriptor.local_path.unwrap();
             let service = &service;
+            let root = root.path().to_owned();
             scope.spawn(move || {
                 let open = service.execute(Open { path });
                 let read = service.execute(ReadCache {
@@ -414,13 +428,20 @@ mod tests {
                     key,
                     source: Some(snapshot),
                 });
-                let _ = tx.send((open, read));
+                let candidates = service.execute(ListCandidates {
+                    config_root: root,
+                    workspace_path: None,
+                });
+                let _ = tx.send((open, read, candidates));
             });
             let result = rx.recv_timeout(Duration::from_secs(2));
             drop(state);
             result.expect("pinned display reads waited for the journal lock")
         });
         assert!(matches!(open.unwrap(), Response::Session { .. }));
+        assert!(
+            matches!(candidates.unwrap(), Response::Candidates { sessions } if sessions.len() == 1)
+        );
         assert!(matches!(
             read.unwrap(),
             Response::Metadata { document: Some(document) } if document.value == value
