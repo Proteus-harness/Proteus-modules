@@ -1163,8 +1163,13 @@ fn workflow_input(workspace: &Path) -> Value {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn targeted_cancel_keeps_concurrent_sibling_and_generation_alive() {
     let workspace = tempfile::tempdir().expect("workspace");
-    let workflow = ProcessExportBinding::new("workflow", "coding.single_loop", "v21", json!({}))
-        .expect("workflow binding");
+    let workflow = ProcessExportBinding::new(
+        "workflow",
+        "coding.single_loop",
+        proteus_contracts::contracts::PROCESS_WORKFLOW_CONTRACT_VERSION,
+        json!({}),
+    )
+    .expect("workflow binding");
     let workflow_target = workflow.export_ref();
     let policy =
         ProcessExportBinding::new("policy", "allow_all", "v2", json!({})).expect("policy binding");

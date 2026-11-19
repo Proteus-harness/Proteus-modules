@@ -46,12 +46,12 @@ test('compaction binding uses its explicit Go catalog without a model request', 
 });
 
 test('workflow binding resolves Go before invoking host callbacks', async () => {
-    const flow = createExport(binding('workflow','pi_loop','v21',{catalog_provider:'opencode-go'}));
+    const flow = createExport(binding('workflow','pi_loop','v22',{catalog_provider:'opencode-go'}));
     const answer = await flow.invoke('run', {task:{},history:[],runtime:{model_ref:{model:'deepseek-v4.1-flash'}}}, {
         hostCall:() => {throw Error('reached-host');}, signal:new AbortController().signal,
     });
     assert.equal(answer.status,'error');
     assert.equal(answer.failure.message,'reached-host');
-    assert.throws(() => createExport(binding('workflow','pi_loop','v21',{catalog_provider:'bad'})), /Invalid/);
+    assert.throws(() => createExport(binding('workflow','pi_loop','v22',{catalog_provider:'bad'})), /Invalid/);
     assert.throws(() => createExport(binding('context','pi_context','v3',{catalog_provider:'opencode-go'})), /Invalid/);
 });
