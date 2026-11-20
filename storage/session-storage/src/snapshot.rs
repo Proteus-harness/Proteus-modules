@@ -142,13 +142,20 @@ impl SnapshotState {
         Ok(state.revision() == prefix.revision)
     }
     pub fn fold(&mut self) -> Result<Fold> {
+        Ok(self.fold_with_terminal(false)?.0)
+    }
+    fn fold_with_terminal(&mut self, capture: bool) -> Result<(Fold, Option<JournalRecord>)> {
         self.reset_page_cursor();
         self.verified = false;
         let version = self.source.source_version()?;
         self.source.reset()?;
         let mut state = Fold::default();
+        let mut terminal = None;
         while let Some(record) = self.source.next()? {
             state.apply(self.identity.session.session_id, &record)?;
+            if capture && record.session_seq == self.identity.revision.session_seq {
+                terminal = Some(record);
+            }
         }
         ensure!(
             state.revision() == self.identity.revision,
@@ -159,7 +166,7 @@ impl SnapshotState {
         }
         self.verified = true;
         self.verified_version = self.source.source_version()?;
-        Ok(state)
+        Ok((state, terminal))
     }
     pub fn page(&mut self, after: u64, limit: u32) -> Result<StorageRecordPage> {
         ensure!(
@@ -168,14 +175,29 @@ impl SnapshotState {
         );
         // A warm snapshot is only a cheap provisional descriptor. Validate its
         // complete fixed prefix once before exposing any canonical records.
-        if !self.verified || self.source.source_version()? != self.verified_version {
-            self.fold()?;
+        let before = self.source.source_version()?;
+        let mut terminal = None;
+        if !self.verified || before != self.verified_version {
+            let capture = limit > 0
+                && before.is_some()
+                && self.identity.revision.session_seq.checked_sub(1) == Some(after);
+            terminal = self.fold_with_terminal(capture)?.1;
         }
         // Failed pages leave no reusable cursor. Cover repositioning as well
         // as streaming with the same source-version check.
         let continuing = self.page_after.take() == Some(after);
         let page_version = self.source.source_version()?;
-        if !continuing {
+        // For an exact terminal page, the complete fold already decoded the
+        // one result and left the reader at EOF. Only hand it to the existing
+        // page checks after independently authenticating the pinned bytes.
+        // Blob-bearing JSONL, changed or unknown sources keep the normal scan.
+        if terminal.is_some() && before == page_version && self.source.confirm_verified_data()? {
+            self.pending = terminal;
+        } else if !continuing {
+            if terminal.is_some() && before != page_version {
+                self.source.verify_fixed_prefix()?;
+            }
+            drop(terminal);
             self.pending = None;
             self.source.reset_for_page(after)?;
         }
