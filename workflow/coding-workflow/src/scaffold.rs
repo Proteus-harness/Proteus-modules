@@ -13,6 +13,8 @@ use proteus_contracts::{
 };
 use serde_json::Value;
 
+#[cfg(test)]
+mod history_tests;
 mod preparation;
 mod results;
 use preparation::PendingPreparation;
@@ -308,28 +310,30 @@ impl TurnScaffold {
     }
 
     fn history_update_parts(&self) -> Result<WorkflowHistoryUpdate, ProcessModuleError> {
-        let mut history_prefix = self.persistent_messages.clone();
         let (history_replacement, new_messages) = match self.history_replacement_len {
             Some(replacement_len) => {
-                if replacement_len > history_prefix.len() {
+                if replacement_len > self.persistent_messages.len() {
                     return Err(ProcessModuleError::new(
                         "workflow history replacement boundary is beyond persistent history",
                     ));
                 }
+                let mut history_prefix = self.persistent_messages.clone();
                 let new_messages = history_prefix.split_off(replacement_len);
                 (Some(history_prefix), new_messages)
             }
             None => {
                 let current_user_position =
-                    current_user_index(&history_prefix, self.current_user_message_id).ok_or_else(
-                        || {
+                    current_user_index(&self.persistent_messages, self.current_user_message_id)
+                        .ok_or_else(|| {
                             ProcessModuleError::new(
                                 "workflow persistent history dropped the current user message",
                             )
-                        },
-                    )?;
-                let new_messages = history_prefix.split_off(current_user_position + 1);
-                (None, new_messages)
+                        })?;
+                // The host already owns the prefix on an ordinary checkpoint.
+                (
+                    None,
+                    self.persistent_messages[current_user_position + 1..].to_vec(),
+                )
             }
         };
         let mut history =

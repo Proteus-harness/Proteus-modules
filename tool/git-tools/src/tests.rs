@@ -122,6 +122,19 @@ fn git_diff_supports_path_filter() {
 }
 
 #[test]
+fn captured_git_output_keeps_lossy_decoding_and_channel_separator() {
+    for (stdout, stderr, expected) in [
+        (&b""[..], &b""[..], ""),
+        (&b"out\n"[..], &b"err\n"[..], "out\n\nerr\n"),
+        (&b""[..], &b"err\xff\n"[..], "err�\n"),
+        (&b"out\xf0\x9f"[..], &b""[..], "out�"),
+        (&b"out\xff"[..], &b"err\xff"[..], "out�\nerr�"),
+    ] {
+        assert_eq!(render_git_output(stdout.to_vec(), stderr), expected);
+    }
+}
+
+#[test]
 fn pathspec_rejects_parent_escape() {
     let error = validate_relative_pathspec("../outside.txt").expect_err("reject parent");
     assert!(error.contains("parent traversal"), "{error}");

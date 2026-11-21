@@ -34,7 +34,7 @@ impl OpenAiStreamState {
     }
 
     pub(super) fn translate(&mut self, data: &str) -> Vec<ModelStreamEvent> {
-        let Ok(parsed) = serde_json::from_str::<Value>(data) else {
+        let Ok(mut parsed) = serde_json::from_str::<Value>(data) else {
             return Vec::new();
         };
         // Responses dispatches on the JSON envelope. The SSE event-name field
@@ -48,12 +48,16 @@ impl OpenAiStreamState {
             .unwrap_or(0) as usize;
         match event_type {
             "response.output_item.added" | "response.output_item.done" => {
-                let Some(item) = parsed.get("item") else {
+                let done = event_type == "response.output_item.done";
+                let Some(item) = parsed.get_mut("item") else {
                     return Vec::new();
                 };
-                if event_type == "response.output_item.done" {
-                    self.completed_items.push(item.clone());
-                }
+                // Retain the original item for terminal fallback, even when its type is unknown.
+                let item: &Value = if done {
+                    self.completed_items.push_mut(item.take())
+                } else {
+                    item
+                };
                 if !matches!(
                     item.get("type").and_then(Value::as_str),
                     Some(
@@ -85,7 +89,7 @@ impl OpenAiStreamState {
                         }];
                     }
                 }
-                if event_type == "response.output_item.done" {
+                if done {
                     match parse_output_item(item) {
                         Ok(Some(mut message)) => {
                             message.id = self.ids[&item_key(item, index)];
@@ -167,7 +171,6 @@ impl OpenAiStreamState {
                                 }];
                             }
                         };
-                    let mut parsed = parsed;
                     let Some(response) = parsed
                         .get_mut("response")
                         .filter(|response| response.is_object())
@@ -205,7 +208,6 @@ impl OpenAiStreamState {
             }
             _ => {
                 let event_type = event_type.to_owned();
-                let mut parsed = parsed;
                 if let Some(call_id) = parsed
                     .get("item_id")
                     .and_then(Value::as_str)

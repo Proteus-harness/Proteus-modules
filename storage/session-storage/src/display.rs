@@ -7,6 +7,8 @@ use std::{
 };
 
 pub(crate) const MAX_STAGING_BYTES: u64 = 512 * 1024 * 1024;
+// Keep at most one small scratch buffer per request, not per open snapshot.
+const MAX_REUSABLE_LINE_CAPACITY: usize = 8 * 1024;
 
 pub(crate) struct DisplayWriter {
     writer: BufWriter<File>,
@@ -14,10 +16,34 @@ pub(crate) struct DisplayWriter {
     remaining: u64,
 }
 
+const LARGE_JSONL_STAGE_MIN_SOURCE_BYTES: u64 = 1024 * 1024;
+const LARGE_JSONL_STAGE_BUFFER_BYTES: usize = 64 * 1024;
+
 impl DisplayWriter {
     pub fn new(budget: u64) -> Option<Self> {
+        Self::open(budget, None)
+    }
+
+    pub fn for_jsonl(budget: u64, source_bytes: u64) -> Option<Self> {
+        // Do not reserve a bigger transient buffer for short sources, or when
+        // the remaining staging budget offers too little space to batch.
+        if source_bytes >= LARGE_JSONL_STAGE_MIN_SOURCE_BYTES
+            && budget >= LARGE_JSONL_STAGE_BUFFER_BYTES as u64
+        {
+            Self::open(budget, Some(LARGE_JSONL_STAGE_BUFFER_BYTES))
+        } else {
+            Self::new(budget)
+        }
+    }
+
+    fn open(budget: u64, capacity: Option<usize>) -> Option<Self> {
+        let file = tempfile::tempfile().ok()?;
+        let writer = match capacity {
+            Some(bytes) => BufWriter::with_capacity(bytes, file),
+            None => BufWriter::new(file),
+        };
         Some(Self {
-            writer: BufWriter::new(tempfile::tempfile().ok()?),
+            writer,
             budget,
             remaining: budget,
         })
@@ -59,6 +85,115 @@ impl Write for DisplayWriter {
     }
 }
 
+#[cfg(test)]
+#[test]
+fn display_writer_batches_large_jsonl_and_keeps_small_default() {
+    let small = DisplayWriter::new(MAX_STAGING_BYTES)
+        .unwrap()
+        .writer
+        .capacity();
+    assert_eq!(
+        DisplayWriter::for_jsonl(MAX_STAGING_BYTES, LARGE_JSONL_STAGE_MIN_SOURCE_BYTES - 1)
+            .unwrap()
+            .writer
+            .capacity(),
+        small
+    );
+    assert_eq!(
+        DisplayWriter::for_jsonl(
+            LARGE_JSONL_STAGE_BUFFER_BYTES as u64 - 1,
+            LARGE_JSONL_STAGE_MIN_SOURCE_BYTES
+        )
+        .unwrap()
+        .writer
+        .capacity(),
+        small
+    );
+    assert_eq!(
+        DisplayWriter::for_jsonl(MAX_STAGING_BYTES, LARGE_JSONL_STAGE_MIN_SOURCE_BYTES)
+            .unwrap()
+            .writer
+            .capacity(),
+        LARGE_JSONL_STAGE_BUFFER_BYTES
+    );
+}
+
+#[cfg(test)]
+#[test]
+fn display_writer_keeps_stage_bytes_budget_and_failed_flush_fallback() {
+    use proteus_contracts::{
+        domain::*,
+        model_standard::{CanonicalMessage, MessageRole},
+    };
+    let record = JournalRecord {
+        schema_version: JOURNAL_SCHEMA_VERSION,
+        session_id: new_session_id(),
+        record_id: new_record_id(),
+        session_seq: 1,
+        timestamp_ms: 1,
+        execution_id: None,
+        thread_id: Some(new_thread_id()),
+        turn_id: None,
+        entry: JournalEntry::HistoryMutated(HistoryMutated {
+            previous_revision: 0,
+            new_revision: 1,
+            mutation: HistoryMutationKind::Append,
+            messages: vec![CanonicalMessage::text(
+                MessageRole::User,
+                "x".repeat(24 * 1024),
+            )],
+            compaction: None,
+            tool_results: vec![],
+        }),
+    };
+    let mut expected_line = serde_json::to_vec(&record).unwrap();
+    expected_line.push(b'\n');
+    for mut writer in [
+        DisplayWriter::new(MAX_STAGING_BYTES).unwrap(),
+        DisplayWriter::for_jsonl(MAX_STAGING_BYTES, LARGE_JSONL_STAGE_MIN_SOURCE_BYTES).unwrap(),
+    ] {
+        writer.push(&record).unwrap();
+        let mut stage = writer.finish().unwrap();
+        stage.reader.rewind().unwrap();
+        let mut bytes = Vec::new();
+        stage.reader.read_until(b'\n', &mut bytes).unwrap();
+        assert!(
+            bytes == expected_line,
+            "stage bytes or final rewind changed"
+        );
+        assert_eq!(stage.bytes, expected_line.len() as u64);
+        assert!(stage.reader.fill_buf().unwrap().is_empty());
+    }
+    let budget = LARGE_JSONL_STAGE_BUFFER_BYTES as u64;
+    for mut writer in [
+        DisplayWriter::new(budget).unwrap(),
+        DisplayWriter::for_jsonl(budget, LARGE_JSONL_STAGE_MIN_SOURCE_BYTES).unwrap(),
+    ] {
+        for _ in 0..budget / expected_line.len() as u64 {
+            writer.push(&record).unwrap();
+        }
+        assert!(writer.push(&record).is_err());
+    }
+
+    // Controlled local I/O failure on an ordinary file opened read-only.
+    // An earlier error from push or a later error from finish are both a
+    // private staging failure, never a published display snapshot.
+    let file = tempfile::NamedTempFile::new().unwrap();
+    let cap = DisplayWriter::new(MAX_STAGING_BYTES)
+        .unwrap()
+        .writer
+        .capacity();
+    for capacity in [cap, LARGE_JSONL_STAGE_BUFFER_BYTES] {
+        let mut failing = DisplayWriter {
+            writer: BufWriter::with_capacity(capacity, File::open(file.path()).unwrap()),
+            budget: MAX_STAGING_BYTES,
+            remaining: MAX_STAGING_BYTES,
+        };
+        let projection = failing.push(&record).ok().and_then(|()| failing.finish());
+        assert!(projection.is_none());
+    }
+}
+
 pub(crate) struct DisplayRecords {
     reader: BufReader<File>,
     pub(crate) bytes: u64,
@@ -67,14 +202,19 @@ pub(crate) struct DisplayRecords {
 }
 
 impl DisplayRecords {
-    fn next(&mut self) -> Result<Option<(JournalRecord, usize)>> {
-        let mut line = Vec::new();
-        if self.reader.read_until(b'\n', &mut line)? == 0 {
+    fn next(&mut self, line: &mut Vec<u8>) -> Result<Option<(JournalRecord, usize)>> {
+        line.clear();
+        if self.reader.read_until(b'\n', line)? == 0 {
             return Ok(None);
         }
         ensure!(line.ends_with(b"\n"), "incomplete display staging record");
         let bytes = line.len() - 1;
-        Ok(Some((serde_json::from_slice(&line)?, bytes)))
+        let record = serde_json::from_slice(line)?;
+        if line.capacity() > MAX_REUSABLE_LINE_CAPACITY {
+            // Large rows still release their temporary bytes before page assembly.
+            *line = Vec::new();
+        }
+        Ok(Some((record, bytes)))
     }
 
     pub fn page(
@@ -93,12 +233,13 @@ impl DisplayRecords {
         }
         self.after = None;
         let mut records = Vec::new();
+        let mut line = Vec::new();
         let mut bytes = 0;
         let mut finished = false;
         while records.len() < limit as usize {
             let next = match self.pending.take() {
                 Some(record) => Some(record),
-                None => self.next()?,
+                None => self.next(&mut line)?,
             };
             let Some((record, record_bytes)) = next else {
                 finished = true;
@@ -139,4 +280,62 @@ pub(crate) fn state_fits(state: &StorageResumeState) -> bool {
         }
     }
     serde_json::to_writer(Limit(SESSION_STORAGE_MAX_DISPLAY_STATE_BYTES), state).is_ok()
+}
+
+#[cfg(test)]
+#[test]
+fn display_line_scratch_reuses_small_capacity_but_releases_a_large_row() {
+    use proteus_contracts::{
+        domain::*,
+        model_standard::{CanonicalMessage, MessageRole},
+    };
+
+    let id = new_session_id();
+    let mut writer = DisplayWriter::new(MAX_STAGING_BYTES).unwrap();
+    for (index, size) in [100, 200, 64 * 1024, 300].into_iter().enumerate() {
+        writer
+            .push(&JournalRecord {
+                schema_version: JOURNAL_SCHEMA_VERSION,
+                record_id: new_record_id(),
+                session_id: id,
+                session_seq: index as u64 + 1,
+                timestamp_ms: 23,
+                execution_id: None,
+                thread_id: Some(new_thread_id()),
+                turn_id: None,
+                entry: JournalEntry::HistoryMutated(HistoryMutated {
+                    previous_revision: index as u64,
+                    new_revision: index as u64 + 1,
+                    mutation: HistoryMutationKind::Append,
+                    messages: vec![CanonicalMessage::text(MessageRole::User, "x".repeat(size))],
+                    compaction: None,
+                    tool_results: vec![],
+                }),
+            })
+            .unwrap();
+    }
+    let mut reader = writer.finish().unwrap();
+    reader.reader.rewind().unwrap();
+    let mut scratch = Vec::new();
+    let mut small_capacity = None;
+    for expected in 1..=4 {
+        let (record, bytes) = reader.next(&mut scratch).unwrap().unwrap();
+        assert_eq!(record.session_seq, expected);
+        assert_eq!(bytes, serde_json::to_vec(&record).unwrap().len());
+        if expected == 3 {
+            assert_eq!(scratch.capacity(), 0, "do not retain a large scratch");
+        } else {
+            assert_eq!(scratch.len(), bytes + 1);
+            assert!(scratch.capacity() <= MAX_REUSABLE_LINE_CAPACITY);
+            if expected == 1 {
+                // Ensure the second test row already fits the same allocation.
+                scratch.reserve(1024);
+                small_capacity = Some((scratch.as_ptr(), scratch.capacity()));
+            }
+            if expected == 2 {
+                assert_eq!(Some((scratch.as_ptr(), scratch.capacity())), small_capacity);
+            }
+        }
+    }
+    assert!(reader.next(&mut scratch).unwrap().is_none());
 }

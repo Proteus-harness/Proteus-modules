@@ -19,14 +19,9 @@ pub(super) fn contents(
     // Descending order keeps the original indices valid, including equal-index
     // insertion chunks. Do not apply chunks eagerly to the changing file.
     for (start, old_len, new_lines) in replacements.into_iter().rev() {
-        for _ in 0..old_len {
-            if start < lines.len() {
-                lines.remove(start);
-            }
-        }
-        for (offset, line) in new_lines.into_iter().enumerate() {
-            lines.insert(start + offset, line);
-        }
+        // An overlapping EOF chunk applied above may have shortened this range.
+        let end = (start + old_len).min(lines.len());
+        lines.splice(start..end, new_lines);
     }
     if !lines.last().is_some_and(String::is_empty) {
         lines.push(String::new());

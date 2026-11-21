@@ -481,3 +481,83 @@ fn metadata_only_empty_sessions_allow_either_format_without_confusing_legacy_vie
         .execute(SessionStorageRequest::ReleaseWriter { lease })
         .unwrap();
 }
+
+fn check_failed_additional_writer_acquire(kind: BackendKind) {
+    use SessionStorageRequest as Request;
+    let mut f = Fixture::new(kind);
+    let message = text("keep committed history");
+    f.append(vec![message.clone()]);
+    let acquire = Request::AcquireWriter {
+        session: f.descriptor.session.clone(),
+    };
+    // The first issued token is not necessarily still live.
+    let SessionStorageResponse::Writer { lease: holder, .. } =
+        f.service.execute(acquire.clone()).unwrap()
+    else {
+        panic!("expected second writer");
+    };
+    f.service
+        .execute(Request::ReleaseWriter { lease: f.lease })
+        .unwrap();
+    f.service
+        .execute(Request::HibernateWriter {
+            lease: holder.clone(),
+        })
+        .unwrap();
+
+    // A mixed-format directory is rejected during recovery, after locator validation.
+    let marker = f.descriptor.local_path.as_ref().unwrap().join(match kind {
+        BackendKind::Jsonl => "journal.sqlite",
+        BackendKind::Sqlite => "journal.jsonl",
+    });
+    std::fs::File::create_new(&marker).unwrap();
+    for _ in 0..2 {
+        assert!(f.service.execute(acquire.clone()).is_err());
+    }
+    std::fs::remove_file(marker).unwrap();
+    let SessionStorageResponse::Writer {
+        lease: retry,
+        revision,
+    } = f.service.execute(acquire.clone()).unwrap()
+    else {
+        panic!("expected successful retry");
+    };
+    assert_eq!(revision, f.revision);
+    assert_ne!(holder.token, retry.token);
+    f.service
+        .execute(Request::ReleaseWriter { lease: retry })
+        .unwrap();
+    let other = StorageService::new(kind);
+    assert!(
+        other.execute(acquire.clone()).is_err(),
+        "live holder must keep the lease"
+    );
+    f.service
+        .execute(Request::ReleaseWriter { lease: holder })
+        .unwrap();
+
+    let SessionStorageResponse::Writer { lease, revision } = other
+        .execute(acquire)
+        .expect("failed acquisitions must not keep the OS lease after the last genuine release")
+    else {
+        panic!("expected a new owner");
+    };
+    let SessionStorageResponse::Resumed { state } =
+        other.execute(Request::Resume { lease }).unwrap()
+    else {
+        panic!("expected resume state");
+    };
+    assert_eq!(revision, f.revision);
+    assert_eq!(state.conversation.revision, revision);
+    assert_eq!(state.conversation.messages, [message]);
+}
+
+#[test]
+fn failed_additional_writer_acquire_jsonl() {
+    check_failed_additional_writer_acquire(BackendKind::Jsonl);
+}
+
+#[test]
+fn failed_additional_writer_acquire_sqlite() {
+    check_failed_additional_writer_acquire(BackendKind::Sqlite);
+}

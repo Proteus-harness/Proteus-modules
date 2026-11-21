@@ -91,3 +91,48 @@ fn empty_final_output_truncates_tool_summary_at_unicode_scalar_boundary() {
         }
     }
 }
+
+#[test]
+fn empty_final_output_counts_separator_and_omits_blank_fields() {
+    let empty = CanonicalMessage::new(MessageRole::Assistant, vec![]);
+    let prefix =
+        "Model returned an empty final response after the last tool call.\n\nLast tool result:\n";
+    for (output, error, expected) in [
+        ("\t".into(), Some("  例  "), Some("例".into())),
+        (" 例 ".into(), Some("\u{2003}"), Some("例".into())),
+        ("  ".into(), None, None),
+        (
+            "é".repeat(1_998),
+            Some("🦀"),
+            Some(format!("{}\n🦀", "é".repeat(1_998))),
+        ),
+        (
+            "é".repeat(1_999),
+            Some("🦀"),
+            Some(format!("{}\n\n[truncated]", "é".repeat(1_999))),
+        ),
+        (
+            "é".repeat(2_000),
+            Some("🦀"),
+            Some(format!("{}\n[truncated]", "é".repeat(2_000))),
+        ),
+    ] {
+        let result = ToolResult::new(
+            proteus_contracts::domain::new_call_id(),
+            false,
+            output,
+            vec![],
+            error.map(str::to_owned),
+            json!({}),
+        );
+        let history = [CanonicalMessage::new(
+            MessageRole::Tool,
+            vec![ContentPart::ToolResult { result }],
+        )];
+        let expected = expected.map_or_else(
+            || "<empty model response>".into(),
+            |summary| format!("{prefix}{summary}"),
+        );
+        assert_eq!(output_text(&empty, &history), expected);
+    }
+}

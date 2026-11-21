@@ -1,7 +1,10 @@
 //! `edit_file` tool: точечная замена текста в существующем файле
 //! (opencode edit shape: old_string → new_string, опционально replace_all).
 
-use std::{io::Write, path::Path};
+use std::{
+    io::{self, BufWriter, Write},
+    path::Path,
+};
 
 use proteus_contracts::process_module::{ProcessModuleError, ToolModule, ToolModuleHostMut};
 use serde_json::json;
@@ -138,42 +141,61 @@ impl ToolModule for EditFileTool {
             }
         };
 
-        let match_count = content.matches(old_string).count();
-        if match_count == 0 {
+        let mut matches = content.match_indices(old_string);
+        let Some(first) = matches.next() else {
             return err_result(
                 &call.id,
                 &call.name,
                 "old_string not found in file content; make sure it matches exactly, including whitespace".to_owned(),
             );
-        }
-        if match_count > 1 && !replace_all {
+        };
+        let replacements = 1 + matches.clone().count();
+        if !replace_all && replacements > 1 {
             return err_result(
                 &call.id,
                 &call.name,
                 format!(
-                    "old_string matches {match_count} locations; provide more surrounding context to make it unique or set replace_all"
+                    "old_string matches {replacements} locations; provide more surrounding context to make it unique or set replace_all"
                 ),
             );
         }
 
-        let (updated, replacements) = if replace_all {
-            (content.replace(old_string, new_string), match_count)
-        } else {
-            (content.replacen(old_string, new_string, 1), 1)
+        let untouched_bytes = content.len() - replacements * old_string.len();
+        let Some(bytes_written) = replacements
+            .checked_mul(new_string.len())
+            .and_then(|bytes| bytes.checked_add(untouched_bytes))
+            .filter(|&bytes| bytes <= isize::MAX as usize)
+        else {
+            return err_result(
+                &call.id,
+                &call.name,
+                "replacement output is too large".to_owned(),
+            );
         };
 
         let mut target = match workspace_file_for_atomic_write(cwd_path, &target_path) {
             Ok(file) => file,
             Err(error) => return err_result(&call.id, &call.name, error),
         };
-        if let Err(e) = target.write_all(updated.as_bytes()) {
+        let written = if replacements > 1 && new_string.len() <= old_string.len() {
+            // Для плотных нерастущих замен результат не больше входа; один
+            // write_all оставляет быстрый стандартный replace на этом пути.
+            target.write_all(content.replace(old_string, new_string).as_bytes())
+        } else {
+            write_replacements(
+                &mut target,
+                &content,
+                std::iter::once(first).chain(matches.take(replacements - 1)),
+                new_string,
+            )
+        };
+        if let Err(e) = written {
             return err_result(
                 &call.id,
                 &call.name,
                 format!("failed to write {}: {e}", target_path.display()),
             );
         }
-
         if let Err(error) = target.commit() {
             return err_result(&call.id, &call.name, error);
         }
@@ -181,7 +203,7 @@ impl ToolModule for EditFileTool {
         let metadata = json!({
             "path": target_path.display().to_string(),
             "replacements": replacements,
-            "bytes_written": updated.len(),
+            "bytes_written": bytes_written,
         });
         ok_result(
             &call.id,
@@ -193,4 +215,25 @@ impl ToolModule for EditFileTool {
             metadata,
         )
     }
+}
+
+/// Расширенный результат не хранится целиком. Ошибка отложенной записи
+/// должна вернуться до публикации временного файла.
+fn write_replacements<'a>(
+    target: impl Write,
+    content: &str,
+    matches: impl Iterator<Item = (usize, &'a str)>,
+    replacement: &str,
+) -> io::Result<()> {
+    let mut out = BufWriter::new(target);
+    let mut cursor = 0;
+    for (offset, matched) in matches {
+        let prefix = &content.as_bytes()[cursor..offset];
+        out.write_all(prefix)?;
+        out.write_all(replacement.as_bytes())?;
+        cursor = offset + matched.len();
+    }
+    let tail = &content.as_bytes()[cursor..];
+    out.write_all(tail)?;
+    out.flush()
 }

@@ -12,6 +12,14 @@ pub(super) struct DsmlStreamFilter {
 
 impl DsmlStreamFilter {
     pub(super) fn filter(&mut self, text: &str) -> String {
+        // All markers (including a prefix held for the next delta) start with '<'.
+        if self.pending.is_empty() && !text.contains('<') {
+            return if self.in_tool_block {
+                String::new()
+            } else {
+                text.to_owned()
+            };
+        }
         let mut input = String::new();
         input.push_str(&self.pending);
         input.push_str(text);

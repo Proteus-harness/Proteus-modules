@@ -15,7 +15,7 @@ pub(super) fn memory_chunks(
     for chunk in &mut chunks {
         chunk.source = format!("repo_aware:{}", chunk.source);
         chunk.score = Some(0.7);
-        chunk.metadata = metadata("memory", "memory recall", chunk.metadata.clone());
+        chunk.metadata = metadata("memory", "memory recall", chunk.metadata.take());
     }
     Ok(chunks)
 }
@@ -63,7 +63,7 @@ pub(super) fn search_chunks(
             chunk.metadata = metadata(
                 "search",
                 "search result",
-                metadata_with(chunk.metadata.clone(), "query", json!(query)),
+                metadata_with(chunk.metadata.take(), "query", json!(query)),
             );
             chunks.push(chunk);
             if chunks.len() >= config.max_search_results {

@@ -1,4 +1,7 @@
-use std::collections::{BTreeSet, HashMap};
+use std::{
+    borrow::Cow,
+    collections::{BTreeSet, HashMap},
+};
 
 use anyhow::{Result, anyhow};
 use serde_json::{Value, json};
@@ -192,13 +195,20 @@ fn openai_client_metadata(
     request: &CanonicalModelRequest,
     profile: &OpenAiModelProfile,
 ) -> Result<Option<Value>> {
-    let mut metadata = profile.client_metadata.clone();
-    metadata.extend(request.client_metadata.clone());
-    if metadata.is_empty() {
-        Ok(None)
-    } else {
-        Ok(Some(serde_json::to_value(metadata)?))
-    }
+    let configured = &profile.client_metadata;
+    let request = &request.client_metadata;
+    let value = match (configured.is_empty(), request.is_empty()) {
+        (true, true) => return Ok(None),
+        (true, false) => serde_json::to_value(request)?,
+        (false, true) => serde_json::to_value(configured)?,
+        (false, false) => {
+            let mut merged = std::collections::BTreeMap::<&String, &String>::new();
+            merged.extend(configured);
+            merged.extend(request);
+            serde_json::to_value(merged)?
+        }
+    };
+    Ok(Some(value))
 }
 
 fn apply_openai_prompt_cache(
@@ -409,8 +419,9 @@ fn to_openai_input(
                             "call_id": call.id,
                             "name": call.name,
                             "arguments": match call.raw_arguments.as_deref() {
-                                Some(raw) => raw.to_owned(),
-                                None => serde_json::to_string(&call.args)?,
+                                // json! already copies this string into the wire value.
+                                Some(raw) => Cow::Borrowed(raw),
+                                None => Cow::Owned(serde_json::to_string(&call.args)?),
                             },
                         })),
                         ToolCallSurface::Freeform => input.push(json!({
@@ -559,11 +570,10 @@ fn openai_reasoning_item(summary: &str, encrypted_content: Option<&str>) -> Valu
     })
 }
 
-fn freeform_tool_input(call: &ToolCall) -> Result<String> {
+fn freeform_tool_input(call: &ToolCall) -> Result<&str> {
     call.args
         .get("input")
         .and_then(Value::as_str)
-        .map(str::to_owned)
         .ok_or_else(|| {
             anyhow!(
                 "freeform tool call '{}' requires string arg 'input'",

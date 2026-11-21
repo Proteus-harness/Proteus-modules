@@ -54,11 +54,11 @@ impl ContextBuilderModule for SimpleContextBuilderModule {
         input_json: String,
         host: &mut ContextBuilderModuleHostMut<'_>,
     ) -> Result<String, ProcessModuleError> {
-        let input: ContextBuilderModuleInput = match serde_json::from_str(input_json.as_str()) {
+        let mut input: ContextBuilderModuleInput = match serde_json::from_str(input_json.as_str()) {
             Ok(input) => input,
             Err(error) => return context_err(error),
         };
-        let config = match config_or_default::<SimpleContextConfig>(input.config.clone()) {
+        let config = match config_or_default::<SimpleContextConfig>(input.config.take()) {
             Ok(config) => config,
             Err(error) => return context_err(error),
         };
@@ -75,11 +75,11 @@ impl ContextBuilderModule for RepoAwareContextBuilderModule {
         input_json: String,
         host: &mut ContextBuilderModuleHostMut<'_>,
     ) -> Result<String, ProcessModuleError> {
-        let input: ContextBuilderModuleInput = match serde_json::from_str(input_json.as_str()) {
+        let mut input: ContextBuilderModuleInput = match serde_json::from_str(input_json.as_str()) {
             Ok(input) => input,
             Err(error) => return context_err(error),
         };
-        let config = match config_or_default::<RepoAwareContextConfig>(input.config.clone()) {
+        let config = match config_or_default::<RepoAwareContextConfig>(input.config.take()) {
             Ok(config) => config,
             Err(error) => return context_err(error),
         };
@@ -96,11 +96,11 @@ impl ContextBuilderModule for CodexContextBuilderModule {
         input_json: String,
         host: &mut ContextBuilderModuleHostMut<'_>,
     ) -> Result<String, ProcessModuleError> {
-        let input: ContextBuilderModuleInput = match serde_json::from_str(input_json.as_str()) {
+        let mut input: ContextBuilderModuleInput = match serde_json::from_str(input_json.as_str()) {
             Ok(input) => input,
             Err(error) => return context_err(error),
         };
-        let config = match config_or_default::<CodexContextConfig>(input.config.clone()) {
+        let config = match config_or_default::<CodexContextConfig>(input.config.take()) {
             Ok(config) => config,
             Err(error) => return context_err(error),
         };
@@ -460,7 +460,7 @@ fn retag_context_chunks(
         if let Some(rest) = chunk.source.strip_prefix(from_prefix) {
             chunk.source = format!("{to_prefix}{rest}");
         }
-        chunk.metadata = metadata_with(chunk.metadata.clone(), "context_profile", json!(to_prefix));
+        chunk.metadata = metadata_with(chunk.metadata.take(), "context_profile", json!(to_prefix));
     }
     chunks
 }

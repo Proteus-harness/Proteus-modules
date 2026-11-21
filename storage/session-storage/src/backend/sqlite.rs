@@ -2,7 +2,7 @@
 use super::*;
 use anyhow::{Context, ensure};
 use ring::digest::{Context as HashContext, SHA256};
-use rusqlite::{Connection, OpenFlags, OptionalExtension, params};
+use rusqlite::{Connection, OpenFlags, params};
 use std::path::PathBuf;
 mod record;
 
@@ -40,70 +40,151 @@ fn validate_identity(conn: &Connection, id: SessionId) -> Result<()> {
     Ok(())
 }
 
-// Both fingerprint scans select just the payload. Hash it while its row is live.
-fn fingerprint_payload<'r>(row: &'r rusqlite::Row<'_>) -> rusqlite::Result<&'r [u8]> {
-    let value = row.get_ref(0)?;
-    value
-        .as_blob()
-        .map_err(|_| rusqlite::Error::InvalidColumnType(0, "payload".into(), value.data_type()))
+// The payload is only needed while the row is live, for hashing or decoding.
+fn payload_bytes<'r>(row: &'r rusqlite::Row<'_>, column: usize) -> rusqlite::Result<&'r [u8]> {
+    let value = row.get_ref(column)?;
+    value.as_blob().map_err(|_| {
+        rusqlite::Error::InvalidColumnType(column, "payload".into(), value.data_type())
+    })
 }
 
-fn snapshot_source(
-    dir: &Path,
-    id: SessionId,
-    hint: Option<&PrefixHint>,
-) -> Result<Box<dyn RecordSnapshot>> {
+fn open_source(dir: &Path, id: SessionId) -> Result<(Option<Connection>, u64)> {
     let conn = open_read(dir)?;
-    let mut hash = HashContext::new(&SHA256);
     let end = if let Some(conn) = &conn {
         validate_identity(conn, id)?;
-        let end = u64::try_from(conn.query_row(
+        u64::try_from(conn.query_row(
             "SELECT coalesce(max(sequence),0) FROM journal",
             [],
             |r| r.get::<_, i64>(0),
-        )?)?;
+        )?)?
+    } else {
+        0
+    };
+    Ok((conn, end))
+}
+
+fn snapshot_source(
+    conn: Option<Connection>,
+    id: SessionId,
+    mut end: u64,
+    hint: Option<&PrefixHint>,
+) -> Result<SqliteSnapshot> {
+    let mut hash = HashContext::new(&SHA256);
+    if let Some(conn) = &conn {
         if let Some(hint) = hint {
             ensure!(
                 end >= hint.extent,
                 "SQLite journal shortened below cached prefix"
             );
-            hint.extent
+            end = hint.extent;
         } else {
             let mut stmt =
                 conn.prepare("SELECT payload FROM journal WHERE sequence<=?1 ORDER BY sequence")?;
             let mut rows = stmt.query([i64::try_from(end)?])?;
             while let Some(row) = rows.next()? {
-                let bytes = fingerprint_payload(row)?;
+                let bytes = payload_bytes(row, 0)?;
                 crate::diagnostics::fingerprint(bytes.len());
                 hash.update(bytes);
             }
-            end
         }
-    } else {
-        0
-    };
+    }
     let fingerprint = if let Some(hint) = hint {
         hint.fingerprint.clone()
     } else {
-        hash.finish()
-            .as_ref()
-            .iter()
-            .map(|b| format!("{b:02x}"))
-            .collect()
+        crate::io::digest_hex(hash.finish())
     };
-    Ok(Box::new(SqliteSnapshot {
+    Ok(SqliteSnapshot {
         conn,
         end,
         after: 0,
         id,
         fingerprint,
         current_hash: HashContext::new(&SHA256),
-    }))
+    })
+}
+
+impl Sqlite {
+    /// Cold catalog only. Hand back proof after every ordered row has passed
+    /// the visitor and EOF is reached, without exposing an unverified snapshot.
+    pub(crate) fn replay_catalog<T: Default>(
+        dir: &Path,
+        id: SessionId,
+        apply: impl Fn(&mut T, &JournalRecord) -> Result<()>,
+    ) -> Result<(T, PrefixHint)> {
+        let (conn, end) = open_source(dir, id)?;
+        if let Some(replayed) = replay_catalog_rows(conn.as_ref(), id, end, &apply)? {
+            return Ok(replayed);
+        }
+
+        // Unexpected ordering falls back on the same pinned transaction.
+        // Start a new fold: no partial result can escape the cursor path.
+        let mut source = snapshot_source(conn, id, end, None)?;
+        let mut folded = T::default();
+        while let Some(record) = source.next()? {
+            apply(&mut folded, &record)?;
+        }
+        Ok((
+            folded,
+            PrefixHint {
+                extent: source.end,
+                fingerprint: source.fingerprint,
+            },
+        ))
+    }
+}
+
+fn replay_catalog_rows<T: Default>(
+    conn: Option<&Connection>,
+    id: SessionId,
+    end: u64,
+    apply: impl Fn(&mut T, &JournalRecord) -> Result<()>,
+) -> Result<Option<(T, PrefixHint)>> {
+    let mut folded = T::default();
+    let mut hash = HashContext::new(&SHA256);
+    if let Some(conn) = conn {
+        let ordinary_table: bool = conn.query_row(
+            "SELECT EXISTS(SELECT 1 FROM main.sqlite_schema
+                           WHERE type='table' AND name='journal' AND rootpage>0)",
+            [],
+            |row| row.get(0),
+        )?;
+        if !ordinary_table {
+            return Ok(None);
+        }
+        let mut stmt = conn
+            .prepare("SELECT sequence,payload FROM journal WHERE sequence<=?1 ORDER BY sequence")?;
+        let mut rows = stmt.query([i64::try_from(end)?])?;
+        let mut seen = 0;
+        while let Some(row) = rows.next()? {
+            seen += 1;
+            // The legacy seek cursor visits positive, distinct sequences.
+            // Do not assume an arbitrary existing table enforces the writer DDL.
+            let sequence = match row.get::<_, i64>(0) {
+                Ok(sequence) if u64::try_from(sequence) == Ok(seen) => seen,
+                Ok(_) | Err(rusqlite::Error::InvalidColumnType(..)) => return Ok(None),
+                Err(error) => return Err(error.into()),
+            };
+            let bytes = payload_bytes(row, 1)?;
+            hash.update(bytes);
+            apply(&mut folded, &decode_record(id, sequence, bytes)?)?;
+        }
+        if seen != end {
+            return Ok(None);
+        }
+    }
+    Ok(Some((
+        folded,
+        PrefixHint {
+            extent: end,
+            fingerprint: crate::io::digest_hex(hash.finish()),
+        },
+    )))
 }
 
 impl JournalBackend for Sqlite {
     fn snapshot(&mut self, dir: &Path, id: SessionId) -> Result<Box<dyn RecordSnapshot>> {
-        snapshot_source(dir, id, None)
+        let (conn, end) = open_source(dir, id)?;
+        Ok(Box::new(snapshot_source(conn, id, end, None)?))
     }
     fn snapshot_warm(
         &mut self,
@@ -111,7 +192,8 @@ impl JournalBackend for Sqlite {
         id: SessionId,
         hint: &PrefixHint,
     ) -> Result<Box<dyn RecordSnapshot>> {
-        snapshot_source(dir, id, Some(hint))
+        let (conn, end) = open_source(dir, id)?;
+        Ok(Box::new(snapshot_source(conn, id, end, Some(hint))?))
     }
     fn recover(&mut self, dir: &Path, id: SessionId) -> Result<()> {
         ensure!(
@@ -201,38 +283,20 @@ impl RecordSnapshot for SqliteSnapshot {
         let mut stmt = conn.prepare_cached(
             "SELECT sequence,payload FROM journal WHERE sequence>?1 AND sequence<=?2 ORDER BY sequence LIMIT 1",
         )?;
-        let row: Option<(i64, Vec<u8>)> = stmt
-            .query_row(
-                params![i64::try_from(self.after)?, i64::try_from(self.end)?],
-                |r| Ok((r.get(0)?, r.get(1)?)),
-            )
-            .optional()?;
-        let Some((sequence, bytes)) = row else {
-            let actual: String = self
-                .current_hash
-                .clone()
-                .finish()
-                .as_ref()
-                .iter()
-                .map(|b| format!("{b:02x}"))
-                .collect();
+        let mut rows = stmt.query(params![
+            i64::try_from(self.after)?,
+            i64::try_from(self.end)?
+        ])?;
+        let Some(row) = rows.next()? else {
+            let actual: String = crate::io::digest_hex(self.current_hash.clone().finish());
             ensure!(actual == self.fingerprint, "SQLite snapshot prefix changed");
             return Ok(None);
         };
-        crate::diagnostics::decoded();
-        self.current_hash.update(&bytes);
+        let sequence: i64 = row.get(0)?;
+        let bytes = payload_bytes(row, 1)?;
+        self.current_hash.update(bytes);
         let sequence = u64::try_from(sequence)?;
-        ensure!(
-            bytes.len() <= crate::io::MAX_PAYLOAD_BYTES * 2,
-            "SQLite record exceeds maximum"
-        );
-        let record = record::decode(&bytes)?;
-        ensure!(
-            record.session_seq == sequence
-                && record.session_id == self.id
-                && record.schema_version == JOURNAL_SCHEMA_VERSION,
-            "SQLite journal record identity mismatch"
-        );
+        let record = decode_record(self.id, sequence, bytes)?;
         self.after = sequence;
         Ok(Some(record))
     }
@@ -263,7 +327,7 @@ impl RecordSnapshot for SqliteSnapshot {
             let mut rows = stmt.query([i64::try_from(sequence)?])?;
             let mut count = 0;
             while let Some(row) = rows.next()? {
-                hash.update(fingerprint_payload(row)?);
+                hash.update(payload_bytes(row, 0)?);
                 count += 1;
             }
             ensure!(
@@ -272,30 +336,43 @@ impl RecordSnapshot for SqliteSnapshot {
             );
         }
         Ok(Some(
-            hash.finish()
-                .as_ref()
-                .iter()
-                .map(|b| format!("{b:02x}"))
-                .collect(),
+            crate::io::digest_hex(hash.finish()),
         ))
     }
 }
 
+fn decode_record(id: SessionId, sequence: u64, bytes: &[u8]) -> Result<JournalRecord> {
+    crate::diagnostics::decoded();
+    ensure!(
+        bytes.len() <= crate::io::MAX_PAYLOAD_BYTES * 2,
+        "SQLite record exceeds maximum"
+    );
+    let record = record::decode(bytes)?;
+    ensure!(
+        record.session_seq == sequence
+            && record.session_id == id
+            && record.schema_version == JOURNAL_SCHEMA_VERSION,
+        "SQLite journal record identity mismatch"
+    );
+    Ok(record)
+}
+
 #[cfg(test)]
 #[test]
-fn fingerprint_payload_matches_owned_blob_reads_and_errors() {
+fn payload_bytes_matches_owned_blob_reads_and_errors_for_both_projections() {
     let conn = Connection::open_in_memory().unwrap();
-    let mut stmt = conn
-        .prepare(
-            "SELECT x'00ff' AS payload UNION ALL SELECT x'' UNION ALL SELECT 'text' \
-             UNION ALL SELECT 1 UNION ALL SELECT 1.5 UNION ALL SELECT NULL",
-        )
-        .unwrap();
-    let mut rows = stmt.query([]).unwrap();
-    while let Some(row) = rows.next().unwrap() {
-        assert_eq!(
-            fingerprint_payload(row).map(<[u8]>::to_vec),
-            row.get::<_, Vec<u8>>(0)
+    for (columns, index) in [("payload", 0), ("1 AS sequence, payload", 1)] {
+        let sql = format!(
+            "SELECT {columns} FROM (SELECT x'00ff' AS payload UNION ALL SELECT x'' \
+             UNION ALL SELECT 'text' UNION ALL SELECT 1 UNION ALL SELECT 1.5 UNION ALL SELECT NULL)"
         );
+        let mut stmt = conn.prepare(&sql).unwrap();
+        let mut rows = stmt.query([]).unwrap();
+        while let Some(row) = rows.next().unwrap() {
+            assert_eq!(
+                payload_bytes(row, index).map(<[u8]>::to_vec),
+                row.get::<_, Vec<u8>>(index)
+            );
+        }
     }
 }

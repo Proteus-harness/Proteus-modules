@@ -120,6 +120,7 @@ pub(crate) fn text(value: &str) -> CanonicalMessage {
     CanonicalMessage::text(MessageRole::User, value)
 }
 
+mod cache;
 mod journal;
 mod metadata;
 mod ownership;
@@ -131,6 +132,7 @@ mod paging;
 mod display;
 mod model_context;
 mod persisted_hooks;
+mod usage;
 
 mod prefix;
 mod seek;

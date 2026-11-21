@@ -156,12 +156,17 @@ fn invoke_tool(
             )));
         }
     };
-    match invoke_impl(&call, &context.cwd, command_kind) {
-        Ok(result) => Ok(String::from(result)),
-        Err(error) => Ok(String::from(
-            tool_result(&call.id, &call.name, false, "", Some(error), json!({})).to_string(),
-        )),
-    }
+    invoke_impl(&call, &context.cwd, command_kind).or_else(|error| {
+        Ok(tool_result(
+            &call.id,
+            &call.name,
+            false,
+            String::new(),
+            Some(error),
+            json!({}),
+        )
+        .to_string())
+    })
 }
 
 fn parse_call(call_json: &str) -> Result<ToolCallDto, String> {
@@ -239,15 +244,7 @@ fn invoke_impl(call: &ToolCallDto, cwd: &Path, command_kind: GitCommand) -> Resu
         wait_with_timeout(child, Duration::from_millis(TIMEOUT_MS), max_bytes)
             .map_err(|e| format!("failed to wait for git: {e}"))?;
 
-    let stdout = String::from_utf8_lossy(&output.stdout.bytes).into_owned();
-    let stderr = String::from_utf8_lossy(&output.stderr.bytes).into_owned();
-    let mut rendered = stdout.clone();
-    if !stderr.is_empty() {
-        if !rendered.is_empty() {
-            rendered.push('\n');
-        }
-        rendered.push_str(&stderr);
-    }
+    let mut rendered = render_git_output(output.stdout.bytes, &output.stderr.bytes);
     if rendered.is_empty() && output.status.success() {
         rendered = match command_kind {
             GitCommand::Status => "(clean working tree)".to_owned(),
@@ -278,14 +275,28 @@ fn invoke_impl(call: &ToolCallDto, cwd: &Path, command_kind: GitCommand) -> Resu
         "max_bytes": max_bytes,
     });
 
-    Ok(tool_result(&call.id, &call.name, ok, &rendered, error, metadata).to_string())
+    Ok(tool_result(&call.id, &call.name, ok, rendered, error, metadata).to_string())
+}
+
+fn render_git_output(stdout: Vec<u8>, stderr: &[u8]) -> String {
+    let mut rendered = match String::from_utf8(stdout) {
+        Ok(text) => text,
+        Err(error) => String::from_utf8_lossy(error.as_bytes()).into_owned(),
+    };
+    if !stderr.is_empty() {
+        if !rendered.is_empty() {
+            rendered.push('\n');
+        }
+        rendered.push_str(&String::from_utf8_lossy(stderr));
+    }
+    rendered
 }
 
 fn tool_result(
     call_id: &str,
     tool_name: &str,
     ok: bool,
-    output: &str,
+    output: String,
     error: Option<String>,
     metadata: Value,
 ) -> Value {
@@ -293,14 +304,20 @@ fn tool_result(
     if let Some(object) = metadata.as_object_mut() {
         object.insert("tool".to_owned(), json!(tool_name));
     }
-    json!({
-        "call_id": call_id,
-        "ok": ok,
-        "output": output,
-        "content": [],
-        "error": error,
-        "metadata": metadata,
-    })
+    // Передаём владение готовой строкой вместо её копирования через json!.
+    Value::Object(
+        [
+            ("call_id", Value::String(call_id.to_owned())),
+            ("ok", Value::Bool(ok)),
+            ("output", Value::String(output)),
+            ("content", Value::Array(Vec::new())),
+            ("error", error.map_or(Value::Null, Value::String)),
+            ("metadata", metadata),
+        ]
+        .into_iter()
+        .map(|(name, value)| (name.to_owned(), value))
+        .collect(),
+    )
 }
 
 fn optional_usize(args: &Value, key: &str) -> Result<Option<usize>, String> {

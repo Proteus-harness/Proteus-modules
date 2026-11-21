@@ -22,16 +22,7 @@ impl PrefixCache {
 }
 impl State {
     pub(super) fn remember_prefix(&mut self, session: SessionLocator, cache: PrefixCache) {
-        self.prefix_order.retain(|s| s != &session);
-        while self.prefixes.len() >= 1024 {
-            if let Some(old) = self.prefix_order.pop_front() {
-                self.prefixes.remove(&old);
-            } else {
-                break;
-            }
-        }
-        self.prefix_order.push_back(session.clone());
-        self.prefixes.insert(session, cache);
+        catalog::remember_catalog_entry(&mut self.prefixes, &mut self.prefix_order, session, cache);
     }
     pub(super) fn prepare_snapshot(&mut self, session: SessionLocator) -> Result<SnapshotState> {
         let dir = self.checked_path(&session)?;

@@ -222,3 +222,28 @@ fn delta_uses_same_call_identity_as_completed_item() {
         matches!(&events[0], ModelStreamEvent::ToolCallDelta { call_id, .. } if call_id == "call_1")
     );
 }
+
+#[test]
+fn terminal_fallback_retains_only_done_items_including_unknown_provider_fields() {
+    let mut state = OpenAiStreamState::default();
+    let added_only = json!({"type":"future_type","payload":"not completed"});
+    let unknown = json!({"type":"future_type","id":"x","payload":{"nested":[true,null,"кино"]}});
+    let message =
+        json!({"type":"message","role":"assistant","content":[{"type":"output_text","text":"ok"}]});
+    for (name, item) in [
+        ("response.output_item.added", &added_only),
+        ("response.output_item.done", &unknown),
+        ("response.output_item.done", &message),
+    ] {
+        state.translate(&json!({"type":name, "item":item}).to_string());
+    }
+    let events = state.translate(r#"{"type":"response.completed","response":{"output":[]}}"#);
+    let [ModelStreamEvent::Response { response }] = events.as_slice() else {
+        panic!("terminal response expected");
+    };
+    assert_eq!(
+        response.provider_metadata["output"],
+        json!([unknown, message])
+    );
+    assert_eq!(response.messages[0].display_text(), "ok");
+}

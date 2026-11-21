@@ -142,3 +142,31 @@ fn retained_suffix_does_not_break_existing_dropped_middle_rendering() {
     let second = rendered(take_ready_bytes(&mut buffer, true), 0, true);
     assert!(second["output"].as_str().unwrap().ends_with("Output:\n😀"));
 }
+
+#[test]
+fn display_budget_counts_lossy_utf8_bytes_not_raw_process_bytes() {
+    // The invalid byte expands into a three-byte replacement character. Neither
+    // edge of the render budget may split it, even though the raw input fits.
+    let result: Value = serde_json::from_str(&render_result(
+        "call",
+        42,
+        Collected {
+            bytes: vec![b'a', 0xff, b'z'],
+            dropped_bytes: 0,
+            exited: true,
+            exit_code: Some(2),
+        },
+        Duration::ZERO,
+        3,
+        json!({"nested": ["unchanged"]}),
+    ))
+    .unwrap();
+    assert_eq!(
+        result["output"],
+        "Wall time: 0.0000 seconds\nProcess exited with code 2\nOutput:\na\n[... omitted 3 of 5 bytes ...]\nz"
+    );
+    assert_eq!(result["ok"], true);
+    assert_eq!(result["metadata"]["output_bytes"], 3);
+    assert_eq!(result["metadata"]["truncated"], true);
+    assert_eq!(result["metadata"]["nested"], json!(["unchanged"]));
+}

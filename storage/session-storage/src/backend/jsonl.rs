@@ -102,6 +102,10 @@ struct PageBoundary {
     hash: HashContext,
 }
 
+// This is a retention cap, not a journal record limit. Ordinary buffered
+// fallback lines may require two allocations before settling at this size.
+const MAX_RETAINED_LINE_CAPACITY: usize = 128 * 1024;
+
 struct JsonlSnapshot {
     file: Option<BufReader<std::io::Take<File>>>,
     dir: PathBuf,
@@ -161,11 +165,7 @@ impl JsonlSnapshot {
         let fingerprint = if let Some(hint) = hint {
             hint.fingerprint.clone()
         } else {
-            hash.finish()
-                .as_ref()
-                .iter()
-                .map(|b| format!("{b:02x}"))
-                .collect()
+            crate::io::digest_hex(hash.finish())
         };
         if let Some(file) = &mut file {
             file.seek(SeekFrom::Start(0))?;
@@ -247,12 +247,7 @@ impl RecordSnapshot for JsonlSnapshot {
                 hash.update(&block[..read]);
                 offset += read as u64;
             }
-            let actual: String = hash
-                .finish()
-                .as_ref()
-                .iter()
-                .map(|b| format!("{b:02x}"))
-                .collect();
+            let actual = crate::io::digest_hex(hash.finish());
             ensure!(
                 actual == self.fingerprint,
                 "journal complete prefix changed during snapshot read"
@@ -287,15 +282,54 @@ impl RecordSnapshot for JsonlSnapshot {
         self.reset()
     }
     fn next(&mut self) -> Result<Option<JournalRecord>> {
+        self.next_with_scratch(&mut Vec::new())
+    }
+    fn next_with_scratch(&mut self, line: &mut Vec<u8>) -> Result<Option<JournalRecord>> {
         let Some(reader) = &mut self.file else {
             return Ok(None);
         };
-        let mut line = Vec::new();
+        let mut decode = |line: &[u8]| -> Result<Option<JournalRecord>> {
+            ensure!(
+                line.len() <= MAX_PAYLOAD_BYTES * 2,
+                "journal line exceeds maximum"
+            );
+            let Some(payload) = line.strip_suffix(b"\n") else {
+                bail!("journal snapshot lost a complete line");
+            };
+            self.consumed += line.len() as u64;
+            self.current_hash.update(line);
+            ensure!(
+                !payload.is_empty(),
+                "journal contains an empty complete line"
+            );
+            let (record, external) = codec::decode(&self.dir, self.id, payload)?;
+            self.has_external_payloads |= external;
+            Ok(Some(record))
+        };
+
+        // Borrow only complete lines. The buffered file remains the same pinned
+        // source used by read_until, and no extra storage lives on the snapshot.
+        match reader.fill_buf() {
+            Ok(bytes) => {
+                if let Some(end) = memchr::memchr(b'\n', bytes)
+                    && end < MAX_PAYLOAD_BYTES * 2
+                {
+                    let count = end + 1;
+                    let result = decode(&bytes[..count]);
+                    reader.consume(count);
+                    return result;
+                }
+            }
+            // read_until already retries interrupted reads.
+            Err(err) if err.kind() == std::io::ErrorKind::Interrupted => {}
+            Err(err) => return Err(err.into()),
+        }
+        line.clear();
         // Bound even a malicious unterminated line before allocation reaches file size.
         let count = reader
             .by_ref()
             .take((MAX_PAYLOAD_BYTES * 2 + 1) as u64)
-            .read_until(b'\n', &mut line)?;
+            .read_until(b'\n', line)?;
         if count == 0 {
             ensure!(
                 self.consumed == self.length && reader.get_ref().limit() == 0,
@@ -309,20 +343,11 @@ impl RecordSnapshot for JsonlSnapshot {
             self.fully_read = true;
             return Ok(None);
         }
-        ensure!(
-            line.len() <= MAX_PAYLOAD_BYTES * 2,
-            "journal line exceeds maximum"
-        );
-        if !line.ends_with(b"\n") {
-            bail!("journal snapshot lost a complete line");
+        let result = decode(line);
+        if line.capacity() > MAX_RETAINED_LINE_CAPACITY {
+            *line = Vec::new();
         }
-        self.consumed += line.len() as u64;
-        self.current_hash.update(&line);
-        line.pop();
-        ensure!(!line.is_empty(), "journal contains an empty complete line");
-        let (record, external) = codec::decode(&self.dir, self.id, &line)?;
-        self.has_external_payloads |= external;
-        Ok(Some(record))
+        result
     }
     fn consumed_fingerprint(&self) -> String {
         crate::io::digest_hex(self.current_hash.clone().finish())

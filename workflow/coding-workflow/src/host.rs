@@ -210,28 +210,25 @@ fn request_from_state_with_instruction_blocks_and_options(
     // TokenUsageUpdated нёс max_input_tokens (хост-шейпер правит свою копию
     // уже после того, как module собрал снимок, поэтому делаем это здесь).
     request.limits.max_input_tokens = input.runtime.max_input_tokens;
-    let compacted = if let Some(reason) = options.compaction_reason {
-        compact_messages(
+    let (compaction, preparation_target) = if let Some(reason) = options.compaction_reason {
+        let compacted = compact_messages(
             input,
             host,
             &request,
             reason,
             options.last_usage,
             options.context_hint,
-        )?
+        )?;
+        request.messages = compacted.messages;
+        (compacted.report, compacted.target)
     } else {
-        CompactedMessages {
-            messages: request.messages.clone(),
-            report: None,
-            target: None,
-        }
+        // The request already owns its messages in the no-preparation case.
+        (None, None)
     };
-    request.messages = compacted.messages;
     // Advisory estimates travel with the preparation report, never the durable
     // canonical payload. Continuations reuse their recorded report without a new
     // provider callback or another context preparation.
-    let estimates = compacted
-        .report
+    let estimates = compaction
         .as_ref()
         .and_then(|report| ModelInputEstimate::from_metadata(&report.metadata))
         .or_else(|| {
@@ -255,8 +252,7 @@ fn request_from_state_with_instruction_blocks_and_options(
     // Порог автокомпакта считает компактор (он владеет конфигом), а возвращает
     // его в отчёте. Кладём в metadata запроса, чтобы снимок взял именно его —
     // тогда метка на индикаторе контекста совпадает с реальным триггером.
-    if let Some(trigger) = compacted
-        .report
+    if let Some(trigger) = compaction
         .as_ref()
         .and_then(|report| report.trigger_tokens)
         .or(options.compaction_trigger_tokens)
@@ -271,8 +267,8 @@ fn request_from_state_with_instruction_blocks_and_options(
     }
     Ok(PreparedRequest {
         request,
-        compaction: compacted.report,
-        preparation_target: compacted.target,
+        compaction,
+        preparation_target,
     })
 }
 

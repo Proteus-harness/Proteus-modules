@@ -43,9 +43,11 @@ pub(super) fn open(kind: BackendKind, path: &Path) -> Result<StorageSessionDescr
     let mut modified = std::fs::metadata(&journal)
         .and_then(|m| m.modified())
         .or_else(|_| meta.modified())?;
-    if let Ok(wal_modified) =
-        std::fs::metadata(PathBuf::from(format!("{}-wal", journal.to_string_lossy())))
-            .and_then(|m| m.modified())
+    // Read-only SQLite snapshots can create an empty WAL without any change
+    // to the session. Like source stamps, recency ignores that empty WAL.
+    if let Ok(wal) = std::fs::metadata(PathBuf::from(format!("{}-wal", journal.to_string_lossy())))
+        && (!matches!(kind, BackendKind::Sqlite) || wal.len() != 0)
+        && let Ok(wal_modified) = wal.modified()
     {
         modified = modified.max(wal_modified);
     }
@@ -136,6 +138,29 @@ fn candidate_paths(root: &Path, workspace: Option<&Path>, audit: bool) -> Result
 }
 
 impl StorageService {
+    fn prioritize_catalog_paths(&self, paths: &mut [PathBuf], audit: bool) {
+        if audit || paths.len() <= MAX_CATALOG_ENTRIES {
+            return;
+        }
+        // Process possible hits before misses can evict them. This advisory
+        // snapshot never skips a path or substitutes for catalog validation.
+        let resident = self
+            .state
+            .try_lock()
+            .map(|state| state.resident_catalog_paths())
+            .unwrap_or_default();
+        if resident.is_empty() {
+            return;
+        }
+        let mut next = 0;
+        for index in 0..paths.len() {
+            if resident.contains(&paths[index]) {
+                paths.swap(next, index);
+                next += 1;
+            }
+        }
+    }
+
     pub(super) fn list(
         &self,
         root: &Path,
@@ -143,8 +168,10 @@ impl StorageService {
         audit: bool,
     ) -> Result<SessionStorageResponse> {
         let _scan = self.lock_catalog()?;
+        let mut paths = candidate_paths(root, workspace, audit)?;
+        self.prioritize_catalog_paths(&mut paths, audit);
         let mut result = Vec::new();
-        for path in candidate_paths(root, workspace, audit)? {
+        for path in paths {
             match self.catalog_summary(&path, audit) {
                 Ok(summary) => result.push(summary),
                 Err(error) if audit => return Err(error),
@@ -231,10 +258,12 @@ impl State {
     }
     pub(super) fn acquire(&mut self, session: SessionLocator) -> Result<SessionStorageResponse> {
         if let Some(writer) = self.writers.get_mut(&session) {
+            // Do not publish a token until all fallible recovery has succeeded.
+            let dir = checked_path(&session)?;
+            let revision = writer.recovered_fold(&dir, self.kind)?.revision();
             let mut lease = writer.lease.clone();
             lease.token = Uuid::new_v4();
             writer.tokens.insert(lease.token);
-            let revision = self.writer_fold(&lease)?.revision();
             return Ok(SessionStorageResponse::Writer { lease, revision });
         }
         let descriptor = self.describe(&session)?;
@@ -300,5 +329,34 @@ impl State {
                 Err(error)
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::tests::Fixture;
+
+    #[test]
+    fn oversized_catalog_schedules_resident_paths_without_dropping_candidates() {
+        let f = Fixture::new(BackendKind::Jsonl);
+        let cached = f.descriptor.local_path.clone().unwrap();
+        f.service.prime_catalog(&cached).unwrap();
+        let mut paths: Vec<_> = (0..MAX_CATALOG_ENTRIES)
+            .map(|i| PathBuf::from(format!("unknown-{i}")))
+            .collect();
+        paths.push(cached.clone());
+        let original = paths.clone();
+        f.service.prioritize_catalog_paths(&mut paths, true);
+        assert_eq!(paths, original, "audit preserves discovery order");
+        f.service.prioritize_catalog_paths(&mut paths[1..], false);
+        assert_eq!(paths, original, "in-capacity scan needs no scheduling");
+
+        f.service.prioritize_catalog_paths(&mut paths, false);
+        assert_eq!(paths[0], cached);
+        paths.sort();
+        let mut expected = original;
+        expected.sort();
+        assert_eq!(paths, expected);
     }
 }

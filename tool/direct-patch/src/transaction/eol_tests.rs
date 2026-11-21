@@ -113,3 +113,16 @@ fn add_file_content_still_uses_lf_even_when_patch_text_is_crlf() {
     };
     assert_eq!(render_text(lines, true, "\n"), "one\ntwo\n");
 }
+
+#[test]
+fn multiple_hunks_do_not_rematch_identical_lines_before_the_cursor() {
+    let patch = concat!(
+        "*** Begin Patch\n*** Update File: file.txt\n",
+        "@@\n-repeat\n+repeat\n+новая строка 🦀\n",
+        "@@\n-repeat\n+last\n tail\n*** End Patch",
+    );
+    assert_eq!(
+        update("header\nrepeat\nmiddle\nrepeat\ntail", patch).unwrap(),
+        "header\nrepeat\nновая строка 🦀\nmiddle\nlast\ntail"
+    );
+}

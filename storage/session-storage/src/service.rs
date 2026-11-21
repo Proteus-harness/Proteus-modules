@@ -29,6 +29,7 @@ mod sessions;
 mod views;
 
 const MAX_SNAPSHOTS: usize = 32;
+const MAX_CATALOG_ENTRIES: usize = 1024;
 
 #[derive(Debug, Clone, Copy, Default, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -214,7 +215,7 @@ impl State {
             ReadUsage { snapshot } => {
                 let id = snapshot.session.session_id;
                 Ok(SessionStorageResponse::Usage {
-                    usage: self.get_snapshot(&snapshot)?.fold()?.usage.snapshot(id),
+                    usage: self.get_snapshot(&snapshot)?.fold_usage()?.snapshot(id),
                 })
             }
             Resume { lease } => {
@@ -330,22 +331,29 @@ impl State {
         self.checked_path(&lease.session)
     }
     fn writer_fold(&mut self, lease: &StorageWriterLease) -> Result<&mut Fold> {
-        let dir = self.writer_path(lease)?;
         let kind = self.kind;
         let writer = self.writer(lease)?;
-        if writer.fold.is_none() {
-            writer.backend.recover(&dir, lease.session.session_id)?;
-            let stamps = catalog::source_stamp(&dir, kind)?;
-            let blobs = catalog::durable::blob_stamps(&dir);
-            let mut source = writer.backend.snapshot(&dir, lease.session.session_id)?;
+        let dir = checked_path(&lease.session)?;
+        writer.recovered_fold(&dir, kind)
+    }
+}
+
+impl Writer {
+    fn recovered_fold(&mut self, dir: &Path, kind: BackendKind) -> Result<&mut Fold> {
+        let id = self.lease.session.session_id;
+        if self.fold.is_none() {
+            self.backend.recover(dir, id)?;
+            let stamps = catalog::source_stamp(dir, kind)?;
+            let blobs = catalog::durable::blob_stamps(dir);
+            let mut source = self.backend.snapshot(dir, id)?;
             let mut fold = Fold::default();
             while let Some(record) = source.next()? {
-                fold.apply(lease.session.session_id, &record)?;
+                fold.apply(id, &record)?;
             }
-            writer.head = blobs
+            self.head = blobs
                 .filter(|blobs| {
-                    catalog::source_stamp(&dir, kind).ok().as_ref() == Some(&stamps)
-                        && catalog::durable::blob_stamps(&dir).as_ref() == Some(blobs)
+                    catalog::source_stamp(dir, kind).ok().as_ref() == Some(&stamps)
+                        && catalog::durable::blob_stamps(dir).as_ref() == Some(blobs)
                 })
                 .map(|blobs| catalog::WriterHead {
                     stamps,
@@ -353,9 +361,9 @@ impl State {
                     extent: source.extent(),
                     hash: source.read_hash(),
                 });
-            writer.fold = Some(fold);
+            self.fold = Some(fold);
         }
-        Ok(writer.fold.as_mut().expect("writer fold initialized"))
+        Ok(self.fold.as_mut().expect("writer fold initialized"))
     }
 }
 

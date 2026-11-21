@@ -7,7 +7,10 @@ use crate::omitted_marker;
 use anyhow::Result;
 use proteus_contracts::process_module::ToolModuleHostMut;
 use serde_json::{Value, json};
-use std::time::{Duration, Instant};
+use std::{
+    borrow::Cow,
+    time::{Duration, Instant},
+};
 
 pub(super) struct Collected {
     pub(super) bytes: Vec<u8>,
@@ -103,7 +106,7 @@ pub(super) fn render_result(
     mut metadata: Value,
 ) -> String {
     let raw_text = if collected.dropped_bytes == 0 {
-        String::from_utf8_lossy(&collected.bytes).into_owned()
+        String::from_utf8_lossy(&collected.bytes)
     } else {
         let (head, tail) = collected.bytes.split_at(SESSION_BUFFER_LIMIT / 2);
         format!(
@@ -118,6 +121,7 @@ pub(super) fn render_result(
             ),
             String::from_utf8_lossy(tail)
         )
+        .into()
     };
     let (text, truncated) = truncate_head_tail(&raw_text, max_output_bytes);
 
@@ -142,7 +146,11 @@ pub(super) fn render_result(
             capture["storage_state"].as_str().unwrap_or("unknown"),
             capture["complete_stream"].as_bool().unwrap_or(false)));
     }
-    sections.push(format!("Output:\n{text}"));
+    let mut output = sections.join("\n");
+    const OUTPUT_LABEL: &str = "\nOutput:\n";
+    output.reserve(OUTPUT_LABEL.len() + text.len());
+    output.push_str(OUTPUT_LABEL);
+    output.push_str(&text);
 
     if let Some(map) = metadata.as_object_mut() {
         map.insert(
@@ -171,22 +179,26 @@ pub(super) fn render_result(
     // отдаёт success — exit code процесса это данные в тексте/metadata, а не
     // сбой tool-а. Иначе Ctrl-C или опрос умершей сессии выглядят для модели
     // как ошибка write_stdin (dogfood 2026-07-06: слепые повторы).
-    json!({
-        "call_id": call_id,
-        "ok": true,
-        "output": sections.join("\n"),
-        "content": [],
-        "error": Value::Null,
-        "metadata": metadata
-    })
+    Value::Object(
+        [
+            ("call_id".into(), call_id.into()),
+            ("ok".into(), true.into()),
+            ("output".into(), Value::String(output)),
+            ("content".into(), Value::Array(Vec::new())),
+            ("error".into(), Value::Null),
+            ("metadata".into(), metadata),
+        ]
+        .into_iter()
+        .collect(),
+    )
     .to_string()
 }
 
 /// Head+tail усечение: начало и конец видны, середина вырезается — как в
 /// Codex, чтобы модель видела и старт команды, и актуальный хвост.
-pub(super) fn truncate_head_tail(text: &str, max_bytes: usize) -> (String, bool) {
+pub(super) fn truncate_head_tail(text: &str, max_bytes: usize) -> (Cow<'_, str>, bool) {
     if text.len() <= max_bytes {
-        return (text.to_owned(), false);
+        return (Cow::Borrowed(text), false);
     }
     let head_target = max_bytes / 2;
     let tail_target = max_bytes - head_target;
@@ -199,7 +211,8 @@ pub(super) fn truncate_head_tail(text: &str, max_bytes: usize) -> (String, bool)
             &text[..head_end],
             omitted_marker(omitted, text.len()),
             &text[tail_start..]
-        ),
+        )
+        .into(),
         true,
     )
 }

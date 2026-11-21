@@ -1,6 +1,6 @@
 //! `read_many_files` tool: пакетное чтение нескольких UTF-8 файлов.
 
-use std::{io::Read, path::Path};
+use std::{fmt::Write, io::Read, path::Path};
 
 use proteus_contracts::process_module::{ProcessModuleError, ToolModule, ToolModuleHostMut};
 use serde_json::{Value, json};
@@ -160,7 +160,7 @@ impl ToolModule for ReadManyFilesTool {
                 Err(e) => return err_result(&call.id, &call.name, e),
             };
             let mut rendered = if line_numbers {
-                add_line_numbers(&file_read.text)
+                add_line_numbers(&file_read.text, content_budget)
             } else {
                 file_read.text
             };
@@ -264,12 +264,19 @@ fn read_text_prefix(path: &Path, limit: usize, original_bytes: usize) -> Result<
     })
 }
 
-fn add_line_numbers(text: &str) -> String {
-    text.lines()
-        .enumerate()
-        .map(|(index, line)| format!("{}\t{}", index + 1, line))
-        .collect::<Vec<_>>()
-        .join("\n")
+fn add_line_numbers(text: &str, budget: usize) -> String {
+    let mut rendered = String::new();
+    for (index, line) in text.lines().enumerate() {
+        if index > 0 {
+            rendered.push('\n');
+        }
+        write!(rendered, "{}\t{line}", index + 1).expect("writing to a String cannot fail");
+        // Leave the first overflow visible to the caller's UTF-8 truncation policy.
+        if rendered.len() > budget {
+            break;
+        }
+    }
+    rendered
 }
 
 #[cfg(test)]

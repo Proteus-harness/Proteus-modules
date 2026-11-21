@@ -1,6 +1,7 @@
 //! `read_file` tool: чтение файла целиком или по диапазону строк.
 
 use std::{
+    fmt::Write as _,
     fs::File,
     io::{BufRead, BufReader, Read},
     path::Path,
@@ -210,6 +211,7 @@ fn render_range(
     let mut returned = 0usize;
     let mut output = String::new();
     let mut separator = "";
+    let mut prefix = String::new();
     let mut line = Vec::new();
     let mut eof = false;
     let mut reason = None;
@@ -257,11 +259,10 @@ fn render_range(
             }
             continue;
         }
-        let prefix = if options.line_numbers {
-            format!("{scanned_lines}\t")
-        } else {
-            String::new()
-        };
+        if options.line_numbers {
+            prefix.clear();
+            write!(prefix, "{scanned_lines}\t").expect("writing to String is infallible");
+        }
         let available = (MAX_READ_FILE_BYTES as usize)
             .saturating_sub(output.len() + prefix.len() + separator.len());
         if available == 0 {

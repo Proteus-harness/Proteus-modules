@@ -1,9 +1,10 @@
 //! Metadata CAS and its operation receipt commit in one atomic document.
 use crate::{
-    io::{atomic_write, bounded_read, sha256_hex},
+    io::{atomic_write, bounded_read, digest_hex, sha256_hex},
     types::*,
 };
 use anyhow::{Result, ensure};
+use ring::digest::{Context, SHA256};
 use serde::{Deserialize, Serialize};
 use std::{collections::BTreeMap, path::Path};
 use uuid::Uuid;
@@ -65,8 +66,12 @@ fn hydrate(dir: &Path, stored: Option<&StoredDocument>) -> Result<Option<Storage
         })
         .transpose()
 }
-fn store(dir: &Path, document: &StorageMetadataDocument) -> Result<StoredDocument> {
-    let bytes = serde_json::to_vec(&document.value)?;
+fn store(
+    dir: &Path,
+    operation_id: Uuid,
+    value: serde_json::Value,
+) -> Result<(StorageMetadataDocument, StoredDocument)> {
+    let bytes = serde_json::to_vec(&value)?;
     ensure!(
         bytes.len() <= SESSION_STORAGE_MAX_METADATA_BYTES,
         "metadata document exceeds maximum"
@@ -83,10 +88,21 @@ fn store(dir: &Path, document: &StorageMetadataDocument) -> Result<StoredDocumen
     } else {
         atomic_write(&path, &bytes)?;
     }
-    Ok(StoredDocument {
-        etag: document.etag.clone(),
-        object_sha256,
-    })
+    // Persisted etags hash the raw UUID followed by these same JSON bytes.
+    let mut etag = Context::new(&SHA256);
+    etag.update(operation_id.as_bytes());
+    etag.update(&bytes);
+    let etag = digest_hex(etag.finish());
+    Ok((
+        StorageMetadataDocument {
+            etag: etag.clone(),
+            value,
+        },
+        StoredDocument {
+            etag,
+            object_sha256,
+        },
+    ))
 }
 /// Import compatibility stays inside storage. No consumer guesses local files.
 fn legacy(dir: &Path, key: &str) -> Result<Option<StorageMetadataDocument>> {
@@ -110,6 +126,25 @@ pub(crate) fn read(dir: &Path, key: &str) -> Result<Option<StorageMetadataDocume
         legacy(dir, key)
     }
 }
+// Keep hashing the original compact JSON tuple, without retaining its bytes.
+fn hash_request(request: &impl Serialize) -> Result<String> {
+    struct HashWriter(ring::digest::Context);
+    impl std::io::Write for HashWriter {
+        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+            self.0.update(bytes);
+            Ok(bytes.len())
+        }
+
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    let mut writer = HashWriter(ring::digest::Context::new(&ring::digest::SHA256));
+    serde_json::to_writer(&mut writer, request)?;
+    Ok(crate::io::digest_hex(writer.0.finish()))
+}
+
 pub(crate) fn compare_exchange(
     dir: &Path,
     operation_id: Uuid,
@@ -117,7 +152,7 @@ pub(crate) fn compare_exchange(
     expected: Option<String>,
     value: Option<serde_json::Value>,
 ) -> Result<Option<StorageMetadataDocument>> {
-    let request_hash = sha256_hex(&serde_json::to_vec(&(&key, &expected, &value))?);
+    let request_hash = hash_request(&(&key, &expected, &value))?;
     let mut envelope = load(dir)?;
     if let Some(receipt) = envelope.receipts.get(&operation_id) {
         ensure!(
@@ -135,18 +170,10 @@ pub(crate) fn compare_exchange(
         actual.as_ref().map(|d| &d.etag) == expected.as_ref(),
         "metadata etag conflict"
     );
-    let document = value.map(|value| {
-        let mut etag_input = operation_id.as_bytes().to_vec();
-        etag_input.extend(serde_json::to_vec(&value).expect("JSON value encoding is infallible"));
-        StorageMetadataDocument {
-            etag: sha256_hex(&etag_input),
-            value,
-        }
-    });
-    let stored = document
-        .as_ref()
-        .map(|document| store(dir, document))
-        .transpose()?;
+    let (document, stored) = value
+        .map(|value| store(dir, operation_id, value))
+        .transpose()?
+        .unzip();
     envelope.documents.insert(key, stored.clone());
     envelope.receipts.insert(
         operation_id,
@@ -162,4 +189,47 @@ pub(crate) fn compare_exchange(
     );
     atomic_write(&dir.join(FILE), &bytes)?;
     Ok(document)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn metadata_etag_binds_raw_operation_uuid_but_object_path_only_binds_value() {
+        let dir = tempfile::tempdir().unwrap();
+        let value = serde_json::json!(["line\n\"two\"", null, true, "тест"]);
+        let mut expected = None;
+        for (operation, etag) in [
+            (
+                1,
+                "af44957d64d7c62688b51c760f666c0c27b69f42141a4791fa04a5ba815b9e65",
+            ),
+            (
+                2,
+                "b0acc94e67d1c6cc291fe196cdda09d1a29f0b83089c7a7a17ca339b8e7add29",
+            ),
+        ] {
+            let doc = compare_exchange(
+                dir.path(),
+                Uuid::from_u128(operation),
+                "settings".into(),
+                expected.take(),
+                Some(value.clone()),
+            )
+            .unwrap()
+            .unwrap();
+            assert_eq!(doc.value, value);
+            assert_eq!(doc.etag, etag);
+            expected = Some(doc.etag);
+        }
+        let object = dir
+            .path()
+            .join(".metadata-objects")
+            .join("26edbce3163db56a25fc6d027d9f2a831f6340e3836c57e3c3ed33061cd71e7d.json");
+        assert_eq!(
+            std::fs::read(object).unwrap(),
+            serde_json::to_vec(&value).unwrap()
+        );
+    }
 }

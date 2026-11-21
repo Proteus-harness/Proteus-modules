@@ -1,6 +1,29 @@
 use super::*;
 
 #[test]
+fn catalog_preview_trims_before_cutting_at_a_unicode_scalar_boundary() {
+    let prefix = "🦀".repeat(160);
+    let selected = |s: String| {
+        crate::snapshot::preview(&[
+            CanonicalMessage::text(MessageRole::Assistant, "fallback"),
+            CanonicalMessage::new(
+                MessageRole::User,
+                vec![
+                    ContentPart::Text { text: "  ".into() },
+                    ContentPart::ReasoningSummary { text: s },
+                ],
+            ),
+        ])
+    };
+    assert_eq!(selected(format!("　{prefix}　")), Some(prefix.clone()));
+    assert_eq!(
+        selected(format!(" {prefix}я ")),
+        Some(format!("{prefix}..."))
+    );
+    assert_eq!(selected("　".into()).as_deref(), Some("fallback"));
+}
+
+#[test]
 fn metadata_cas_receipts_survive_reopen_and_reject_conflicts() {
     for kind in backends() {
         let f = Fixture::new(kind);
@@ -37,6 +60,51 @@ fn metadata_cas_receipts_survive_reopen_and_reject_conflicts() {
         };
         *target = lease;
         assert_eq!(result, service.execute(request).unwrap());
+    }
+}
+
+#[test]
+fn metadata_receipt_keeps_the_original_tuple_fingerprint() {
+    for kind in backends() {
+        let f = Fixture::new(kind);
+        let key = "settings.compatibility".to_owned();
+        let first = Some(serde_json::json!({
+            "nested": {"z": [null, -2, 0.5, true], "a": "quote:\" tab:\t Русский 🦀"},
+            "text": "ordinary metadata"
+        }));
+        let mut expected = None;
+        for (operation_id, value) in [
+            (uuid::Uuid::from_u128(111), first),
+            (uuid::Uuid::from_u128(222), None),
+        ] {
+            let legacy =
+                crate::io::sha256_hex(&serde_json::to_vec(&(&key, &expected, &value)).unwrap());
+            let request = SessionStorageRequest::CompareExchangeMetadata {
+                lease: f.lease.clone(),
+                operation_id,
+                key: key.clone(),
+                expected_etag: expected.take(),
+                value,
+            };
+            let written = f.service.execute(request.clone()).unwrap();
+            assert_eq!(f.service.execute(request).unwrap(), written);
+            let path = f
+                .descriptor
+                .local_path
+                .as_ref()
+                .unwrap()
+                .join(".storage-metadata.json");
+            let ledger: serde_json::Value =
+                serde_json::from_slice(&std::fs::read(path).unwrap()).unwrap();
+            assert_eq!(
+                ledger["receipts"][operation_id.to_string()]["request_sha256"],
+                legacy
+            );
+            let SessionStorageResponse::Metadata { document } = written else {
+                panic!("expected metadata response");
+            };
+            expected = document.map(|document| document.etag);
+        }
     }
 }
 
@@ -739,5 +807,115 @@ fn candidate_discovery_never_decodes_history_and_strict_list_still_validates() {
         };
         assert_eq!(sessions[0].message_count, 1);
         assert!(crate::diagnostics::get().decoded > 0);
+    }
+}
+
+#[test]
+fn repeated_blob_put_checks_existing_bytes_through_eof_before_writing_a_receipt() {
+    use base64::{Engine, engine::general_purpose::STANDARD};
+    for kind in backends() {
+        let f = Fixture::new(kind);
+        let bytes = (0..40_000).map(|i| (i % 251) as u8).collect::<Vec<_>>();
+        let blob = StorageBlobRef {
+            sha256: crate::io::sha256_hex(&bytes),
+            bytes: bytes.len() as u64,
+        };
+        let put = |operation_id| {
+            f.service.execute(SessionStorageRequest::PutBlob {
+                lease: f.lease.clone(),
+                operation_id,
+                data_base64: STANDARD.encode(&bytes),
+                expected: blob.clone(),
+            })
+        };
+        let SessionStorageResponse::Blob {
+            local_path: Some(path),
+            ..
+        } = put(uuid::Uuid::new_v4()).unwrap()
+        else {
+            panic!()
+        };
+        let ledger = f
+            .descriptor
+            .local_path
+            .as_ref()
+            .unwrap()
+            .join(".storage-metadata.json");
+        let receipt = std::fs::read(&ledger).unwrap();
+        let retry = uuid::Uuid::new_v4();
+        for corrupt in [
+            Vec::new(),
+            bytes[..bytes.len() - 1].to_vec(),
+            [&bytes[..], &[0xff]].concat(),
+            {
+                let mut v = bytes.clone();
+                *v.last_mut().unwrap() ^= 1;
+                v
+            },
+        ] {
+            std::fs::write(&path, &corrupt).unwrap();
+            assert!(
+                put(retry)
+                    .unwrap_err()
+                    .to_string()
+                    .contains("content-addressed blob collision")
+            );
+            assert_eq!(std::fs::read(&ledger).unwrap(), receipt);
+            assert_eq!(std::fs::read(&path).unwrap(), corrupt);
+        }
+        std::fs::write(&path, &bytes).unwrap();
+        assert!(put(retry).is_ok());
+    }
+}
+
+#[test]
+fn empty_sqlite_wal_does_not_change_descriptor_recency() {
+    use std::{
+        fs::{File, FileTimes},
+        time::{Duration, UNIX_EPOCH},
+    };
+
+    for kind in backends() {
+        let mut f = Fixture::new(kind);
+        f.append(vec![text("last committed message")]);
+        f.service
+            .execute(SessionStorageRequest::ReleaseWriter {
+                lease: f.lease.clone(),
+            })
+            .unwrap();
+        let dir = f.descriptor.local_path.as_ref().unwrap();
+        let journal = f.descriptor.record_location.as_ref().unwrap();
+        let wal = std::path::PathBuf::from(format!("{}-wal", journal.display()));
+        assert!(!wal.exists());
+        let open = || {
+            let SessionStorageResponse::Session { descriptor } = f
+                .service
+                .execute(SessionStorageRequest::Open { path: dir.clone() })
+                .unwrap()
+            else {
+                panic!("expected descriptor");
+            };
+            descriptor.updated_at_ms
+        };
+        File::options()
+            .write(true)
+            .open(journal)
+            .unwrap()
+            .set_times(FileTimes::new().set_modified(UNIX_EPOCH + Duration::from_secs(10)))
+            .unwrap();
+        assert_eq!(open(), 10_000);
+
+        File::create(&wal)
+            .unwrap()
+            .set_times(FileTimes::new().set_modified(UNIX_EPOCH + Duration::from_secs(20)))
+            .unwrap();
+        assert_eq!(std::fs::metadata(wal).unwrap().len(), 0);
+        assert_eq!(
+            open(),
+            match kind {
+                BackendKind::Jsonl => 20_000, // Existing JSONL recency is unchanged.
+                BackendKind::Sqlite => 10_000,
+            }
+        );
     }
 }

@@ -65,6 +65,32 @@ fn rg_command_uses_safe_path_filters_as_search_roots_and_globs() {
     fs::remove_dir_all(dir).unwrap();
 }
 
+#[test]
+fn search_roots_keep_distinct_siblings_and_drop_all_covered_descendants() {
+    let dir = temp_workspace();
+    for path in ["a/b/c", "a/b/d", "a!/x", "ab/y", "z/k"] {
+        fs::create_dir_all(dir.join(path)).unwrap();
+    }
+    let query = SearchQuery::new("needle", dir.clone(), 1).with_path_filters(
+        [
+            "z/k/",
+            "./a/b/c/",
+            "a!/",
+            "a/b/d/",
+            "ab/y/missing/",
+            "a/",
+            "a/b/c/",
+            "a!/x/",
+        ],
+        [] as [&str; 0],
+    );
+    assert_eq!(
+        search_roots(&query),
+        ["a", "a!", "ab/y", "z/k"].map(PathBuf::from)
+    );
+    fs::remove_dir_all(dir).unwrap();
+}
+
 #[cfg(unix)]
 #[test]
 fn literal_path_filters_match_python_component() {

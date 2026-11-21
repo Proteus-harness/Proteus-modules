@@ -10,7 +10,9 @@ pub fn encode_workspace_path(path: &Path) -> Result<String> {
         bail!("workspace path must be absolute: {}", path.display());
     }
 
-    let mut parts = Vec::new();
+    // With no escapes this is at most the length of the original path.
+    // Build the directory name directly instead of allocating each component.
+    let mut encoded = String::new();
     for component in path.components() {
         match component {
             Component::RootDir => {}
@@ -21,7 +23,14 @@ pub fn encode_workspace_path(path: &Path) -> Result<String> {
                         path.display()
                     )
                 })?;
-                parts.push(encode_workspace_component(part));
+                if encoded.is_empty() {
+                    // A raw path used after canonicalization fails may dwarf
+                    // its encoded components (for example repeated separators).
+                    encoded.reserve_exact(path.as_os_str().len().min(256));
+                } else {
+                    encoded.push('|');
+                }
+                append_encoded_workspace_component(&mut encoded, part);
             }
             Component::CurDir => {}
             Component::ParentDir | Component::Prefix(_) => {
@@ -30,10 +39,10 @@ pub fn encode_workspace_path(path: &Path) -> Result<String> {
         }
     }
 
-    if parts.is_empty() {
+    if encoded.is_empty() {
         Ok(ROOT_WORKSPACE_DIR.to_owned())
     } else {
-        Ok(parts.join("|"))
+        Ok(encoded)
     }
 }
 
@@ -90,9 +99,8 @@ pub(crate) fn workspace_path_from_session_dir(session_dir: &Path) -> Result<Path
     decode_workspace_path(encoded)
 }
 
-fn encode_workspace_component(input: &str) -> String {
+fn append_encoded_workspace_component(out: &mut String, input: &str) {
     const HEX: &[u8; 16] = b"0123456789ABCDEF";
-    let mut out = String::new();
     for ch in input.chars() {
         if ch.is_alphanumeric() || matches!(ch, '-' | '_' | '.') {
             out.push(ch);
@@ -105,7 +113,6 @@ fn encode_workspace_component(input: &str) -> String {
             }
         }
     }
-    out
 }
 
 fn decode_workspace_component(encoded: &str) -> Result<String> {
@@ -135,7 +142,9 @@ fn decode_workspace_component(encoded: &str) -> Result<String> {
 
     let decoded = String::from_utf8(decoded)
         .with_context(|| format!("workspace component is not valid UTF-8: {encoded:?}"))?;
-    if encode_workspace_component(&decoded) != encoded {
+    let mut canonical = String::new();
+    append_encoded_workspace_component(&mut canonical, &decoded);
+    if canonical != encoded {
         bail!("workspace component is not canonically encoded: {encoded:?}");
     }
     Ok(decoded)
@@ -146,5 +155,35 @@ fn decode_hex(byte: u8) -> Option<u8> {
         b'0'..=b'9' => Some(byte - b'0'),
         b'A'..=b'F' => Some(byte - b'A' + 10),
         _ => None,
+    }
+}
+
+#[cfg(all(test, unix))]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn workspace_encoding_preserves_canonical_name_for_escapes_and_unicode() {
+        let parent = tempfile::tempdir().unwrap();
+        let base = encode_workspace_path(parent.path()).unwrap();
+        let real = parent
+            .path()
+            .join("ordinary.alpha")
+            .join("исследование_日本語")
+            .join("percent% | 🤖 room");
+        std::fs::create_dir_all(&real).unwrap();
+        let exact = format!(
+            "{base}|ordinary.alpha|исследование_日本語|percent%25%20%7C%20%F0%9F%A4%96%20room"
+        );
+        assert_eq!(encode_workspace_path(&real).unwrap(), exact);
+        assert_eq!(
+            decode_workspace_path(&exact).unwrap(),
+            std::fs::canonicalize(&real).unwrap(),
+        );
+        let alias = parent.path().join("alias");
+        std::os::unix::fs::symlink(&real, &alias).unwrap();
+        assert_eq!(encode_workspace_path(&alias).unwrap(), exact);
+        assert_eq!(encode_workspace_path(Path::new("/")).unwrap(), "%2F");
+        assert_eq!(decode_workspace_path("%2F").unwrap(), Path::new("/"));
     }
 }

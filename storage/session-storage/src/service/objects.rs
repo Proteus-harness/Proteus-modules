@@ -32,7 +32,7 @@ impl State {
         );
         if path.try_exists()? {
             ensure!(
-                crate::io::bounded_read(&path, SESSION_STORAGE_MAX_BLOB_BYTES as usize)? == bytes,
+                crate::io::bounded_file_eq(&path, &bytes, SESSION_STORAGE_MAX_BLOB_BYTES as usize)?,
                 "content-addressed blob collision"
             );
         } else {

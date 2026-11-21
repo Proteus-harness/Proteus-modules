@@ -13,7 +13,7 @@ use proteus_contracts::{
     tool_support::parse_invocation_context,
 };
 use serde::{Deserialize, Serialize};
-use serde_json::{Value, json};
+use serde_json::{Map, Value, json};
 
 pub struct PlanTool;
 
@@ -85,6 +85,28 @@ struct PlanStep {
     status: PlanStepStatus,
 }
 
+impl PlanStep {
+    fn into_result_value(self) -> Value {
+        result_object([
+            ("step", Value::String(self.step)),
+            (
+                "status",
+                serde_json::to_value(self.status).expect("plan status serializes as a string"),
+            ),
+        ])
+    }
+}
+
+// Insert in the same order as the original json! and PlanStep serialization.
+// Unlike json!, this takes ownership of each of the already constructed values.
+fn result_object<const N: usize>(entries: [(&str, Value); N]) -> Value {
+    let mut object = Map::with_capacity(N);
+    for (key, value) in entries {
+        object.insert(key.to_owned(), value);
+    }
+    Value::Object(object)
+}
+
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct PlanArgs {
@@ -104,30 +126,34 @@ enum PlanStepStatus {
 fn invoke_impl(call_json: &str) -> Result<String, String> {
     let mut call: Value = serde_json::from_str(call_json)
         .map_err(|error| format!("invalid ToolCall JSON: {error}"))?;
-    let call_id = call
-        .get("id")
-        .and_then(Value::as_str)
-        .unwrap_or("")
-        .to_owned();
     let args = call.get_mut("args").map(Value::take).unwrap_or(Value::Null);
+    let call_id = call.get("id").and_then(Value::as_str).unwrap_or("");
 
     match validate_plan(args) {
         Ok(plan_args) => {
             let counts = status_counts(&plan_args.plan);
-            let result = json!({
-                "call_id": call_id,
-                "ok": true,
-                "output": "Plan updated",
-                "content": [],
-                "error": null,
-                "metadata": {
-                    "plan": plan_args.plan,
-                    "explanation": plan_args.explanation,
-                    "completed": counts.completed,
-                    "in_progress": counts.in_progress,
-                    "pending": counts.pending,
-                }
-            });
+            let plan = plan_args
+                .plan
+                .into_iter()
+                .map(PlanStep::into_result_value)
+                .collect();
+            let result = result_object([
+                ("call_id", call_id.into()),
+                ("ok", true.into()),
+                ("output", "Plan updated".into()),
+                ("content", Value::Array(Vec::new())),
+                ("error", Value::Null),
+                (
+                    "metadata",
+                    result_object([
+                        ("plan", Value::Array(plan)),
+                        ("explanation", plan_args.explanation.into()),
+                        ("completed", counts.completed.into()),
+                        ("in_progress", counts.in_progress.into()),
+                        ("pending", counts.pending.into()),
+                    ]),
+                ),
+            ]);
             Ok(result.to_string())
         }
         Err(problem) => {
@@ -268,6 +294,39 @@ mod tests {
         assert_eq!(
             invoke(json!({ "plan": [], "unexpected": true }))["ok"],
             false
+        );
+    }
+
+    #[test]
+    fn owned_plan_result_keeps_wire_order_and_failure_shape() {
+        let step = PlanStep {
+            step: "Line 1\nСтрока 2 🙂".into(),
+            status: PlanStepStatus::InProgress,
+        };
+        let call =
+            json!({"id":"call-ю", "args":{"plan":[step], "explanation": "\talso"}}).to_string();
+        let legacy = json!({
+            "call_id": "call-ю",
+            "ok": true,
+            "output": "Plan updated",
+            "content": [],
+            "error": null,
+            "metadata": {
+                "plan": [step],
+                "explanation": "\talso",
+                "completed": 0,
+                "in_progress": 1,
+                "pending": 0,
+            }
+        })
+        .to_string();
+        assert_eq!(invoke_impl(&call).unwrap(), legacy);
+
+        let failure = invoke(json!({"plan":[{}]}));
+        assert_eq!(failure["ok"], false);
+        assert_eq!(
+            failure["error"],
+            "plan entries must be {step, status: pending|in_progress|completed}: missing field `step`"
         );
     }
 }

@@ -71,6 +71,50 @@ fn moved_input_array_preserves_provider_json_bytes_and_order() {
 }
 
 #[test]
+fn client_metadata_keeps_sorted_keys_and_request_overrides_profile() {
+    let profile = OpenAiModelProfile::from_provider_config(&json!({
+        "client_metadata": {"z_profile":"profile", "a_shared":"original"}
+    }))
+    .unwrap();
+    let mut request = CanonicalModelRequest::new(ModelRef::new("openai", "fixture"), vec![]);
+
+    let rendered = |request: &CanonicalModelRequest, profile: &OpenAiModelProfile| {
+        crate::adapters::openai::request::to_openai_request_with_cache(
+            request,
+            &OpenAiPromptCacheConfig::default(),
+            profile,
+        )
+        .unwrap()
+    };
+    let empty_profile = OpenAiModelProfile::from_provider_config(&json!({})).unwrap();
+    assert!(
+        rendered(&request, &empty_profile)
+            .get("client_metadata")
+            .is_none()
+    );
+    assert_eq!(
+        rendered(&request, &profile)["client_metadata"].to_string(),
+        r#"{"a_shared":"original","z_profile":"profile"}"#
+    );
+
+    request
+        .client_metadata
+        .insert("c_request".into(), "запрос 🦀".into());
+    request
+        .client_metadata
+        .insert("a_shared".into(), String::new());
+    assert_eq!(
+        rendered(&request, &empty_profile)["client_metadata"].to_string(),
+        r#"{"a_shared":"","c_request":"запрос 🦀"}"#
+    );
+    assert_eq!(
+        rendered(&request, &profile)["client_metadata"].to_string(),
+        r#"{"a_shared":"","c_request":"запрос 🦀","z_profile":"profile"}"#
+    );
+    assert_eq!(profile.client_metadata["a_shared"], "original");
+}
+
+#[test]
 fn request_preserves_instruction_order_and_file_content_without_mutating_source() {
     let request = CanonicalModelRequest::new(
         ModelRef::new("openai", "fixture"),
@@ -117,5 +161,48 @@ fn request_preserves_instruction_order_and_file_content_without_mutating_source(
             .unwrap()
             .get("instructions")
             .is_none()
+    );
+}
+
+#[test]
+fn rendered_tool_calls_keep_argument_bytes_and_wire_key_order() {
+    // Replay preserves even malformed raw provider arguments, byte for byte.
+    let raw = " {bad \"пример\"\n";
+    let args = json!({"z": [42], "a": "строка\t"});
+    let encoded = args.to_string();
+    let freeform = "  заметка\n🦀 ";
+    let req = |calls: Vec<ToolCall>| {
+        CanonicalModelRequest::new(
+            ModelRef::new("openai", "fixture"),
+            vec![CanonicalMessage::new(
+                MessageRole::Assistant,
+                calls
+                    .into_iter()
+                    .map(|call| ContentPart::ToolCall { call })
+                    .collect(),
+            )],
+        )
+    };
+    let request = req(vec![
+        ToolCall::new("call_raw", "fixture_fn", json!({})).with_raw_arguments(raw),
+        ToolCall::new("call_json", "fixture_fn", args),
+        ToolCall::new("call_note", "fixture_note", json!({"input":freeform}))
+            .with_surface(ToolCallSurface::Freeform),
+    ]);
+    let expected = json!([
+        {"type":"function_call","call_id":"call_raw","name":"fixture_fn","arguments":raw},
+        {"type":"function_call","call_id":"call_json","name":"fixture_fn","arguments":encoded},
+        {"type":"custom_tool_call","call_id":"call_note","name":"fixture_note","input":freeform},
+    ]);
+    let body = to_openai_request(&request).unwrap();
+    assert_eq!(body["input"].to_string(), expected.to_string());
+
+    let invalid = req(vec![
+        ToolCall::new("bad", "fixture_note", json!({"input":42}))
+            .with_surface(ToolCallSurface::Freeform),
+    ]);
+    assert_eq!(
+        to_openai_request(&invalid).unwrap_err().to_string(),
+        "freeform tool call 'fixture_note' requires string arg 'input'"
     );
 }

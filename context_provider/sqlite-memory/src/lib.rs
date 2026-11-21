@@ -118,15 +118,17 @@ fn remember_impl(conn: &Mutex<Connection>, payload: &str) -> Result<()> {
         serde_json::from_str(payload).with_context(|| "failed to deserialize MemoryItem JSON")?;
     let created_at = chrono::Utc::now().timestamp_millis();
     let c = conn.lock().map_err(|_| anyhow!("sqlite mutex poisoned"))?;
-    c.execute(
+    c.prepare_cached(
         "INSERT INTO memory_items (kind, content, metadata, created_at) VALUES (?1, ?2, ?3, ?4)",
-        params![
+    )
+    .and_then(|mut stmt| {
+        stmt.execute(params![
             item.kind,
             item.content,
             item.metadata.to_string(),
             created_at
-        ],
-    )
+        ])
+    })
     .with_context(|| "failed to insert memory item")?;
     Ok(())
 }
@@ -270,6 +272,41 @@ mod tests {
             .unwrap_err();
             assert!(error.to_string().contains("Conversion error"), "{error:#}");
         }
+    }
+
+    #[test]
+    fn remember_reuses_insert_after_constraint_error_with_fresh_bindings() {
+        let conn = fresh_conn();
+        conn.lock()
+            .unwrap()
+            .execute_batch(
+                "CREATE TRIGGER reject_fixture BEFORE INSERT ON memory_items
+                 WHEN NEW.content = 'unaccepted' BEGIN
+                     SELECT RAISE(ABORT, 'fixture rejected');
+                 END;",
+            )
+            .unwrap();
+        remember_impl(&conn, r#"{"kind":"fact","content":"old","metadata":null}"#).unwrap();
+        let error = remember_impl(
+            &conn,
+            r#"{"kind":"fact","content":"unaccepted","metadata":{"attempt":1}}"#,
+        )
+        .unwrap_err();
+        assert!(format!("{error:#}").contains("fixture rejected"));
+        remember_impl(
+            &conn,
+            r#"{"kind":"preference","content":"latest","metadata":{"attempt":2}}"#,
+        )
+        .unwrap();
+        let items: Vec<MemoryItem> =
+            serde_json::from_str(&recall_impl(&conn, r#"{"text":"","limit":3}"#).unwrap()).unwrap();
+        assert_eq!(
+            items,
+            [
+                MemoryItem::new("preference", "latest", serde_json::json!({"attempt":2})),
+                MemoryItem::new("fact", "old", Value::Null)
+            ]
+        );
     }
 
     #[test]

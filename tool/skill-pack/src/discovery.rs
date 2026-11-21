@@ -13,9 +13,32 @@ const MAX_SKILLS: usize = 128;
 const MAX_DESCRIPTION_CHARACTERS: usize = 1024;
 
 #[derive(Clone, Copy)]
-pub(crate) enum BodyMode {
+pub(crate) enum BodyMode<'a> {
     Omit,
+    Selected(&'a str),
+    #[cfg(test)]
     Include,
+}
+
+impl BodyMode<'_> {
+    fn for_package(self, package_id: &str) -> Self {
+        match self {
+            Self::Selected(id) => id
+                .strip_prefix(package_id)
+                .and_then(|suffix| suffix.strip_prefix(':'))
+                .map_or(Self::Omit, Self::Selected),
+            mode => mode,
+        }
+    }
+
+    fn includes(self, name: &str) -> bool {
+        match self {
+            Self::Omit => false,
+            Self::Selected(selected) => selected == name,
+            #[cfg(test)]
+            Self::Include => true,
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -62,13 +85,14 @@ struct SkillFrontmatter {
 pub(crate) fn discover_skills(
     cwd: &Path,
     settings: &SkillRuntimeSettings,
-    body_mode: BodyMode,
+    body_mode: BodyMode<'_>,
 ) -> Result<(Vec<SkillDocument>, Vec<String>), String> {
     let project_root = workspace_root(cwd).join(".proteus/skills");
     let user_root = user_skills_root();
     let mut skills = discover_from_roots(user_root.as_deref(), &project_root, body_mode)?;
     let mut warnings = Vec::new();
     for package in &settings.packages {
+        let body_mode = body_mode.for_package(&package.id);
         let root = package.root.join("skills");
         let entries = match fs::read_dir(&root) {
             Ok(entries) => entries,
@@ -135,7 +159,7 @@ fn workspace_root(cwd: &Path) -> PathBuf {
 pub(crate) fn discover_from_roots(
     user_root: Option<&Path>,
     project_root: &Path,
-    body_mode: BodyMode,
+    body_mode: BodyMode<'_>,
 ) -> Result<Vec<SkillDocument>, String> {
     let mut skills = BTreeMap::new();
     if let Some(root) = user_root {
@@ -162,7 +186,7 @@ fn insert_root(
     root: &Path,
     source: SkillSource,
     replace_existing: bool,
-    body_mode: BodyMode,
+    body_mode: BodyMode<'_>,
 ) -> Result<(), String> {
     let entries = match fs::read_dir(root) {
         Ok(entries) => entries,
@@ -232,7 +256,7 @@ fn parse_skill_file(
     path: &Path,
     directory_name: &str,
     source: SkillSource,
-    body_mode: BodyMode,
+    body_mode: BodyMode<'_>,
 ) -> Result<SkillDocument, String> {
     let mut file = fs::File::open(path)
         .map_err(|error| format!("failed to open {}: {error}", path.display()))?;
@@ -282,11 +306,12 @@ fn parse_skill_file(
             path.display()
         ));
     }
-    // Metadata callers still read and validate the entire file on every request.
-    // Only the unused owned body is omitted; size/UTF-8 errors remain observable.
-    let body = match body_mode {
-        BodyMode::Omit => String::new(),
-        BodyMode::Include => body.trim().to_owned(),
+    // Every mode still reads and validates the entire file. Only the owned
+    // body can be omitted; size, UTF-8 and frontmatter errors stay observable.
+    let body = if body_mode.includes(&frontmatter.name) {
+        body.trim().to_owned()
+    } else {
+        String::new()
     };
     Ok(SkillDocument {
         id: frontmatter.name.clone(),
@@ -445,6 +470,50 @@ mod tests {
         let loaded = discover_from_roots(Some(user.path()), project.path(), BodyMode::Include)
             .expect("fresh bodies");
         assert_eq!(loaded[0].body, "changed body");
+    }
+
+    #[test]
+    fn selected_body_mode_keeps_project_override_without_retaining_other_bodies() {
+        let user = tempfile::tempdir().unwrap();
+        let project = tempfile::tempdir().unwrap();
+        write_skill(user.path(), "review", "user review", "user body");
+        write_skill(
+            project.path(),
+            "review",
+            "project review",
+            "\u{2003}Пример🙂 \n",
+        );
+        write_skill(
+            project.path(),
+            "testing",
+            "test",
+            &"another body ".repeat(4096),
+        );
+
+        let mut expected =
+            discover_from_roots(Some(user.path()), project.path(), BodyMode::Include).unwrap();
+        assert_eq!(expected[0].body, "Пример🙂");
+        expected[1].body.clear();
+        let selected = discover_from_roots(
+            Some(user.path()),
+            project.path(),
+            BodyMode::Selected("review"),
+        )
+        .unwrap();
+        assert_eq!(selected, expected);
+
+        let invalid = project.path().join("testing/SKILL.md");
+        fs::write(invalid, b"---\nname: testing\ndescription: test\n---\n\xff").unwrap();
+        let expected =
+            discover_from_roots(Some(user.path()), project.path(), BodyMode::Include).unwrap_err();
+        let actual = discover_from_roots(
+            Some(user.path()),
+            project.path(),
+            BodyMode::Selected("review"),
+        )
+        .unwrap_err();
+        assert!(actual.contains("not UTF-8"));
+        assert_eq!(actual, expected);
     }
 
     #[test]

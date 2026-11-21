@@ -3,6 +3,60 @@ use crate::search_queries::extract_search_queries;
 use std::process::Command;
 
 #[test]
+fn context_entrypoints_decode_config_before_calling_providers() {
+    use proteus_contracts::process_module::{ContextBuilderModuleHost, ProcessModuleResult};
+
+    #[derive(Default)]
+    struct FixtureHost(std::sync::Mutex<Vec<String>>);
+
+    impl ContextBuilderModuleHost for FixtureHost {
+        fn context_provider_json(
+            &self,
+            provider: String,
+            _request: String,
+        ) -> ProcessModuleResult<String> {
+            self.0.lock().unwrap().push(provider);
+            Ok("[]".to_owned())
+        }
+    }
+
+    let task = proteus_contracts::domain::AgentTask::new("inspect the note", "fixture-root".into());
+    let invocation = |config| {
+        serde_json::to_string(&ContextBuilderModuleInput {
+            task: task.clone(),
+            config,
+            attribution: proteus_contracts::contracts::ExecutionAttribution::detached(
+                proteus_contracts::domain::new_execution_id(),
+            ),
+        })
+        .unwrap()
+    };
+    for (builder, config) in [
+        (
+            &SimpleContextBuilderModule as &dyn ContextBuilderModule,
+            json!({"memory_provider":"fixture_provider","max_search_results":0}),
+        ),
+        (
+            &RepoAwareContextBuilderModule as &dyn ContextBuilderModule,
+            json!({"providers":["fixture_provider"]}),
+        ),
+        (
+            &CodexContextBuilderModule as &dyn ContextBuilderModule,
+            json!({"providers":["fixture_provider"]}),
+        ),
+    ] {
+        let mut host = FixtureHost::default();
+        let error = builder
+            .build_json(invocation(json!({"fixture_typo":true})), &mut host)
+            .unwrap_err();
+        assert!(error.message.contains("unknown field `fixture_typo`"));
+        assert!(host.0.lock().unwrap().is_empty());
+        builder.build_json(invocation(config), &mut host).unwrap();
+        assert_eq!(host.0.into_inner().unwrap(), ["fixture_provider"]);
+    }
+}
+
+#[test]
 fn context_configs_reject_unknown_keys_and_keep_known_limits() {
     for invalid in [
         serde_json::from_value::<SimpleContextConfig>(json!({"max_search_results": 0, "typo": 1}))
@@ -79,6 +133,16 @@ fn zero_search_limit_skips_host_search_in_simple_and_repo_aware() {
     )
     .unwrap();
     assert!(repo.is_empty());
+}
+
+#[test]
+fn exact_byte_budget_keeps_every_chunk_in_provider_order() {
+    let chunks = vec![
+        ContextChunk::new("low", "я").with_score(0.1),
+        ContextChunk::new("rules", "a").with_metadata(json!({"provider": "project_instructions"})),
+        ContextChunk::new("high", "").with_score(1.0),
+    ];
+    assert_eq!(apply_byte_budget(chunks.clone(), 3).unwrap(), chunks);
 }
 
 #[test]
@@ -331,4 +395,104 @@ fn extract_search_queries_splits_filenames_before_selecting_terms() {
         vec!["Cargo", "toml", "guide"]
     );
     assert_eq!(extract_search_queries(" lib.rs "), vec!["lib.rs"]);
+}
+
+#[test]
+fn provider_enrichment_preserves_metadata_precedence_and_non_object_handling() {
+    use proteus_contracts::{
+        contracts::ExecutionAttribution,
+        domain::{AgentTask, new_execution_id},
+        process_module::{ContextBuilderModuleHost, ProcessModuleResult},
+    };
+
+    struct FixtureHost;
+    impl ContextBuilderModuleHost for FixtureHost {
+        fn context_provider_json(
+            &self,
+            provider_id: String,
+            request: String,
+        ) -> ProcessModuleResult<String> {
+            let request: ProcessContextProviderInput = serde_json::from_str(&request).unwrap();
+            assert_eq!(request.provider_id, provider_id);
+            let object = json!({
+                "provider": "provided",
+                "reason": "from fixture",
+                "query": "stale",
+                "context_profile": "original",
+                "nested": {"examples": ["Пример🙂", null, 17]}
+            });
+            let chunks = match provider_id.as_str() {
+                "memory-fixture" => vec![
+                    ContextChunk::new("memory:fact", "object").with_metadata(object),
+                    ContextChunk::new("memory:preference", "array").with_metadata(json!([1, 2])),
+                ],
+                "search-fixture" => vec![
+                    ContextChunk::new("rg", "matched line")
+                        .with_path("src/fixture.rs".into())
+                        .with_metadata(object),
+                    ContextChunk::new("rg", "matched line")
+                        .with_path("src/fixture.rs".into())
+                        .with_metadata(json!({"should_be_deduped": true})),
+                ],
+                "external-fixture" => vec![
+                    ContextChunk::new("other", "scalar").with_metadata(json!("text")),
+                    ContextChunk::new("repo_aware:other", "external object").with_metadata(object),
+                ],
+                _ => panic!("unexpected fixture provider {provider_id}"),
+            };
+            Ok(serde_json::to_string(&chunks).unwrap())
+        }
+    }
+
+    let config = json!({
+        "providers": ["memory", "search", "external-fixture"],
+        "memory_provider": "memory-fixture",
+        "search_provider": "search-fixture",
+    });
+    let input = serde_json::to_string(&ContextBuilderModuleInput {
+        task: AgentTask::new("needle", PathBuf::from("fixture")),
+        attribution: ExecutionAttribution::detached(new_execution_id()),
+        config,
+    })
+    .unwrap();
+
+    let codex: ContextBundle = serde_json::from_str(
+        &CodexContextBuilderModule
+            .build_json(input.clone(), &mut FixtureHost)
+            .unwrap(),
+    )
+    .unwrap();
+    let repo: ContextBundle = serde_json::from_str(
+        &RepoAwareContextBuilderModule
+            .build_json(input, &mut FixtureHost)
+            .unwrap(),
+    )
+    .unwrap();
+    let expected = json!({
+        "provider": "provided",
+        "reason": "from fixture",
+        "query": "stale",
+        "context_profile": "codex_context",
+        "nested": {"examples": ["Пример🙂", null, 17]}
+    });
+    assert_eq!(codex.chunks.len(), 5);
+    assert_eq!(codex.chunks[0].metadata, expected);
+    assert_eq!(
+        codex.chunks[1].metadata,
+        json!({"provider": "memory", "reason": "memory recall", "context_profile": "codex_context"})
+    );
+    assert_eq!(codex.chunks[2].metadata["query"], "needle");
+    assert_eq!(codex.chunks[2].metadata["provider"], "provided");
+    assert_eq!(codex.chunks[2].metadata["nested"], expected["nested"]);
+    assert_eq!(
+        codex.chunks[3].metadata,
+        json!({"context_profile": "codex_context"})
+    );
+    assert_eq!(codex.chunks[4].source, "codex_context:other");
+    assert_eq!(codex.chunks[4].metadata, expected);
+    assert_eq!(repo.chunks.len(), 6);
+    assert_eq!(repo.chunks[1].metadata["context_profile"], "original");
+    assert_eq!(repo.chunks[3].metadata["query"], "needle");
+    assert_eq!(repo.chunks[4].metadata, "text");
+    assert_eq!(repo.chunks[5].metadata["context_profile"], "original");
 }

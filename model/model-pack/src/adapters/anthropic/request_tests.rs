@@ -51,6 +51,33 @@ fn canonical_prefix_preserves_legacy_system_and_cache_semantics() {
 }
 
 #[test]
+fn canonical_prefix_keeps_separators_for_empty_legacy_parts() {
+    for (legacy, expected) in [
+        (vec![""], "canonical"),
+        (vec!["", ""], "canonical\n\n\n\n"),
+        (
+            vec!["", " legacy 🦀 ", ""],
+            "canonical\n\n\n\n legacy 🦀 \n\n",
+        ),
+    ] {
+        let mut messages = legacy
+            .into_iter()
+            .map(|text| CanonicalMessage::text(MessageRole::System, text))
+            .collect::<Vec<_>>();
+        messages.push(CanonicalMessage::text(MessageRole::User, "question"));
+        let request = CanonicalModelRequest::new(ModelRef::new("anthropic", "fixture"), messages)
+            .with_instructions(vec![InstructionBlock::new(
+                InstructionKind::Developer,
+                "canonical",
+                100,
+            )]);
+        let body = to_anthropic_request(&request).unwrap();
+        assert_eq!(body["system"], expected);
+        assert_eq!(body["messages"].as_array().unwrap().len(), 1);
+    }
+}
+
+#[test]
 fn shaped_output_limits_keep_required_anthropic_max_tokens() {
     let adapter = AnthropicMessagesClient::from_provider_config(json!({})).unwrap();
     for (requested, expected) in [(None, 64_000), (Some(1_024), 1_024)] {

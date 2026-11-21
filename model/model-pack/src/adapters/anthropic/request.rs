@@ -143,7 +143,7 @@ fn anthropic_system_value(system: String, cache_control: Option<&Value>) -> Valu
 }
 
 fn joined_instructions(request: &CanonicalModelRequest) -> Option<String> {
-    let text = instruction_text(&request.instructions);
+    let mut text = instruction_text(&request.instructions);
     let systems = request
         .messages
         .iter()
@@ -155,12 +155,16 @@ fn joined_instructions(request: &CanonicalModelRequest) -> Option<String> {
         })
         .collect::<Vec<_>>()
         .join("\n\n");
-    let text = [text, systems]
-        .into_iter()
-        .filter(|text| !text.is_empty())
-        .collect::<Vec<_>>()
-        .join("\n\n");
-    if text.is_empty() { None } else { Some(text) }
+    // A single group is already the final system prefix.
+    if text.is_empty() {
+        return (!systems.is_empty()).then_some(systems);
+    }
+    if !systems.is_empty() {
+        text.reserve_exact(2 + systems.len());
+        text.push_str("\n\n");
+        text.push_str(&systems);
+    }
+    Some(text)
 }
 
 fn to_anthropic_tool(tool: &ToolSpec, cache_control: Option<&Value>) -> Result<Value> {

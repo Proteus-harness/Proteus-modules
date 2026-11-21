@@ -53,6 +53,11 @@ pub(crate) trait RecordSnapshot: Send {
         Ok(false)
     }
     fn next(&mut self) -> Result<Option<JournalRecord>>;
+    /// Full sequential replay may lend reusable raw-record storage. It is not
+    /// part of the snapshot identity and is not needed by every backend.
+    fn next_with_scratch(&mut self, _line: &mut Vec<u8>) -> Result<Option<JournalRecord>> {
+        self.next()
+    }
     fn fingerprint(&self) -> &str;
     /// Digest of bytes consumed by `next`. A complete validated replay seeds the writer head.
     fn read_hash(&self) -> ring::digest::Context;

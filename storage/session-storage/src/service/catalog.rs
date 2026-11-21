@@ -3,6 +3,8 @@ use super::*;
 use std::{fs::Metadata, time::UNIX_EPOCH};
 pub(super) mod durable;
 #[cfg(test)]
+mod replay_tests;
+#[cfg(test)]
 mod tests;
 
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -150,6 +152,14 @@ impl State {
         self.remember_summary(prefix.stamps.clone(), summary);
     }
 
+    pub(super) fn resident_catalog_paths(&self) -> HashSet<PathBuf> {
+        self.catalog
+            .iter()
+            .filter(|(key, _)| self.prefixes.contains_key(*key))
+            .filter_map(|(_, cached)| cached.summary.descriptor.local_path.clone())
+            .collect()
+    }
+
     fn cached_summary(
         &mut self,
         dir: &Path,
@@ -163,9 +173,11 @@ impl State {
                 .get(&descriptor.session)
                 .is_some_and(|prefix| prefix.valid_at(dir, stamps))
         {
-            let mut summary = cached.summary.clone();
-            summary.descriptor = descriptor.clone();
-            return Some(summary);
+            return Some(StorageSessionSummary {
+                descriptor: descriptor.clone(),
+                message_count: cached.summary.message_count,
+                preview: cached.summary.preview.clone(),
+            });
         }
         let (summary, prefix) = durable::load(dir, descriptor, stamps)?;
         self.remember_prefix(descriptor.session.clone(), prefix);
@@ -175,18 +187,33 @@ impl State {
 
     fn remember_summary(&mut self, stamps: SourceStamp, summary: StorageSessionSummary) {
         let session = summary.descriptor.session.clone();
-        self.catalog_order.retain(|old| old != &session);
-        while self.catalog.len() >= 1024 {
-            if let Some(old) = self.catalog_order.pop_front() {
-                self.catalog.remove(&old);
-            } else {
-                break;
-            }
-        }
-        self.catalog_order.push_back(session.clone());
-        self.catalog
-            .insert(session, CachedSummary { stamps, summary });
+        remember_catalog_entry(
+            &mut self.catalog,
+            &mut self.catalog_order,
+            session,
+            CachedSummary { stamps, summary },
+        );
     }
+}
+
+// Each resident has exactly one queue entry. Only a refresh can already
+// be in the queue, and only a new admission may evict a resident.
+pub(super) fn remember_catalog_entry<V>(
+    entries: &mut HashMap<SessionLocator, V>,
+    order: &mut VecDeque<SessionLocator>,
+    session: SessionLocator,
+    value: V,
+) {
+    if entries.insert(session.clone(), value).is_some() {
+        if order.back() == Some(&session) {
+            return;
+        }
+        order.retain(|old| old != &session);
+    } else if order.len() == MAX_CATALOG_ENTRIES {
+        let oldest = order.pop_front().expect("full catalog queue");
+        entries.remove(&oldest);
+    }
+    order.push_back(session);
 }
 
 // The readonly replay owns no service handles and publishes no state or files.
@@ -201,18 +228,29 @@ type Projection = (StorageSessionSummary, super::views::PrefixCache);
 impl CatalogRead {
     fn replay(&self, kind: BackendKind, dir: &Path) -> Result<Projection> {
         let session = self.descriptor.session.session_id;
-        let mut source = kind.backend().snapshot(dir, session)?;
-        let mut fold = Fold::default();
-        while let Some(record) = source.next()? {
-            fold.apply(session, &record)?;
-        }
+        let (fold, hint) = match kind {
+            BackendKind::Sqlite => {
+                Sqlite::replay_catalog(dir, session, |fold: &mut Fold, record| {
+                    fold.apply(session, record)
+                })?
+            }
+            BackendKind::Jsonl => {
+                let mut source = kind.backend().snapshot(dir, session)?;
+                let mut fold = Fold::default();
+                while let Some(record) = source.next()? {
+                    fold.apply(session, &record)?;
+                }
+                let hint = crate::backend::PrefixHint {
+                    extent: source.extent(),
+                    fingerprint: source.fingerprint().to_owned(),
+                };
+                (fold, hint)
+            }
+        };
         let prefix = super::views::PrefixCache {
             stamps: self.stamps.clone(),
             revision: fold.revision(),
-            hint: crate::backend::PrefixHint {
-                extent: source.extent(),
-                fingerprint: source.fingerprint().to_owned(),
-            },
+            hint,
             blob_digest: self.blobs.as_ref().map(durable::blob_stamp_digest),
         };
         Ok((

@@ -131,7 +131,7 @@ pub(crate) fn decode(
     let entry = match stored.payload {
         StoredPayload::Inline { value } => {
             ensure!(
-                serde_json::to_vec(&value)?.len() <= MAX_PAYLOAD_BYTES,
+                encoded_bytes(&value)? <= MAX_PAYLOAD_BYTES,
                 "inline payload exceeds maximum"
             );
             JournalEntry::from_stored_kind_and_payload(stored.kind, value)?
@@ -201,4 +201,21 @@ pub(crate) fn encoded_bytes(value: &impl serde::Serialize) -> Result<usize> {
     let mut count = Counter(0);
     serde_json::to_writer(&mut count, value)?;
     Ok(count.0)
+}
+
+#[cfg(test)]
+#[test]
+fn encoded_bytes_matches_compact_json_after_deserialization() {
+    for raw in [
+        r#" { "name" : "\u3053\u3093", "a": null, "name" : "é" } "#,
+        r#"[1e1, -0.0, 1e-300, 18446744073709551615]"#,
+        r#""\u0000\t\r\b\f\n\"\\\/😺""#,
+        r#"{"empty":{},"array":[[],true,null,false]}"#,
+    ] {
+        let value: serde_json::Value = serde_json::from_str(raw).unwrap();
+        assert_eq!(
+            encoded_bytes(&value).unwrap(),
+            serde_json::to_vec(&value).unwrap().len()
+        );
+    }
 }

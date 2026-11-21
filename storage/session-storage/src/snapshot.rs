@@ -12,12 +12,22 @@ pub(crate) struct Fold {
 }
 impl Fold {
     pub fn apply(&mut self, id: SessionId, record: &JournalRecord) -> Result<()> {
+        self.apply_projected::<true>(id, record)
+    }
+
+    fn apply_projected<const MODEL_CONTEXT: bool>(
+        &mut self,
+        id: SessionId,
+        record: &JournalRecord,
+    ) -> Result<()> {
         let mut next = self
             .session_seq
             .checked_add(1)
             .ok_or_else(|| anyhow::anyhow!("journal sequence overflow"))?;
         self.validation.apply_sequenced(id, record, &mut next)?;
-        self.model_context.apply(record);
+        if MODEL_CONTEXT {
+            self.model_context.apply(record);
+        }
         self.usage.apply(record);
         self.session_seq = record.session_seq;
         Ok(())
@@ -142,9 +152,19 @@ impl SnapshotState {
         Ok(state.revision() == prefix.revision)
     }
     pub fn fold(&mut self) -> Result<Fold> {
-        Ok(self.fold_with_terminal(false)?.0)
+        Ok(self.fold_with_terminal::<true>(false)?.0)
     }
-    fn fold_with_terminal(&mut self, capture: bool) -> Result<(Fold, Option<JournalRecord>)> {
+
+    /// Usage has no dependency on the separate model-context projection.
+    /// Both paths still validate the same complete fixed canonical prefix.
+    pub fn fold_usage(&mut self) -> Result<UsageProjection> {
+        Ok(self.fold_with_terminal::<false>(false)?.0.usage)
+    }
+
+    fn fold_with_terminal<const MODEL_CONTEXT: bool>(
+        &mut self,
+        capture: bool,
+    ) -> Result<(Fold, Option<JournalRecord>)> {
         self.reset_page_cursor();
         self.verified = false;
         let version = self.source.source_version()?;
@@ -152,7 +172,7 @@ impl SnapshotState {
         let mut state = Fold::default();
         let mut terminal = None;
         while let Some(record) = self.source.next()? {
-            state.apply(self.identity.session.session_id, &record)?;
+            state.apply_projected::<MODEL_CONTEXT>(self.identity.session.session_id, &record)?;
             if capture && record.session_seq == self.identity.revision.session_seq {
                 terminal = Some(record);
             }
@@ -181,7 +201,7 @@ impl SnapshotState {
             let capture = limit > 0
                 && before.is_some()
                 && self.identity.revision.session_seq.checked_sub(1) == Some(after);
-            terminal = self.fold_with_terminal(capture)?.1;
+            terminal = self.fold_with_terminal::<true>(capture)?.1;
         }
         // Failed pages leave no reusable cursor. Cover repositioning as well
         // as streaming with the same source-version check.
@@ -319,30 +339,35 @@ impl SnapshotState {
 
 pub(crate) fn preview(messages: &[CanonicalMessage]) -> Option<String> {
     use proteus_contracts::model_standard::{ContentPart, MessageRole};
+    fn excerpt(text: &str) -> Option<String> {
+        let text = text.trim();
+        if text.is_empty() {
+            return None;
+        }
+        const LIMIT: usize = 160;
+        if text.len() > LIMIT
+            && let Some((end, _)) = text.char_indices().nth(LIMIT)
+        {
+            let mut short = String::with_capacity(end + 3);
+            short.push_str(&text[..end]);
+            short.push_str("...");
+            return Some(short);
+        }
+        Some(text.to_owned())
+    }
+
     let text = |message: &CanonicalMessage| {
         message.parts.iter().find_map(|part| match &part.payload {
             ContentPart::Text { text }
             | ContentPart::ReasoningSummary { text }
-            | ContentPart::Reasoning { text, .. } => {
-                let text = text.trim();
-                (!text.is_empty()).then(|| text.to_owned())
-            }
-            ContentPart::ToolResult { result } => {
-                let text = result.text_or_status();
-                let text = text.trim();
-                (!text.is_empty()).then(|| text.to_owned())
-            }
+            | ContentPart::Reasoning { text, .. } => excerpt(text),
+            ContentPart::ToolResult { result } => excerpt(&result.text_or_status()),
             _ => None,
         })
     };
-    let selected = messages
+    messages
         .iter()
         .filter(|m| m.role == MessageRole::User)
         .find_map(text)
-        .or_else(|| messages.iter().find_map(text))?;
-    Some(if selected.chars().count() <= 160 {
-        selected
-    } else {
-        format!("{}...", selected.chars().take(160).collect::<String>())
-    })
+        .or_else(|| messages.iter().find_map(text))
 }

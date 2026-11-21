@@ -161,7 +161,7 @@ fn invoke_skill(call: &ToolCallDto, cwd: &Path, settings: &SkillRuntimeSettings)
         Ok(args) => args,
         Err(error) => return tool_error(&call.id, format!("invalid skill arguments: {error}")),
     };
-    let skills = match discover_skills(cwd, settings, BodyMode::Include) {
+    let skills = match discover_skills(cwd, settings, BodyMode::Selected(&args.name)) {
         Ok((skills, _)) => skills,
         Err(error) => return tool_error(&call.id, error),
     };
@@ -174,10 +174,10 @@ fn invoke_skill(call: &ToolCallDto, cwd: &Path, settings: &SkillRuntimeSettings)
             format!("skill '{}' is not available in this workspace", args.name),
         );
     };
-    json!({
+    let mut result = json!({
         "call_id": call.id,
         "ok": true,
-        "output": skill.body,
+        "output": null,
         "content": [],
         "error": null,
         "metadata": {
@@ -187,7 +187,10 @@ fn invoke_skill(call: &ToolCallDto, cwd: &Path, settings: &SkillRuntimeSettings)
             "path": skill.path,
             "source": skill.source.as_str()
         }
-    })
+    });
+    // Preserve the existing wire slot while moving the already-owned body.
+    *result.get_mut("output").expect("skill result output slot") = Value::String(skill.body);
+    result
 }
 
 fn tool_error(call_id: &str, error: String) -> Value {
@@ -206,11 +209,16 @@ fn available_skills_chunk(skills: &[SkillDocument]) -> ContextChunk {
     for skill in skills {
         content.push_str("<skill>\n");
         content.push_str("<name>");
-        content.push_str(&escape_xml(&skill.id));
+        push_xml_escaped(&mut content, &skill.id);
         content.push_str("</name>\n<description>");
-        content.push_str(&escape_xml(&normalize_whitespace(&skill.description)));
+        for (index, word) in skill.description.split_whitespace().enumerate() {
+            if index != 0 {
+                content.push(' ');
+            }
+            push_xml_escaped(&mut content, word);
+        }
         content.push_str("</description>\n<location>");
-        content.push_str(&escape_xml(&skill.path.display().to_string()));
+        push_xml_escaped(&mut content, &skill.path.display().to_string());
         content.push_str("</location>\n</skill>\n");
     }
     content.push_str("</available_skills>");
@@ -223,17 +231,22 @@ fn available_skills_chunk(skills: &[SkillDocument]) -> ContextChunk {
         }))
 }
 
-fn normalize_whitespace(value: &str) -> String {
-    value.split_whitespace().collect::<Vec<_>>().join(" ")
-}
-
-fn escape_xml(value: &str) -> String {
-    value
-        .replace('&', "&amp;")
-        .replace('<', "&lt;")
-        .replace('>', "&gt;")
-        .replace('"', "&quot;")
-        .replace('\'', "&apos;")
+fn push_xml_escaped(output: &mut String, value: &str) {
+    let mut start = 0;
+    for (index, character) in value.char_indices() {
+        let replacement = match character {
+            '&' => "&amp;",
+            '<' => "&lt;",
+            '>' => "&gt;",
+            '"' => "&quot;",
+            '\'' => "&apos;",
+            _ => continue,
+        };
+        output.push_str(&value[start..index]);
+        output.push_str(replacement);
+        start = index + character.len_utf8();
+    }
+    output.push_str(&value[start..]);
 }
 
 pub fn register_modules(registry: &mut dyn ModuleRegistry) -> Result<(), ProcessModuleError> {
@@ -252,6 +265,32 @@ mod tests {
     use super::*;
 
     #[test]
+    fn skill_listing_preserves_whitespace_and_all_xml_entities() {
+        let skill = SkillDocument {
+            id: "review".into(),
+            enabled: true,
+            name: "review".to_owned(),
+            description: "\tCheck  <diff>\n&  \"тесты\"\u{2003}'🦀' &amp;\r\n".to_owned(),
+            body: "Body".to_owned(),
+            path: "fixture/.proteus/skills/review & notes/SKILL.md".into(),
+            source: discovery::SkillSource::Project,
+        };
+
+        let chunk = available_skills_chunk(&[skill]);
+
+        assert_eq!(
+            chunk.content,
+            concat!(
+                "<available_skills>\n<skill>\n<name>review</name>\n",
+                "<description>Check &lt;diff&gt; &amp; &quot;тесты&quot; &apos;🦀&apos; &amp;amp;</description>\n",
+                "<location>fixture/.proteus/skills/review &amp; notes/SKILL.md</location>\n",
+                "</skill>\n</available_skills>",
+            )
+        );
+        assert_eq!(chunk.metadata["skill_count"], 1);
+    }
+
+    #[test]
     fn available_skills_context_escapes_frontmatter_text() {
         let skill = SkillDocument {
             id: "review".into(),
@@ -268,6 +307,41 @@ mod tests {
         assert!(chunk.content.starts_with("<available_skills>\n"));
         assert!(chunk.content.contains("Check &lt;diff&gt; &amp; tests"));
         assert_eq!(chunk.metadata["skill_count"], 1);
+    }
+
+    #[test]
+    fn loaded_skill_reply_keeps_the_original_wire_shape() {
+        let workspace = tempfile::tempdir().unwrap();
+        fs::create_dir(workspace.path().join(".git")).unwrap();
+        let file = workspace.path().join(".proteus/skills/review/SKILL.md");
+        fs::create_dir_all(file.parent().unwrap()).unwrap();
+        let body = "Inspect \"заметка\".\nKeep 🦀\tspaces.";
+        fs::write(
+            &file,
+            format!("---\nname: review\ndescription: Review a note\n---\n\n{body}\n"),
+        )
+        .unwrap();
+        let call = ToolCallDto {
+            id: "call-ю".into(),
+            name: TOOL_NAME.into(),
+            args: json!({"name":"review"}),
+        };
+        let expected = json!({
+            "call_id": "call-ю",
+            "ok": true,
+            "output": body,
+            "content": [],
+            "error": null,
+            "metadata": {
+                "tool": TOOL_NAME,
+                "name": "review",
+                "description": "Review a note",
+                "path": file.canonicalize().unwrap(),
+                "source": "project"
+            }
+        });
+        let response = invoke_skill(&call, workspace.path(), &Default::default());
+        assert_eq!(response.to_string(), expected.to_string());
     }
 
     #[test]
@@ -292,6 +366,51 @@ mod tests {
         assert_eq!(result["ok"], true);
         assert_eq!(result["output"], "Inspect the diff.");
         assert_eq!(result["metadata"]["source"], "project");
+    }
+
+    #[test]
+    fn skill_tool_selects_body_with_the_exact_package_prefix() {
+        use proteus_contracts::domain::SkillPackageRoot;
+
+        let workspace = tempfile::tempdir().unwrap();
+        let sibling = tempfile::tempdir().unwrap();
+        let package = tempfile::tempdir().unwrap();
+        for (root, body) in [
+            (package.path(), "Package body 🙂"),
+            (sibling.path(), "Wrong body"),
+        ] {
+            let skill = root.join("skills/review");
+            fs::create_dir_all(&skill).unwrap();
+            fs::write(
+                skill.join("SKILL.md"),
+                format!("---\nname: review\ndescription: Review\n---\n\n  {body}  \n"),
+            )
+            .unwrap();
+        }
+        let settings = SkillRuntimeSettings {
+            packages: vec![
+                SkillPackageRoot {
+                    id: "kit".into(),
+                    root: sibling.path().canonicalize().unwrap(),
+                    enabled: true,
+                },
+                SkillPackageRoot {
+                    id: "kit:extra".into(),
+                    root: package.path().canonicalize().unwrap(),
+                    enabled: true,
+                },
+            ],
+            ..Default::default()
+        };
+        let call = ToolCallDto {
+            id: "call-package".into(),
+            name: TOOL_NAME.into(),
+            args: json!({"name":"kit:extra:review"}),
+        };
+        let result = invoke_skill(&call, workspace.path(), &settings);
+        assert_eq!(result["ok"], true, "{result}");
+        assert_eq!(result["output"], "Package body 🙂");
+        assert_eq!(result["metadata"]["source"], "plugin");
     }
 
     #[test]

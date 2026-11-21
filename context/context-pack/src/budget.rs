@@ -8,6 +8,17 @@ pub(super) fn apply_byte_budget(
     chunks: Vec<ContextChunk>,
     max_context_bytes: usize,
 ) -> anyhow::Result<Vec<ContextChunk>> {
+    // Ranking only affects admission when a whole chunk must be dropped.
+    if chunks
+        .iter()
+        .try_fold(max_context_bytes, |remaining, chunk| {
+            remaining.checked_sub(chunk.content.len())
+        })
+        .is_some()
+    {
+        return Ok(chunks);
+    }
+
     let mut selected = Vec::new();
     let mut ranked = Vec::new();
     let mut used = 0usize;

@@ -121,6 +121,24 @@ fn matching_uses_exact_before_whitespace_and_unicode_passes() {
 }
 
 #[test]
+fn unicode_fallback_compares_whole_lines_and_every_line_in_the_block() {
+    let dir = tempfile::tempdir().unwrap();
+    let file = dir.path().join("f");
+    let prefixes = "α—\nα—βx\nα—β\na b extra\n";
+    fs::write(&file, format!("{prefixes}  α—β  \na\u{a0}b\n")).unwrap();
+
+    apply_patch(
+        &patch("*** Update File: f\n@@\n-α-β\n-a\u{2009}b\n+updated"),
+        dir.path(),
+    )
+    .unwrap();
+    assert_eq!(
+        fs::read_to_string(file).unwrap(),
+        format!("{prefixes}updated\n")
+    );
+}
+
+#[test]
 fn bare_empty_context_and_missing_final_newline_follow_pinned_default() {
     let dir = tempfile::tempdir().unwrap();
     fs::write(dir.path().join("f"), "one\n\ntwo").unwrap();
@@ -147,6 +165,35 @@ fn pure_insertions_and_multiple_chunks_use_original_indices() {
     assert_eq!(
         fs::read_to_string(dir.path().join("f")).unwrap(),
         "a\nB\nextra\nC\ntail\n"
+    );
+}
+
+#[test]
+fn eof_deletion_can_shorten_an_earlier_replacement_range() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("f");
+    fs::write(&path, "keep\nfirst\nlast\n").unwrap();
+    apply_patch(
+        &patch("*** Update File: f\n@@\n-first\n-last\n+new\n@@\n-last\n*** End of File"),
+        dir.path(),
+    )
+    .unwrap();
+    assert_eq!(fs::read_to_string(path).unwrap(), "keep\nnew\n");
+}
+
+#[test]
+fn equal_position_insertions_preserve_patch_order_before_final_blank_line() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("f");
+    fs::write(&path, "keep\n\n").unwrap();
+    apply_patch(
+        &patch("*** Update File: f\n@@\n+first\n+second\n@@\n+third\n+fourth"),
+        dir.path(),
+    )
+    .unwrap();
+    assert_eq!(
+        fs::read_to_string(path).unwrap(),
+        "keep\nfirst\nsecond\nthird\nfourth\n"
     );
 }
 

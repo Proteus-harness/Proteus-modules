@@ -567,3 +567,21 @@ fn fresh_usage_takes_precedence_over_an_older_restored_hint_for_checkpoint_histo
         Some(214)
     );
 }
+
+#[test]
+fn first_sampling_keeps_messages_without_running_preparation() {
+    let input = workflow_input("continue the note");
+    let host = FakeHost::default();
+    let messages = [
+        CanonicalMessage::text(MessageRole::Assistant, "previous\nзаметка 🦀"),
+        input.history[0].clone(),
+    ];
+    let prepared = crate::host::first_sampling_request(&input, &host, &messages, Some(4200))
+        .expect("first sampling request");
+    assert_eq!(prepared.request.messages, messages);
+    assert_eq!(prepared.request.metadata["compaction_trigger_tokens"], 4200);
+    assert!(prepared.compaction.is_none());
+    assert!(prepared.preparation_target.is_none());
+    assert!(host.compactions.lock().unwrap().is_empty());
+    assert_eq!(host.tool_selections.lock().unwrap().len(), 1);
+}

@@ -131,16 +131,9 @@ impl ToolModule for FindFilesTool {
                     format!("failed to run ripgrep files search: {e} (is 'rg' installed?)"),
                 );
             }
-        }
-        .into_iter()
-        .map(normalize_rg_file_path)
-        .collect::<Vec<_>>();
-        let match_count = lines.len();
-        let output = if lines.is_empty() {
-            "(no matches)".to_owned()
-        } else {
-            lines.join("\n")
         };
+        let match_count = lines.len();
+        let output = render_rg_file_paths(lines);
         ok_result(
             &call.id,
             &call.name,
@@ -157,6 +150,41 @@ impl ToolModule for FindFilesTool {
     }
 }
 
-fn normalize_rg_file_path(path: String) -> String {
-    path.strip_prefix("./").unwrap_or(&path).to_owned()
+fn render_rg_file_paths(paths: Vec<String>) -> String {
+    if paths.is_empty() {
+        return "(no matches)".to_owned();
+    }
+
+    let path_bytes = paths
+        .iter()
+        .map(|path| normalize_rg_file_path(path).len())
+        .sum::<usize>();
+    let mut output = String::with_capacity(path_bytes + paths.len() - 1);
+    for (index, path) in paths.into_iter().enumerate() {
+        if index != 0 {
+            output.push('\n');
+        }
+        output.push_str(normalize_rg_file_path(&path));
+    }
+    output
+}
+
+fn normalize_rg_file_path(path: &str) -> &str {
+    path.strip_prefix("./").unwrap_or(path)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn rendering_preserves_order_and_strips_exactly_one_leading_prefix() {
+        let paths = [".//abs", "./путь.txt", "a/./b", "././a", "./", "", "tail"];
+        assert_eq!(
+            render_rg_file_paths(paths.map(str::to_owned).into()),
+            "/abs\nпуть.txt\na/./b\n./a\n\n\ntail"
+        );
+        assert_eq!(render_rg_file_paths(vec!["./".to_owned()]), "");
+        assert_eq!(render_rg_file_paths(Vec::new()), "(no matches)");
+    }
 }

@@ -255,6 +255,7 @@ fn apply_hunks(original: &str, hunks: &[Hunk], no_newline_at_eof: bool) -> Resul
     } else {
         "\n"
     };
+    // Keep views of the original and hunk lines until rendering the final text.
     let (mut lines, mut trailing_newline) = split_lines(original, line_ending);
     let mut cursor = 0;
     for hunk in hunks {
@@ -263,11 +264,11 @@ fn apply_hunks(original: &str, hunks: &[Hunk], no_newline_at_eof: bool) -> Resul
         for line in &hunk.lines {
             match line {
                 HunkLine::Context(text) => {
-                    old_lines.push(text.clone());
-                    new_lines.push(text.clone());
+                    old_lines.push(text.as_str());
+                    new_lines.push(text.as_str());
                 }
-                HunkLine::Remove(text) => old_lines.push(text.clone()),
-                HunkLine::Add(text) => new_lines.push(text.clone()),
+                HunkLine::Remove(text) => old_lines.push(text.as_str()),
+                HunkLine::Add(text) => new_lines.push(text.as_str()),
             }
         }
         if old_lines.is_empty() {
@@ -286,19 +287,17 @@ fn apply_hunks(original: &str, hunks: &[Hunk], no_newline_at_eof: bool) -> Resul
     Ok(render_text(&lines, trailing_newline, line_ending))
 }
 
-fn split_lines(text: &str, line_ending: &str) -> (Vec<String>, bool) {
+fn split_lines<'a>(text: &'a str, line_ending: &str) -> (Vec<&'a str>, bool) {
     let trailing_newline = text.ends_with(line_ending);
     let lines = if text.is_empty() {
         Vec::new()
     } else {
-        text.split_terminator(line_ending)
-            .map(str::to_owned)
-            .collect()
+        text.split_terminator(line_ending).collect()
     };
     (lines, trailing_newline)
 }
 
-fn find_subsequence(lines: &[String], needle: &[String], start: usize) -> Option<usize> {
+fn find_subsequence(lines: &[&str], needle: &[&str], start: usize) -> Option<usize> {
     if needle.is_empty() {
         return Some(start.min(lines.len()));
     }
@@ -309,7 +308,11 @@ fn find_subsequence(lines: &[String], needle: &[String], start: usize) -> Option
     (start..=last_start).find(|&index| lines[index..index + needle.len()] == needle[..])
 }
 
-fn render_text(lines: &[String], trailing_newline: bool, line_ending: &str) -> String {
+fn render_text(
+    lines: &[impl std::borrow::Borrow<str>],
+    trailing_newline: bool,
+    line_ending: &str,
+) -> String {
     if lines.is_empty() {
         return String::new();
     }

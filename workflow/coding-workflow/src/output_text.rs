@@ -29,14 +29,35 @@ pub(crate) fn output_text(message: &CanonicalMessage, messages: &[CanonicalMessa
     let Some(result) = latest_tool_result(messages) else {
         return text;
     };
-    let summary = tool_result_summary(result);
-    if summary.is_empty() {
+    let output = result.output.trim();
+    let error = result.error.as_deref().unwrap_or_default().trim();
+    if output.is_empty() && error.is_empty() {
         return text;
     }
-    format!(
-        "Model returned an empty final response after the last tool call.\n\nLast tool result:\n{}",
-        truncate_chars(&summary, 2_000)
-    )
+
+    // The separator counts toward the same scalar limit as the tool text.
+    // Borrow both fields so an arbitrarily large result is never joined first.
+    let separator = if output.is_empty() || error.is_empty() {
+        ""
+    } else {
+        "\n"
+    };
+    let mut fallback = String::from(
+        "Model returned an empty final response after the last tool call.\n\nLast tool result:\n",
+    );
+    let mut remaining = 2_000;
+    for field in [output, separator, error] {
+        if field.len() > remaining
+            && let Some((end, _)) = field.char_indices().nth(remaining)
+        {
+            fallback.push_str(&field[..end]);
+            fallback.push_str("\n[truncated]");
+            break;
+        }
+        fallback.push_str(field);
+        remaining -= field.chars().count();
+    }
+    fallback
 }
 
 fn latest_tool_result(messages: &[CanonicalMessage]) -> Option<&ToolResult> {
@@ -50,30 +71,4 @@ fn latest_tool_result(messages: &[CanonicalMessage]) -> Option<&ToolResult> {
                 _ => None,
             })
     })
-}
-
-fn tool_result_summary(result: &ToolResult) -> String {
-    let mut parts = Vec::new();
-    let output = result.output.trim();
-    if !output.is_empty() {
-        parts.push(output);
-    }
-    if let Some(error) = result
-        .error
-        .as_deref()
-        .map(str::trim)
-        .filter(|error| !error.is_empty())
-    {
-        parts.push(error);
-    }
-    parts.join("\n")
-}
-
-fn truncate_chars(text: &str, limit: usize) -> String {
-    let mut chars = text.chars();
-    let mut truncated = chars.by_ref().take(limit).collect::<String>();
-    if chars.next().is_some() {
-        truncated.push_str("\n[truncated]");
-    }
-    truncated
 }

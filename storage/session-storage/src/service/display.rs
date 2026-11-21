@@ -26,8 +26,13 @@ impl State {
             .filter_map(|snapshot| snapshot.display.as_ref())
             .map(|display| display.bytes)
             .sum();
-        let mut display = DisplayWriter::new(MAX_STAGING_BYTES.saturating_sub(staged));
-        while let Some(record) = source.next()? {
+        let budget = MAX_STAGING_BYTES.saturating_sub(staged);
+        let mut display = match self.kind {
+            BackendKind::Jsonl => DisplayWriter::for_jsonl(budget, source.extent()),
+            BackendKind::Sqlite => DisplayWriter::new(budget),
+        };
+        let mut line = Vec::new();
+        while let Some(record) = source.next_with_scratch(&mut line)? {
             state.apply(session.session_id, &record)?;
             if cut == Some(record.session_seq) {
                 source.remember_page_boundary(record.session_seq);
@@ -40,6 +45,7 @@ impl State {
                 display = None;
             }
         }
+        drop(line);
         if source.source_version()? != version {
             source.verify_fixed_prefix()?;
         }

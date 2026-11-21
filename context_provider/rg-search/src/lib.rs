@@ -79,22 +79,22 @@ fn search_roots(query: &SearchQuery) -> Vec<PathBuf> {
                 root.to_path_buf()
             })
         })
-        .collect::<std::collections::BTreeSet<_>>()
-        .into_iter()
-        .collect::<Vec<_>>();
-    if roots.is_empty() || roots.iter().any(|root| root == Path::new(".")) {
-        vec![PathBuf::from(".")]
-    } else {
-        roots
-            .iter()
-            .filter(|root| {
-                !roots
-                    .iter()
-                    .any(|parent| parent != *root && root.starts_with(parent))
-            })
-            .cloned()
-            .collect()
+        .collect::<std::collections::BTreeSet<_>>();
+    if roots.is_empty() || roots.contains(Path::new(".")) {
+        return vec![PathBuf::from(".")];
     }
+    // Paths sort by component: all descendants of a retained root precede
+    // the next sibling. Only the last retained root can cover this candidate.
+    let mut selected = Vec::new();
+    for root in roots {
+        if selected
+            .last()
+            .is_none_or(|parent| !root.starts_with(parent))
+        {
+            selected.push(root);
+        }
+    }
+    selected
 }
 
 fn safe_relative_root(prefix: &str) -> Option<PathBuf> {

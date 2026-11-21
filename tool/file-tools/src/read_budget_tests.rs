@@ -106,3 +106,27 @@ fn full_read_rechecks_the_actual_bytes_instead_of_trusting_old_metadata() {
     std::fs::write(&path, vec![b'x'; MAX_READ_FILE_BYTES as usize + 1]).unwrap();
     assert!(read_full(&path).unwrap_err().contains("budget"));
 }
+
+#[test]
+fn numbered_ranges_count_wider_prefixes_before_appending() {
+    let budget = MAX_READ_FILE_BYTES as usize;
+    let head = (1..=8).map(|n| format!("{n}\tx\n")).collect::<String>();
+    // At line 10, the separator and prefix cost four bytes, not three.
+    for spare in [4, 5] {
+        let filler = "a".repeat(budget - spare - head.len() - "9\t".len());
+        let source = format!("{}{filler}\nyZ\n", "x\n".repeat(8));
+        let (output, metadata) = render_range(
+            Cursor::new(source),
+            Path::new("number-width"),
+            ReadOptions {
+                line_numbers: true,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        let suffix = if spare == 5 { "\n10\ty" } else { "" };
+        assert_eq!(output, format!("{head}9\t{filler}{suffix}"));
+        assert_eq!(metadata["returned_lines"], if spare == 5 { 10 } else { 9 });
+        assert_eq!(metadata["truncation_reason"], "output_budget");
+    }
+}

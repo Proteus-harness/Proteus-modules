@@ -53,6 +53,26 @@ fn chunk_file(hash: &str) -> Result<PathBuf> {
     Ok(Path::new("shared").join(format!("{hash}.bin")))
 }
 
+/// Gear shifts the previous state left one bit for every byte. After 64
+/// updates none of the earlier state survives. Seed only that suffix before
+/// the first eligible cut; boundaries and persisted chunk hashes stay identical.
+fn chunk_len(bytes: &[u8]) -> usize {
+    let end = bytes.len().min(MAX_CHUNK);
+    if end <= MIN_CHUNK {
+        return end;
+    }
+    let start = MIN_CHUNK - u64::BITS as usize;
+    let mut rolling = 0_u64;
+    for (offset, byte) in bytes[start..end].iter().enumerate() {
+        rolling = rolling.wrapping_shl(1).wrapping_add(GEAR[*byte as usize]);
+        let length = start + offset + 1;
+        if length >= MIN_CHUNK && rolling & 0x7fff == 0 {
+            return length;
+        }
+    }
+    end
+}
+
 /// Write all shared chunks before publishing the returned manifest. Journal
 /// references continue to identify the hash and size of the original bytes.
 pub fn pack(session: &Path, bytes: &[u8]) -> Result<Vec<u8>> {
@@ -61,19 +81,11 @@ pub fn pack(session: &Path, bytes: &[u8]) -> Result<Vec<u8>> {
         return Ok(bytes.to_vec());
     }
     let mut chunks = Vec::new();
-    let mut start = 0;
-    let mut rolling = 0_u64;
-    for (index, byte) in bytes.iter().enumerate() {
-        rolling = rolling.wrapping_shl(1).wrapping_add(GEAR[*byte as usize]);
-        let length = index + 1 - start;
-        if length >= MIN_CHUNK && (rolling & 0x7fff == 0 || length == MAX_CHUNK) {
-            chunks.push(store_chunk(session, &bytes[start..=index])?);
-            start = index + 1;
-            rolling = 0;
-        }
-    }
-    if start < bytes.len() {
-        chunks.push(store_chunk(session, &bytes[start..])?);
+    let mut remaining = bytes;
+    while !remaining.is_empty() {
+        let (chunk, rest) = remaining.split_at(chunk_len(remaining));
+        chunks.push(store_chunk(session, chunk)?);
+        remaining = rest;
     }
     let manifest = Manifest {
         bytes: bytes.len(),
@@ -206,6 +218,35 @@ mod tests {
                 b'a' + (state % 26) as u8
             })
             .collect()
+    }
+
+    #[test]
+    fn chunk_boundaries_match_the_persisted_layout() {
+        // All zeroes have no natural cut. The two final bytes below make
+        // the original Gear accumulator reach the cut mask exactly at MIN.
+        let mut fixed = vec![0; MAX_CHUNK + 1];
+        for len in [1, MIN_CHUNK - 1, MIN_CHUNK, MIN_CHUNK + 1, MAX_CHUNK + 1] {
+            assert_eq!(chunk_len(&fixed[..len]), len.min(MAX_CHUNK));
+        }
+        fixed[MIN_CHUNK - 2..MIN_CHUNK].copy_from_slice(&[227, 180]);
+        assert_eq!(chunk_len(&fixed), MIN_CHUNK);
+        // Golden lengths from the original full scan, including a forced
+        // maximum, natural cuts after resets, and the final short remainder.
+        let mut state = 7_u64;
+        let bytes: Vec<_> = (0..4 * MAX_CHUNK + 73)
+            .map(|_| {
+                state ^= state << 13;
+                state ^= state >> 7;
+                state ^= state << 17;
+                state as u8
+            })
+            .collect();
+        let mut remaining = &bytes[..];
+        for expected in [33240, 65536, 19642, 26104, 25984, 50094, 41617] {
+            assert_eq!(chunk_len(remaining), expected);
+            remaining = &remaining[expected..];
+        }
+        assert!(remaining.is_empty());
     }
 
     #[test]

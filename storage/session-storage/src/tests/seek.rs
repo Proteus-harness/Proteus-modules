@@ -313,3 +313,48 @@ fn jsonl_terminal_fold_discards_its_capture_on_append_during_validation() {
         "changed source uses the ordinary second scan"
     );
 }
+
+#[test]
+fn jsonl_buffer_boundaries_preserve_records_and_prefix_hashes() {
+    use crate::backend::JournalBackend;
+
+    let mut f = Fixture::new(BackendKind::Jsonl);
+    // The large lines are inline but cross the underlying 64 KiB buffer.
+    // Small records before and after must survive both forward reads and rewinds.
+    let values = [
+        "first small".to_owned(),
+        "c".repeat(120_000),
+        "middle small".to_owned(),
+        "д".repeat(40_000),
+        "final small".to_owned(),
+    ];
+    let entries: Vec<_> = values
+        .iter()
+        .map(|v| f.append(vec![text(v)]).entry)
+        .collect();
+    let raw = std::fs::read(f.descriptor.record_location.as_ref().unwrap()).unwrap();
+    let whole_hash = crate::io::sha256_hex(&raw);
+    let mut source = crate::backend::Jsonl::new()
+        .snapshot(
+            f.descriptor.local_path.as_ref().unwrap(),
+            f.descriptor.session.session_id,
+        )
+        .unwrap();
+    for _ in 0..2 {
+        let mut consumed = 0;
+        for (i, line) in raw.split_inclusive(|&byte| byte == b'\n').enumerate() {
+            let record = source.next().unwrap().unwrap();
+            assert_eq!(record.session_seq, i as u64 + 1);
+            assert_eq!(record.entry, entries[i]);
+            consumed += line.len();
+            assert_eq!(
+                source.consumed_fingerprint(),
+                crate::io::sha256_hex(&raw[..consumed])
+            );
+        }
+        assert_eq!(consumed, raw.len());
+        assert!(source.next().unwrap().is_none());
+        assert_eq!(source.fingerprint(), whole_hash);
+        source.reset().unwrap();
+    }
+}

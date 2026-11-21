@@ -263,3 +263,25 @@ fn text_delta_without_a_text_owner_is_ignored_without_touching_other_blocks() {
         ]
     );
 }
+
+#[test]
+fn marker_free_deltas_respect_pending_marker_and_hidden_block() {
+    let mut state = AnthropicStreamState::default();
+    let events = start(&mut state, 0, json!({"type": "text", "text": "visible<"}));
+    assert_eq!(text(&events), "visible");
+    for (delta, expected) in [
+        ("｜｜DSML｜｜tool_calls>", ""),
+        ("do not emit 🌍", ""),
+        ("</｜", ""),
+        ("｜DSML｜｜tool_calls> ok", " ok"),
+        ("!", "!"),
+    ] {
+        let events = translate(
+            &mut state,
+            "content_block_delta",
+            json!({"index": 0, "delta": {"type": "text_delta", "text": delta}}),
+        );
+        assert_eq!(text(&events), expected, "delta={delta:?}");
+    }
+    assert!(stop(&mut state, 0).is_empty());
+}

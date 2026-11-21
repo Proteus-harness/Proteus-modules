@@ -8,6 +8,7 @@ use serde_json::{Value, json};
 use super::*;
 use crate::{find::FindFilesTool, read_many::ReadManyFilesTool, search::GrepTool};
 
+mod edit_stream;
 mod read_eol;
 mod read_utf8;
 
@@ -341,6 +342,27 @@ fn read_many_files_reports_truncated_with_line_numbers_when_rendered_output_is_l
     let output = result["output"].as_str().unwrap();
     assert!(output.len() <= 20);
     assert_eq!(result["metadata"]["total_returned_bytes"], output.len());
+}
+
+#[test]
+fn read_many_numbered_budget_preserves_partial_prefixes_and_utf8() {
+    let dir = tempfile::tempdir().expect("workspace");
+    let text = "\n".repeat(9) + "😀\r\nend\n";
+    std::fs::write(dir.path().join("f"), text).unwrap();
+    let header = "== f ==\n";
+    let numbered = "1\t\n2\t\n3\t\n4\t\n5\t\n6\t\n7\t\n8\t\n9\t\n10\t😀\n11\tend";
+    // Cut the first overflowing line's number, tab, scalar or separator.
+    for budget in 27..=numbered.len() + 1 {
+        let result = invoke(
+            &ReadManyFilesTool,
+            dir.path(),
+            json!({"paths":["f"], "line_numbers":true, "max_bytes_total":header.len() + budget}),
+        );
+        let bytes = numbered.floor_char_boundary(budget.min(numbered.len()));
+        assert_eq!(result["output"], format!("{header}{}", &numbered[..bytes]));
+        assert_eq!(result["metadata"]["files"][0]["returned_bytes"], bytes);
+        assert_eq!(result["metadata"]["truncated"], budget < numbered.len());
+    }
 }
 
 #[test]
