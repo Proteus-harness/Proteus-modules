@@ -9,18 +9,19 @@ import { modelExport, modelFailure } from '../adapter.mjs';
 const snapshots = await Effect.runPromise(Effect.scoped(Effect.gen(function* () {
     return yield* (yield* ModelsDev.Service).get();
 }).pipe(Effect.provide(LayerNode.compile(ModelsDev.configured({ fetch: false }))))));
-const binding = { slot: 'model', module_id: 'opencode', contract_version: 'v13', module_config: { provider: 'opencode-go' } };
+const binding = { slot: 'model', module_id: 'opencode', contract_version: 'v14', module_config: { provider: 'opencode-go' } };
 const request = () => ({ model: { provider: 'opencode', model: 'deepseek-v4.1-flash' }, reasoning: { effort: 'high' },
     instructions: [{ text: 'Exact Core instructions' }], tools: [], tool_choice: 'None', response_format: 'Text',
     limits: { max_output_tokens: 256 }, sampling: { temperature: null, top_p: null },
     cache: { cache_instructions: false, cache_context: false, routing_key: null },
+    client_metadata: { session_id: 'stable-core-session' },
     messages: [{ id: 'user', role: 'User', parts: [{ payload: { Text: { text: 'hi' } } }] }],
 });
 async function fixture(t, respond) {
-    const received = [];
+    const received = [], receivedHeaders = [];
     const server = createServer(async (req, res) => {
         let body = ''; for await (const chunk of req) body += chunk;
-        received.push(JSON.parse(body)); respond(res);
+        received.push(JSON.parse(body)); receivedHeaders.push(req.headers); respond(res);
     });
     await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
     t.after(() => new Promise(resolve => { server.closeAllConnections(); server.close(resolve); }));
@@ -29,7 +30,7 @@ async function fixture(t, respond) {
         baseURL: `http://127.0.0.1:${server.address().port}/v1` } } };
     const runtime = createNativeRuntime(binding.module_config, { loadSnapshots: async () => [selected] });
     const adapter = modelExport(binding, { runtime, credential: async () => ({ type: 'key', key: 'synthetic-key' }) });
-    return { adapter, received };
+    return { adapter, received, receivedHeaders };
 }
 function chunk(res, delta, finish_reason = null, usage) {
     res.write('data: ' + JSON.stringify({ id: 'synthetic', model: 'deepseek-v4.1-flash', object: 'chat.completion.chunk',
@@ -54,7 +55,7 @@ test('actual OpenCode resolver and native LLM client preserve model, reasoning, 
     assert.ok(progress.some(row => row.event.ReasoningDelta));
     assert.ok(progress.some(row => row.event.TextDelta));
     assert.equal(result.event_count, progress.length);
-    assert.deepEqual(progress.map(row => row.sequence), progress.map((_, index) => index + 1));
+    assert.deepEqual(progress.map(row => row.sequence), progress.map((_, index) => index));
     assert.equal(received.length, 1);
     assert.equal(received[0].model, 'deepseek-v4.1-flash');
     assert.equal(received[0].reasoning_effort, 'high');
@@ -67,6 +68,108 @@ test('stream false returns terminal data without progress and without extra requ
     const result = await adapter.invoke('stream', { request: request(), stream: false }, {
         signal: new AbortController().signal, hostCall: async () => { throw Error('No progress expected'); } });
     assert.equal(result.terminal.kind, 'response'); assert.equal(result.event_count, 0); assert.equal(received.length, 1);
+});
+
+test('native compaction is rejected before credential lookup or provider IO', async () => {
+    let resolves = 0, credentials = 0, streams = 0;
+    const adapter = modelExport(binding, {
+        runtime: { resolve: async () => { resolves++; throw Error('unexpected resolve'); } },
+        credential: async () => { credentials++; throw Error('unexpected credential lookup'); },
+        stream: async () => { streams++; throw Error('unexpected provider call'); },
+    });
+    const result = await adapter.invoke('stream', { request: { ...request(), operation: 'Compact' }, stream: true }, {
+        signal: new AbortController().signal,
+        hostCall: async () => { throw Error('unexpected stream event'); },
+    });
+    assert.equal(result.terminal.kind, 'request_error');
+    assert.equal(result.event_count, 0);
+    assert.deepEqual([resolves, credentials, streams], [0, 0, 0]);
+});
+
+test('Go routing preserves Core session affinity across tool-bearing high-effort requests and resume', async t => {
+    const { adapter, received, receivedHeaders } = await fixture(t, success);
+    for (const turn of ['first', 'resumed']) {
+        const input = request();
+        input.tools = [{ name: 'read', description: 'Read a file', input_schema: { type: 'object' } }];
+        input.tool_choice = 'Auto';
+        input.client_metadata.turn_id = turn;
+        const output = await adapter.invoke('stream', { request: input, stream: true }, {
+            signal: new AbortController().signal, hostCall: async () => {} });
+        assert.equal(output.terminal.kind, 'response');
+    }
+    assert.equal(received.length, 2);
+    for (let i = 0; i < received.length; i++) {
+        assert.equal(receivedHeaders[i]['x-opencode-session'], 'stable-core-session');
+        assert.equal(receivedHeaders[i]['x-opencode-session-id'], 'stable-core-session');
+        assert.equal(receivedHeaders[i]['x-session-affinity'], 'stable-core-session');
+        assert.equal(received[i].reasoning_effort, 'high');
+        assert.equal(received[i].stream, true);
+        assert.equal(received[i].tools[0].function.name, 'read');
+    }
+});
+
+test('Go requests without canonical session metadata fail before HTTP instead of changing affinity', async t => {
+    const { adapter, received } = await fixture(t, success);
+    const input = request(); delete input.client_metadata;
+    const output = await adapter.invoke('stream', { request: input, stream: false }, {
+        signal: new AbortController().signal, hostCall: async () => {} });
+    assert.equal(output.terminal.kind, 'request_error');
+    assert.match(output.terminal.failure.message, /client_metadata.session_id/);
+    assert.equal(received.length, 0);
+});
+
+test('reasoning and tool streaming obey zero-based Core callback acknowledgments', async () => {
+    const runtime = createNativeRuntime(binding.module_config, { loadSnapshots: async () => snapshots });
+    const native = [
+        { type: 'reasoning-start', id: 'reason' },
+        { type: 'reasoning-delta', id: 'reason', text: 'inspect workspace' },
+        { type: 'reasoning-end', id: 'reason' },
+        { type: 'tool-input-start', id: 'read-one', name: 'read' },
+        { type: 'tool-input-delta', id: 'read-one', name: 'read', text: '{"path":"a"}' },
+        { type: 'tool-input-end', id: 'read-one', name: 'read' },
+        { type: 'tool-call', id: 'read-one', name: 'read', input: { path: 'a' } },
+        { type: 'finish', reason: { normalized: 'tool-calls' },
+          usage: { inputTokens: 100, outputTokens: 30, reasoningTokens: 20 } },
+    ];
+    const adapter = modelExport(binding, { runtime, credential: async () => ({ type: 'key', key: 'synthetic' }),
+        stream: async (_request, _signal, accept) => { for (const event of native) await accept(event); } });
+    const emitted = [];
+    const output = await adapter.invoke('stream', { request: request(), stream: true }, {
+        signal: new AbortController().signal,
+        hostCall: async (method, row) => {
+            assert.equal(method, 'host.model.emit');
+            assert.equal(row.sequence, emitted.length, 'Core requires the next zero-based sequence');
+            assert.ok(!row.event.Response && !row.event.Error, 'terminal responses use the invoke result');
+            emitted.push(row.event);
+        },
+    });
+    assert.equal(output.terminal.kind, 'response');
+    assert.equal(output.event_count, emitted.length);
+    assert.deepEqual(emitted.map(event => Object.keys(event)[0]), [
+        'ReasoningDelta', 'ToolCallDelta', 'ToolCallDelta', 'ToolCallFinished', 'Usage', 'MessageCompleted', 'Done',
+    ]);
+    assert.equal(output.terminal.response.tool_calls[0].id, 'read-one');
+    assert.equal(output.terminal.response.usage.reasoning_output_tokens, 20);
+});
+
+test('a rejected callback does not count as an acknowledged delivery', async () => {
+    const runtime = createNativeRuntime(binding.module_config, { loadSnapshots: async () => snapshots });
+    const adapter = modelExport(binding, { runtime, credential: async () => ({ type: 'key', key: 'synthetic' }),
+        stream: async (_request, _signal, accept) => {
+            await accept({ type: 'text-delta', id: 'text', text: 'first' });
+            await accept({ type: 'text-delta', id: 'text', text: 'second' });
+        } });
+    let deliveries = 0;
+    const output = await adapter.invoke('stream', { request: request(), stream: true }, {
+        signal: new AbortController().signal,
+        hostCall: async (_method, row) => {
+            assert.equal(row.sequence, deliveries);
+            if (deliveries === 1) throw new Error('Core rejected callback');
+            deliveries++;
+        },
+    });
+    assert.equal(output.terminal.kind, 'stream_error');
+    assert.equal(output.event_count, 1);
 });
 
 test('unset Core output limit preserves the native SDK request default without a synthetic 4096 cap', async t => {
@@ -106,7 +209,53 @@ test('EOF after visible text is a disconnected failure, not success', async t =>
 test('failure diagnostics omit native credential-bearing messages and validate config', () => {
     assert.equal(modelFailure({ reason: { _tag: 'Authentication', message: 'secret' } }).kind, 'other');
     assert.ok(!JSON.stringify(modelFailure({ message: 'secret' })).includes('secret'));
+    const failure = modelFailure({ reason: { _tag: 'InvalidRequest', message: 'secret', body: 'secret',
+        http: { status: 400, url: 'secret', headers: { secret: 'secret' } } } });
+    assert.match(failure.message, /InvalidRequest; HTTP 400/);
+    assert.ok(!JSON.stringify(failure).includes('secret'));
     assert.throws(() => modelExport({ ...binding, module_config: { provider: 'opencode-go', unknown: true } }), /Invalid/);
+});
+
+test('configuration form exposes supported fields without inventing defaults or restricting provider IDs', () => {
+    const config = { provider: 'custom-provider', api_key: 'synthetic-explicit-key', database_path: '/synthetic/opencode.db',
+        models_file: '/synthetic/models.json', models_url: 'https://catalog.invalid/models.json' };
+    const adapter = modelExport({ ...binding, module_config: config }, { runtime: {} });
+    const fields = adapter.manifest.config_schema.fields;
+    assert.deepEqual(fields.map(field => field.key), Object.keys(config));
+    for (const field of fields) {
+        assert.equal(field.default, null, 'opening the form must not add runtime overrides');
+        assert.deepEqual(field.value, { type: 'string', multiline: false, secret: field.key === 'api_key' });
+        assert.equal(field.required, field.key === 'provider');
+        assert.equal(field.advanced, !['provider', 'api_key'].includes(field.key));
+        assert.ok(field.title && field.description && field.section.description);
+        assert.throws(() => modelExport({ ...binding, module_config: { ...config, [field.key]: false } },
+            { runtime: {} }), /Invalid/);
+    }
+    assert.match(fields[0].section.description, /OpenCode.*OAuth/);
+    assert.deepEqual(config, { provider: 'custom-provider', api_key: 'synthetic-explicit-key', database_path: '/synthetic/opencode.db',
+        models_file: '/synthetic/models.json', models_url: 'https://catalog.invalid/models.json' });
+    assert.throws(() => modelExport({ ...binding, module_config: {} }, { runtime: {} }), /Invalid/);
+    assert.throws(() => modelExport({ ...binding, module_config: { provider: ' ' } }, { runtime: {} }), /Invalid/);
+    for (const key of ['auth_file', 'route']) assert.throws(() => modelExport({ ...binding,
+        module_config: { provider: 'custom-provider', [key]: 'unsupported' } }, { runtime: {} }), /Invalid/);
+});
+
+test('concrete connection IDs and explicit keys stay export-local without native auth writes', async () => {
+    for (const module_id of ['work-go', 'personal-zen']) {
+        const config = { provider: 'opencode-go', api_key: 'synthetic-' + module_id };
+        let received;
+        const adapter = modelExport({ ...binding, module_id, module_config: config }, {
+            runtime: { environment() { throw new Error('Explicit key must not read native environment'); } },
+            quota: async ({ getAuth }) => { received = await getAuth(); return { plan: 'synthetic' }; },
+        });
+        assert.equal(adapter.manifest.module_id, module_id);
+        const result = await adapter.invoke('quota', null, { signal: new AbortController().signal });
+        assert.deepEqual(received, { auth: { apiKey: config.api_key } });
+        assert.deepEqual(result, { plan: 'synthetic' });
+        assert.ok(!JSON.stringify(adapter.manifest).includes(config.api_key));
+    }
+    for (const module_id of ['', '*', ' bad', 'bad\nname'])
+        assert.throws(() => modelExport({ ...binding, module_id }, { runtime: {} }), /Invalid/);
 });
 
 test('only a native completed message survives a subsequent stream failure', async () => {

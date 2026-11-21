@@ -126,7 +126,7 @@ version = "1.1.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "40c48f72fd53cd289104fc64099abca73db4166ad86ea0b4341abe65af83dadc"
 dependencies = [
- "windows-sys 0.60.2",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -137,7 +137,7 @@ checksum = "291e6a250ff86cd4a820112fb8898808a366d8f9f58ce16d1f538353ad55747d"
 dependencies = [
  "anstyle",
  "once_cell_polyfill",
- "windows-sys 0.60.2",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -693,7 +693,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "39cab71617ae0d63f51a36d69f866391735b51691dbda63cf6f96d042b63efeb"
 dependencies = [
  "libc",
- "windows-sys 0.60.2",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -1965,7 +1965,7 @@ dependencies = [
 [[package]]
 name = "proteus-contracts"
 version = "0.1.0-alpha.2"
-source = "git+https://github.com/Proteus-harness/Proteus-core.git?rev=185225a7103088c444788374ca425d230060f55a#185225a7103088c444788374ca425d230060f55a"
+source = "git+https://github.com/Proteus-harness/Proteus-core.git?rev=0c1b7572313230e5d123e95c722e1258a2e9ecd6#0c1b7572313230e5d123e95c722e1258a2e9ecd6"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -1974,6 +1974,7 @@ dependencies = [
  "futures-core",
  "futures-util",
  "jsonschema",
+ "ring",
  "rustix",
  "serde",
  "serde_json",
@@ -1984,7 +1985,7 @@ dependencies = [
 [[package]]
 name = "proteus-core"
 version = "0.1.0-alpha.3"
-source = "git+https://github.com/Proteus-harness/Proteus-core.git?rev=185225a7103088c444788374ca425d230060f55a#185225a7103088c444788374ca425d230060f55a"
+source = "git+https://github.com/Proteus-harness/Proteus-core.git?rev=0c1b7572313230e5d123e95c722e1258a2e9ecd6#0c1b7572313230e5d123e95c722e1258a2e9ecd6"
 dependencies = [
  "agent-client-protocol",
  "anyhow",
@@ -1998,16 +1999,16 @@ dependencies = [
  "http-body-util",
  "hyper",
  "hyper-util",
- "im",
  "libc",
  "proteus-contracts",
  "proteus-module-protocol",
  "proteus-process-host",
+ "proteus-session-semantics",
  "ring",
  "rmcp",
- "rusqlite",
  "serde",
  "serde_json",
+ "tempfile",
  "tokio",
  "toml",
  "toml_edit",
@@ -2065,7 +2066,7 @@ dependencies = [
 [[package]]
 name = "proteus-module-protocol"
 version = "0.1.0-alpha.2"
-source = "git+https://github.com/Proteus-harness/Proteus-core.git?rev=185225a7103088c444788374ca425d230060f55a#185225a7103088c444788374ca425d230060f55a"
+source = "git+https://github.com/Proteus-harness/Proteus-core.git?rev=0c1b7572313230e5d123e95c722e1258a2e9ecd6#0c1b7572313230e5d123e95c722e1258a2e9ecd6"
 dependencies = [
  "anyhow",
  "proteus-contracts",
@@ -2090,7 +2091,7 @@ dependencies = [
 [[package]]
 name = "proteus-module-sdk"
 version = "0.1.0-alpha.2"
-source = "git+https://github.com/Proteus-harness/Proteus-core.git?rev=185225a7103088c444788374ca425d230060f55a#185225a7103088c444788374ca425d230060f55a"
+source = "git+https://github.com/Proteus-harness/Proteus-core.git?rev=0c1b7572313230e5d123e95c722e1258a2e9ecd6#0c1b7572313230e5d123e95c722e1258a2e9ecd6"
 dependencies = [
  "anyhow",
  "proteus-contracts",
@@ -2118,7 +2119,7 @@ dependencies = [
 [[package]]
 name = "proteus-process-host"
 version = "0.1.0-alpha.2"
-source = "git+https://github.com/Proteus-harness/Proteus-core.git?rev=185225a7103088c444788374ca425d230060f55a#185225a7103088c444788374ca425d230060f55a"
+source = "git+https://github.com/Proteus-harness/Proteus-core.git?rev=0c1b7572313230e5d123e95c722e1258a2e9ecd6#0c1b7572313230e5d123e95c722e1258a2e9ecd6"
 dependencies = [
  "anyhow",
  "libc",
@@ -2176,6 +2177,33 @@ version = "0.1.0-alpha.3"
 dependencies = [
  "proteus-module-runtime",
  "rust-lsp",
+]
+
+[[package]]
+name = "proteus-session-semantics"
+version = "0.1.0-alpha.1"
+source = "git+https://github.com/Proteus-harness/Proteus-core.git?rev=0c1b7572313230e5d123e95c722e1258a2e9ecd6#0c1b7572313230e5d123e95c722e1258a2e9ecd6"
+dependencies = [
+ "anyhow",
+ "im",
+ "proteus-contracts",
+ "ring",
+ "serde",
+ "serde_json",
+ "uuid",
+]
+
+[[package]]
+name = "proteus-session-storage-module"
+version = "0.1.0-alpha.3"
+dependencies = [
+ "anyhow",
+ "proteus-contracts",
+ "proteus-module-sdk",
+ "serde",
+ "serde_json",
+ "session-storage",
+ "tempfile",
 ]
 
 [[package]]
@@ -2585,7 +2613,7 @@ dependencies = [
  "errno",
  "libc",
  "linux-raw-sys",
- "windows-sys 0.60.2",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -2818,6 +2846,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "session-storage"
+version = "0.1.0-alpha.3"
+dependencies = [
+ "anyhow",
+ "base64 0.22.1",
+ "proteus-contracts",
+ "proteus-session-semantics",
+ "ring",
+ "rusqlite",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "uuid",
+]
+
+[[package]]
 name = "shared_library"
 version = "0.1.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2902,7 +2946,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3a766e1110788c36f4fa1c2b71b387a7815aa65f88ce0229841826633d93723e"
 dependencies = [
  "libc",
- "windows-sys 0.60.2",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -3008,7 +3052,7 @@ dependencies = [
  "getrandom 0.4.2",
  "once_cell",
  "rustix",
- "windows-sys 0.60.2",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]

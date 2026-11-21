@@ -1,0 +1,11 @@
+Hermes native bridge research probe
+
+Upstream: https://github.com/NousResearch/hermes-agent
+Release: v0.23.1
+Commit: 3b421578588243f920886e6fe79a6faa87ea026e
+License: MIT; upstream copyright notice is retained in LICENSE.upstream.
+
+The probe reads selected unchanged AST nodes from a separately obtained,
+hash-verified upstream checkout. It does not redistribute or install the
+Hermes agent runtime and does not claim full runtime/API compatibility.
+Probe and loader code are Proteus implementation code.

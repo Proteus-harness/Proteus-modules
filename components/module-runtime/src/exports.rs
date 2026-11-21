@@ -1,14 +1,14 @@
 use anyhow::{Result, anyhow, bail};
 use proteus_contracts::{
     contracts::{
-        PROCESS_POLICY_EVALUATE_METHOD, PROCESS_POLICY_VISIBILITY_METHOD,
-        PROCESS_TOOL_INVOKE_METHOD, PROCESS_TOOL_LIST_METHOD, PROCESS_TOOL_TERMINAL_METHOD,
-        ProcessComponentExportInitialize, ProcessComponentExportManifest,
-        ProcessContextChunksResponse, ProcessContextInput, ProcessContextResponse,
-        ProcessPolicyEvaluateInput, ProcessPolicyResponse, ProcessPolicyVisibilityInput,
-        ProcessToolInvokeInput, ProcessToolInvokeResponse, ProcessToolListResponse,
-        ProcessToolTerminalInput, ProcessWorkflowInput, ProcessWorkflowResponse,
-        TOOL_TERMINAL_FEATURE, WorkflowOutput,
+        HOOK_CONTEXT_PREPARATION_DIAGNOSTICS_FEATURE, PROCESS_POLICY_EVALUATE_METHOD,
+        PROCESS_POLICY_VISIBILITY_METHOD, PROCESS_TOOL_INVOKE_METHOD, PROCESS_TOOL_LIST_METHOD,
+        PROCESS_TOOL_TERMINAL_METHOD, ProcessComponentExportInitialize,
+        ProcessComponentExportManifest, ProcessContextChunksResponse, ProcessContextInput,
+        ProcessContextResponse, ProcessPolicyEvaluateInput, ProcessPolicyResponse,
+        ProcessPolicyVisibilityInput, ProcessToolInvokeInput, ProcessToolInvokeResponse,
+        ProcessToolListResponse, ProcessToolTerminalInput, ProcessWorkflowInput,
+        ProcessWorkflowResponse, TOOL_TERMINAL_FEATURE, WorkflowOutput,
     },
     process_module::{
         ContextBuilderModuleInput, PolicyModuleInvocationContext, PolicyModuleVisibilityContext,
@@ -25,6 +25,12 @@ use crate::{
 
 mod tools;
 use tools::ToolCatalog;
+
+#[cfg(all(test, unix))]
+mod input_estimate_tests;
+
+#[cfg(all(test, unix))]
+mod hook_diagnostics_tests;
 
 pub struct ModuleExport {
     binding: ProcessComponentExportInitialize,
@@ -66,19 +72,27 @@ impl ModuleExport {
                 .host_features
                 .iter()
                 .filter(|feature| {
-                    (self.binding.slot == "tool"
-                        && feature.as_str() == TOOL_TERMINAL_FEATURE
-                        && self
-                            .modules
-                            .tools
-                            .iter()
-                            .any(|tool| tool.supports_terminal_control()))
+                    (self.binding.slot == "hook"
+                        && feature.as_str() == HOOK_CONTEXT_PREPARATION_DIAGNOSTICS_FEATURE)
+                        || (self.binding.slot == "tool"
+                            && feature.as_str() == TOOL_TERMINAL_FEATURE
+                            && self
+                                .modules
+                                .tools
+                                .iter()
+                                .any(|tool| tool.supports_terminal_control()))
                         || (self.binding.slot == "model"
-                            && matches!(
+                            && (matches!(
                                 feature.as_str(),
                                 proteus_contracts::contracts::MODEL_CATALOG_FEATURE
                                     | proteus_contracts::contracts::MODEL_QUOTA_FEATURE
-                            ))
+                            ) || (feature.as_str()
+                                == proteus_contracts::contracts::MODEL_INPUT_ESTIMATE_FEATURE
+                                && self
+                                    .modules
+                                    .models
+                                    .get(&self.binding.module_id)
+                                    .is_some_and(|model| model.supports_input_estimate()))))
                 })
                 .cloned()
                 .collect(),
@@ -126,6 +140,19 @@ impl ModuleExport {
         )?;
         let response: proteus_contracts::contracts::HookResponse = serde_json::from_str(&output)?;
         proteus_contracts::contracts::apply_hook_response(&input.event, &response)?;
+        let response = if self
+            .binding
+            .host_features
+            .iter()
+            .any(|feature| feature == HOOK_CONTEXT_PREPARATION_DIAGNOSTICS_FEATURE)
+        {
+            response
+        } else {
+            proteus_contracts::contracts::expand_context_preparation_response(
+                &input.event,
+                &response,
+            )?
+        };
         encode(proteus_contracts::contracts::ProcessHookResponse { result: response })
     }
 
@@ -188,7 +215,7 @@ impl ModuleExport {
     fn model(&self, method: &str, params: Value, bridge: &HostBridge) -> Result<Value> {
         use proteus_contracts::contracts::{
             PROCESS_MODEL_CATALOG_METHOD, PROCESS_MODEL_DESCRIBE_METHOD,
-            PROCESS_MODEL_QUOTA_METHOD, PROCESS_MODEL_STREAM_METHOD,
+            PROCESS_MODEL_ESTIMATE_METHOD, PROCESS_MODEL_QUOTA_METHOD, PROCESS_MODEL_STREAM_METHOD,
         };
         let model = self
             .modules
@@ -196,6 +223,25 @@ impl ModuleExport {
             .get(&self.binding.module_id)
             .ok_or_else(|| anyhow!("model module was not registered"))?;
         match method {
+            PROCESS_MODEL_ESTIMATE_METHOD => {
+                if !model.supports_input_estimate()
+                    || !self.binding.host_features.iter().any(|feature| {
+                        feature == proteus_contracts::contracts::MODEL_INPUT_ESTIMATE_FEATURE
+                    })
+                {
+                    bail!("model input estimate feature was not negotiated");
+                }
+                let input: proteus_contracts::contracts::ModelInputEstimateRequest =
+                    decode(params)?;
+                input.validate().map_err(anyhow::Error::msg)?;
+                let response = model.estimate_input_json(serde_json::to_string(&input)?)?;
+                let response: Option<proteus_contracts::contracts::ModelInputEstimate> =
+                    serde_json::from_str(&response)?;
+                if let Some(response) = &response {
+                    response.validate(&input).map_err(anyhow::Error::msg)?;
+                }
+                encode(response)
+            }
             PROCESS_MODEL_DESCRIBE_METHOD => {
                 let input: proteus_contracts::contracts::ProcessModelDescribeRequest =
                     decode(params)?;

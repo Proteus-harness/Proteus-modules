@@ -10,17 +10,17 @@ fn test_streaming_patch_parser_streams_complete_lines_before_end_patch() {
     let mut parser = StreamingPatchParser::default();
     assert_eq!(
         parser.push_delta("*** Begin Patch\n*** Add File: src/hello.txt\n+hello\n+wor"),
-        Ok(vec![AddFile {
+        Ok(&[AddFile {
             path: PathBuf::from("src/hello.txt"),
             contents: "hello\n".to_string(),
-        }])
+        }][..])
     );
     assert_eq!(
         parser.push_delta("ld\n"),
-        Ok(vec![AddFile {
+        Ok(&[AddFile {
             path: PathBuf::from("src/hello.txt"),
             contents: "hello\nworld\n".to_string(),
-        }])
+        }][..])
     );
 
     let mut parser = StreamingPatchParser::default();
@@ -28,7 +28,7 @@ fn test_streaming_patch_parser_streams_complete_lines_before_end_patch() {
             parser.push_delta(
                 "*** Begin Patch\n*** Update File: src/old.rs\n*** Move to: src/new.rs\n@@\n-old\n+new\n",
             ),
-            Ok(vec![UpdateFile {
+            Ok(&[UpdateFile {
                 path: PathBuf::from("src/old.rs"),
                 move_path: Some(PathBuf::from("src/new.rs")),
                 chunks: vec![UpdateFileChunk {
@@ -38,19 +38,19 @@ fn test_streaming_patch_parser_streams_complete_lines_before_end_patch() {
                     context_line_indices: vec![],
                     is_end_of_file: false,
                 }],
-            }])
+            }][..])
         );
 
     let mut parser = StreamingPatchParser::default();
     assert_eq!(
         parser.push_delta("*** Begin Patch\n*** Delete File: gone.txt"),
-        Ok(Vec::new())
+        Ok(&[][..])
     );
     assert_eq!(
         parser.push_delta("\n"),
-        Ok(vec![DeleteFile {
+        Ok(&[DeleteFile {
             path: PathBuf::from("gone.txt"),
-        }])
+        }][..])
     );
 
     let mut parser = StreamingPatchParser::default();
@@ -58,7 +58,7 @@ fn test_streaming_patch_parser_streams_complete_lines_before_end_patch() {
         parser.push_delta(
             "*** Begin Patch\n*** Add File: src/one.txt\n+one\n*** Delete File: src/two.txt\n",
         ),
-        Ok(vec![
+        Ok(&[
             AddFile {
                 path: PathBuf::from("src/one.txt"),
                 contents: "one\n".to_string(),
@@ -66,7 +66,7 @@ fn test_streaming_patch_parser_streams_complete_lines_before_end_patch() {
             DeleteFile {
                 path: PathBuf::from("src/two.txt"),
             },
-        ])
+        ][..])
     );
 }
 
@@ -83,12 +83,19 @@ fn test_streaming_patch_parser_environment_id_mode() {
     let mut parser = StreamingPatchParser::default();
     assert_eq!(
         parser.push_delta(patch),
-        Ok(vec![AddFile {
+        Ok(&[AddFile {
             path: PathBuf::from("src/hello.txt"),
             contents: "hello\n".to_string(),
-        }])
+        }][..])
     );
-    assert_eq!(parser.environment_id(), Some("remote"));
+    assert_eq!(
+        parser
+            .finish()
+            .expect("complete patch")
+            .environment_id
+            .as_deref(),
+        Some("remote")
+    );
 
     let mut parser = StreamingPatchParser::default();
     assert_eq!(
@@ -155,7 +162,6 @@ fn test_streaming_patch_parser_large_patch_split_by_character() {
     let mut parser = StreamingPatchParser::default();
     let mut max_hunk_count = 0;
     let mut saw_hunk_counts = Vec::new();
-    let mut hunks = Vec::new();
     for ch in patch.chars() {
         let updated_hunks = parser.push_delta(&ch.to_string()).unwrap();
         if !updated_hunks.is_empty() {
@@ -168,10 +174,13 @@ fn test_streaming_patch_parser_large_patch_split_by_character() {
                 saw_hunk_counts.push(hunk_count);
                 max_hunk_count = hunk_count;
             }
-            hunks = updated_hunks;
         }
     }
 
+    let hunks = parser
+        .push_delta("")
+        .expect("final streaming preview")
+        .to_vec();
     assert_eq!(saw_hunk_counts, vec![1, 2, 3, 4, 5, 6, 7]);
     assert_eq!(hunks.len(), 7);
     assert_eq!(
@@ -198,6 +207,7 @@ fn test_streaming_patch_parser_large_patch_split_by_character() {
             "delete"
         ]
     );
+    assert_eq!(parser.finish().expect("complete patch").hunks, hunks);
 }
 
 #[test]
@@ -218,7 +228,7 @@ fn test_streaming_patch_parser_keeps_indented_update_markers_as_context_lines() 
 *** End Patch
 ",
         ),
-        Ok(vec![UpdateFile {
+        Ok(&[UpdateFile {
             path: PathBuf::from("a.txt"),
             move_path: None,
             chunks: vec![
@@ -237,7 +247,7 @@ fn test_streaming_patch_parser_keeps_indented_update_markers_as_context_lines() 
                     is_end_of_file: false,
                 },
             ],
-        }])
+        }][..])
     );
 }
 
@@ -256,7 +266,7 @@ fn test_streaming_patch_parser_preserves_bare_empty_update_lines() {
 *** End Patch
 ",
         ),
-        Ok(vec![UpdateFile {
+        Ok(&[UpdateFile {
             path: PathBuf::from("file.txt"),
             move_path: None,
             chunks: vec![UpdateFileChunk {
@@ -276,7 +286,7 @@ fn test_streaming_patch_parser_preserves_bare_empty_update_lines() {
                 context_line_indices: vec![(0, 0), (1, 1), (2, 2)],
                 is_end_of_file: false,
             }],
-        }])
+        }][..])
     );
 }
 
@@ -287,7 +297,7 @@ fn test_streaming_patch_parser_ignores_empty_lines_after_end_of_file() {
             parser.push_delta(
                 "*** Begin Patch\n*** Update File: file.txt\n@@\n+quux\n*** End of File\n\n*** End Patch\n",
             ),
-            Ok(vec![UpdateFile {
+            Ok(&[UpdateFile {
                 path: PathBuf::from("file.txt"),
                 move_path: None,
                 chunks: vec![UpdateFileChunk {
@@ -297,7 +307,7 @@ fn test_streaming_patch_parser_ignores_empty_lines_after_end_of_file() {
                     context_line_indices: vec![],
                     is_end_of_file: true,
                 }],
-            }])
+            }][..])
         );
 }
 
@@ -306,7 +316,7 @@ fn test_streaming_patch_parser_matches_line_ending_behavior() {
     let mut parser = StreamingPatchParser::default();
     assert_eq!(
             parser.push_delta("*** Begin Patch\r\n*** Update File: file.txt\r\n@@\r\n-old\r\n+new\r\n*** End Patch\r\n"),
-            Ok(vec![UpdateFile {
+            Ok(&[UpdateFile {
                 path: PathBuf::from("file.txt"),
                 move_path: None,
                 chunks: vec![UpdateFileChunk {
@@ -316,13 +326,13 @@ fn test_streaming_patch_parser_matches_line_ending_behavior() {
                     context_line_indices: vec![],
                     is_end_of_file: false,
                 }],
-            }])
+            }][..])
         );
 
     let mut parser = StreamingPatchParser::default();
     assert_eq!(
             parser.push_delta("*** Begin Patch\r\n*** Update File: file.txt\r\n@@\r\n-old\r\r\n+new\r\n*** End Patch\r\n"),
-            Ok(vec![UpdateFile {
+            Ok(&[UpdateFile {
                 path: PathBuf::from("file.txt"),
                 move_path: None,
                 chunks: vec![UpdateFileChunk {
@@ -332,7 +342,7 @@ fn test_streaming_patch_parser_matches_line_ending_behavior() {
                     context_line_indices: vec![],
                     is_end_of_file: false,
                 }],
-            }])
+            }][..])
         );
 }
 
@@ -341,13 +351,13 @@ fn test_streaming_patch_parser_finish_processes_final_line_without_newline() {
     let mut parser = StreamingPatchParser::default();
     assert_eq!(
         parser.push_delta("*** Begin Patch\n*** Add File: file.txt\n+hello\n*** End Patch"),
-        Ok(vec![AddFile {
+        Ok(&[AddFile {
             path: PathBuf::from("file.txt"),
             contents: "hello\n".to_string(),
-        }])
+        }][..])
     );
     assert_eq!(
-        parser.finish(),
+        parser.finish().map(|patch| patch.hunks),
         Ok(vec![AddFile {
             path: PathBuf::from("file.txt"),
             contents: "hello\n".to_string(),
@@ -359,7 +369,7 @@ fn test_streaming_patch_parser_finish_processes_final_line_without_newline() {
         parser.push_delta(
             "*** Begin Patch\n*** Update File: file.txt\n@@\n-old\n+new\n *** End Patch",
         ),
-        Ok(vec![UpdateFile {
+        Ok(&[UpdateFile {
             path: PathBuf::from("file.txt"),
             move_path: None,
             chunks: vec![UpdateFileChunk {
@@ -369,10 +379,10 @@ fn test_streaming_patch_parser_finish_processes_final_line_without_newline() {
                 context_line_indices: vec![],
                 is_end_of_file: false,
             }],
-        }])
+        }][..])
     );
     assert_eq!(
-        parser.finish(),
+        parser.finish().map(|patch| patch.hunks),
         Ok(vec![UpdateFile {
             path: PathBuf::from("file.txt"),
             move_path: None,
@@ -392,10 +402,10 @@ fn test_streaming_patch_parser_finish_requires_end_patch() {
     let mut parser = StreamingPatchParser::default();
     assert_eq!(
         parser.push_delta("*** Begin Patch\n*** Add File: file.txt\n+hello\n"),
-        Ok(vec![AddFile {
+        Ok(&[AddFile {
             path: PathBuf::from("file.txt"),
             contents: "hello\n".to_string(),
-        }])
+        }][..])
     );
     assert_eq!(
         parser.finish(),
@@ -419,10 +429,10 @@ fn test_streaming_patch_parser_rejects_content_after_end_patch() {
     let mut parser = StreamingPatchParser::default();
     assert_eq!(
         parser.push_delta("*** Begin Patch\n*** Add File: file.txt\n+hello\n*** End Patch\n \t\n",),
-        Ok(vec![AddFile {
+        Ok(&[AddFile {
             path: PathBuf::from("file.txt"),
             contents: "hello\n".to_string(),
-        }])
+        }][..])
     );
 }
 
@@ -437,7 +447,7 @@ fn test_streaming_patch_parser_returns_errors() {
     );
 
     let mut parser = StreamingPatchParser::default();
-    assert_eq!(parser.push_delta("*** Begin Patch\n"), Ok(Vec::new()));
+    assert_eq!(parser.push_delta("*** Begin Patch\n"), Ok(&[][..]));
     assert_eq!(
             parser.push_delta("bad\n"),
             Err(InvalidHunkError {

@@ -1,3 +1,6 @@
+#[path = "fixtures/session_storage.rs"]
+mod session_storage;
+
 use std::{
     collections::HashSet,
     future::pending,
@@ -18,7 +21,7 @@ use proteus_contracts::{
 };
 use proteus_core::{
     core::{
-        AgentRuntime, AppConfig, JournalEntry, ModuleCatalog, SessionStore, ToolCallRecordPhase,
+        AgentRuntime, AppConfig, JournalEntry, ModuleCatalog, ToolCallRecordPhase,
         TurnSettlementStatus, WorkflowReplayOptions, replay_workflow,
     },
     process_adapters::ProcessComponentConfig,
@@ -145,6 +148,7 @@ async fn one_component_profile_preserves_pid_authority_cancellation_and_journal_
     let mut config = AppConfig::load(Some(&profile_path))
         .await
         .expect("one-component profile loads");
+    crate::session_storage::configure(&mut config);
     install_pid_recording_command(&mut config, &marker);
     assert_separate_slot_authority(&config);
     std::fs::write(
@@ -243,7 +247,7 @@ async fn one_component_profile_preserves_pid_authority_cancellation_and_journal_
     );
 
     let session_dir = runtime.session_dir().expect("session dir").to_path_buf();
-    let store = SessionStore::open(session_dir.clone()).expect("session store");
+    let store = crate::session_storage::open(session_dir.clone()).expect("session store");
     let projection = store.load_projection().expect("canonical projection");
     assert!(projection.unsettled_turns.is_empty());
     assert!(projection.interrupted_model_exchanges.is_empty());

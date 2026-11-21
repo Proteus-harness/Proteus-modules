@@ -1,13 +1,14 @@
 use super::{Field, Kind, config_schema};
 use serde_json::{Value, json};
 
-const CAPABILITY_KEYS: [&str; 6] = [
+const CAPABILITY_KEYS: [&str; 7] = [
     "supports_image_input",
     "supports_parallel_tool_calls",
     "supports_freeform_tools",
     "supports_json_schema",
     "supports_reasoning_config",
     "support_verbosity",
+    "supports_compaction",
 ];
 
 fn schema_fields(config: &Value) -> Vec<Field> {
@@ -69,7 +70,7 @@ fn flat_capability_values_remain_visible_as_nested_defaults_until_overridden() {
     for key in CAPABILITY_KEYS {
         assert_eq!(
             field(capability_fields(&defaults), key).default,
-            Some(json!(false))
+            Some(json!(key == "supports_compaction"))
         );
     }
 }
@@ -130,7 +131,11 @@ fn technical_transport_authentication_and_cache_metadata_stay_advanced() {
             "http1_only",
         ] {
             if let Some(field) = fields.iter().find(|field| field.key == key) {
-                assert!(field.advanced, "{implementation}.{key} should be advanced");
+                assert_eq!(
+                    field.advanced,
+                    !(implementation == "openai_compatible" && key == "base_url"),
+                    "{implementation}.{key} should follow its connection role"
+                );
             }
         }
         if implementation == "anthropic" {
@@ -165,9 +170,17 @@ fn provider_sections_keep_paths_defaults_and_normal_authentication_visible() {
             let auth = if implementation == "openai_codex" {
                 "auth_file"
             } else {
-                "api_key_env"
+                "api_key"
             };
             assert!(!field(&schema.fields, auth).advanced);
+            if implementation != "openai_codex" {
+                assert!(matches!(
+                    field(&schema.fields, "api_key").value,
+                    Kind::String { secret: true, .. }
+                ));
+                assert!(field(&schema.fields, "api_key_env").advanced);
+                assert!(field(&schema.fields, "api_key_file").advanced);
+            }
             assert_eq!(
                 field(&schema.fields, auth).section.as_ref().unwrap().id,
                 "authentication"
@@ -184,7 +197,10 @@ fn provider_sections_keep_paths_defaults_and_normal_authentication_visible() {
                     .id,
                 "cache"
             );
-            assert!(field(&schema.fields, "base_url").advanced);
+            assert_eq!(
+                field(&schema.fields, "base_url").advanced,
+                implementation != "openai_compatible"
+            );
         }
         if matches!(
             implementation,
@@ -220,5 +236,32 @@ fn provider_sections_keep_paths_defaults_and_normal_authentication_visible() {
             );
         }
         assert_eq!(config, original);
+    }
+}
+#[test]
+fn creation_presets_have_valid_forms_and_leave_credentials_to_the_user() {
+    let presets: serde_json::Value = serde_json::from_str(include_str!(
+        "../../../../../components/model-pack-module/model-connections.json"
+    ))
+    .unwrap();
+    for preset in presets.as_array().unwrap() {
+        let config = &preset["module_config"];
+        let schema = config_schema(config);
+        schema.validate().unwrap();
+        assert!(config.get("api_key").is_none());
+        let implementation = config["implementation"].as_str().unwrap();
+        let auth = if implementation == "openai_codex" {
+            "auth_file"
+        } else {
+            "api_key"
+        };
+        assert!(!field(&schema.fields, auth).advanced);
+        assert!(
+            preset["env_allowlist"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|name| name == "HOME")
+        );
     }
 }

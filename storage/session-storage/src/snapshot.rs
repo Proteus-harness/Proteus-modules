@@ -1,0 +1,348 @@
+use crate::{backend::RecordSnapshot, types::*};
+use anyhow::{Result, ensure};
+use proteus_contracts::{domain::SessionId, model_standard::CanonicalMessage};
+use proteus_session_semantics::{JournalValidationState, ModelContextProjection, UsageProjection};
+
+#[derive(Default)]
+pub(crate) struct Fold {
+    pub validation: JournalValidationState,
+    pub model_context: ModelContextProjection,
+    pub usage: UsageProjection,
+    pub session_seq: u64,
+}
+impl Fold {
+    pub fn apply(&mut self, id: SessionId, record: &JournalRecord) -> Result<()> {
+        let mut next = self
+            .session_seq
+            .checked_add(1)
+            .ok_or_else(|| anyhow::anyhow!("journal sequence overflow"))?;
+        self.validation.apply_sequenced(id, record, &mut next)?;
+        self.model_context.apply(record);
+        self.usage.apply(record);
+        self.session_seq = record.session_seq;
+        Ok(())
+    }
+    pub fn revision(&self) -> StorageRevision {
+        StorageRevision {
+            session_seq: self.session_seq,
+            history_revision: self.validation.history_revision(),
+        }
+    }
+    pub fn conversation(&self) -> StorageConversation {
+        StorageConversation {
+            messages: self.validation.history().to_vec(),
+            revision: self.revision(),
+            model_context: self.model_context.snapshot(),
+        }
+    }
+    pub fn resume(&self, id: SessionId) -> StorageResumeState {
+        StorageResumeState {
+            conversation: self.conversation(),
+            usage: self.usage.snapshot(id),
+            last_history_turn: self.validation.last_history_turn(),
+            interrupted_turns: self.validation.interrupted_turns(),
+        }
+    }
+    pub fn into_resume(self, id: SessionId) -> StorageResumeState {
+        let revision = self.revision();
+        let last_history_turn = self.validation.last_history_turn();
+        let interrupted_turns = self.validation.interrupted_turns();
+        StorageResumeState {
+            conversation: StorageConversation {
+                messages: self.validation.into_history(),
+                revision,
+                model_context: self.model_context.snapshot(),
+            },
+            usage: self.usage.snapshot(id),
+            last_history_turn,
+            interrupted_turns,
+        }
+    }
+}
+
+pub(crate) struct SnapshotState {
+    pub identity: StorageSnapshot,
+    pub source: Box<dyn RecordSnapshot>,
+    // At most one historical boundary, derived inside the same validation
+    // pass as identity. No caller-supplied descriptor or Fold is retained.
+    previous_boundary: Option<(StorageRevision, String)>,
+    verified: bool,
+    verified_version: Option<crate::backend::SourceVersion>,
+    page_after: Option<u64>,
+    pending: Option<JournalRecord>,
+    pub(crate) display: Option<crate::display::DisplayRecords>,
+}
+impl SnapshotState {
+    pub fn new(
+        identity: StorageSnapshot,
+        source: Box<dyn RecordSnapshot>,
+        verified: bool,
+        previous_boundary: Option<(StorageRevision, String)>,
+    ) -> Result<Self> {
+        let verified_version = source.source_version()?;
+        Ok(Self {
+            identity,
+            source,
+            verified,
+            previous_boundary,
+            verified_version,
+            page_after: None,
+            pending: None,
+            display: None,
+        })
+    }
+    /// Reusing a resident semantic projection is safe only for a fully verified
+    /// exact prefix. A cheap warm descriptor alone is never sufficient.
+    pub fn is_verified_unchanged(&self) -> Result<bool> {
+        Ok(self.verified && self.source.source_version()? == self.verified_version)
+    }
+    fn reset_page_cursor(&mut self) {
+        self.page_after = None;
+        self.pending = None;
+    }
+    pub fn matches_prefix(&mut self, prefix: &StorageSnapshot) -> Result<bool> {
+        self.reset_page_cursor();
+        if prefix.session != self.identity.session
+            || prefix.revision.session_seq > self.identity.revision.session_seq
+        {
+            return Ok(false);
+        }
+        if self.verified {
+            let known = if prefix.revision.session_seq == self.identity.revision.session_seq {
+                Some((&self.identity.revision, &self.identity.content_sha256))
+            } else {
+                self.previous_boundary
+                    .as_ref()
+                    .filter(|(revision, _)| revision.session_seq == prefix.revision.session_seq)
+                    .map(|(revision, hash)| (revision, hash))
+            };
+            if let Some((revision, hash)) = known
+                && self.source.confirm_verified_data()?
+            {
+                return Ok(*revision == prefix.revision && *hash == prefix.content_sha256);
+            }
+        }
+        let Some(hash) = self
+            .source
+            .prefix_fingerprint(prefix.revision.session_seq)?
+        else {
+            return Ok(false);
+        };
+        if hash != prefix.content_sha256 {
+            return Ok(false);
+        }
+        self.source.reset()?;
+        let mut state = Fold::default();
+        while let Some(record) = self.source.next()? {
+            if record.session_seq > prefix.revision.session_seq {
+                continue;
+            }
+            state.apply(self.identity.session.session_id, &record)?;
+        }
+        Ok(state.revision() == prefix.revision)
+    }
+    pub fn fold(&mut self) -> Result<Fold> {
+        Ok(self.fold_with_terminal(false)?.0)
+    }
+    fn fold_with_terminal(&mut self, capture: bool) -> Result<(Fold, Option<JournalRecord>)> {
+        self.reset_page_cursor();
+        self.verified = false;
+        let version = self.source.source_version()?;
+        self.source.reset()?;
+        let mut state = Fold::default();
+        let mut terminal = None;
+        while let Some(record) = self.source.next()? {
+            state.apply(self.identity.session.session_id, &record)?;
+            if capture && record.session_seq == self.identity.revision.session_seq {
+                terminal = Some(record);
+            }
+        }
+        ensure!(
+            state.revision() == self.identity.revision,
+            "snapshot revision changed"
+        );
+        if self.source.source_version()? != version {
+            self.source.verify_fixed_prefix()?;
+        }
+        self.verified = true;
+        self.verified_version = self.source.source_version()?;
+        Ok((state, terminal))
+    }
+    pub fn page(&mut self, after: u64, limit: u32) -> Result<StorageRecordPage> {
+        ensure!(
+            after <= self.identity.revision.session_seq,
+            "record cursor is past the snapshot prefix"
+        );
+        // A warm snapshot is only a cheap provisional descriptor. Validate its
+        // complete fixed prefix once before exposing any canonical records.
+        let before = self.source.source_version()?;
+        let mut terminal = None;
+        if !self.verified || before != self.verified_version {
+            let capture = limit > 0
+                && before.is_some()
+                && self.identity.revision.session_seq.checked_sub(1) == Some(after);
+            terminal = self.fold_with_terminal(capture)?.1;
+        }
+        // Failed pages leave no reusable cursor. Cover repositioning as well
+        // as streaming with the same source-version check.
+        let continuing = self.page_after.take() == Some(after);
+        let page_version = self.source.source_version()?;
+        // For an exact terminal page, the complete fold already decoded the
+        // one result and left the reader at EOF. Only hand it to the existing
+        // page checks after independently authenticating the pinned bytes.
+        // Blob-bearing JSONL, changed or unknown sources keep the normal scan.
+        if terminal.is_some() && before == page_version && self.source.confirm_verified_data()? {
+            self.pending = terminal;
+        } else if !continuing {
+            if terminal.is_some() && before != page_version {
+                self.source.verify_fixed_prefix()?;
+            }
+            drop(terminal);
+            self.pending = None;
+            self.source.reset_for_page(after)?;
+        }
+        let mut records = Vec::new();
+        let mut bytes = 0_usize;
+        while records.len() < limit as usize {
+            let record = match self.pending.take() {
+                Some(record) => record,
+                None => match self.source.next()? {
+                    Some(record) => record,
+                    None => break,
+                },
+            };
+            if record.session_seq <= after {
+                continue;
+            }
+            let record_bytes = crate::codec::encoded_bytes(&record)?;
+            ensure!(
+                record_bytes <= SESSION_STORAGE_MAX_RECORD_BYTES,
+                "canonical record exceeds maximum"
+            );
+            if !records.is_empty() && bytes + record_bytes > SESSION_STORAGE_PAGE_BYTE_BUDGET {
+                self.pending = Some(record);
+                break;
+            }
+            bytes += record_bytes;
+            records.push(record);
+        }
+        if self.source.source_version()? != page_version {
+            self.source.verify_fixed_prefix()?;
+            self.verified_version = self.source.source_version()?;
+        }
+        let last = records.last().map_or(after, |record| record.session_seq);
+        self.page_after = Some(last);
+        let next_after_seq = (last < self.identity.revision.session_seq).then_some(last);
+        Ok(StorageRecordPage {
+            snapshot: self.identity.clone(),
+            records,
+            next_after_seq,
+        })
+    }
+    pub fn display_page(&mut self, after: u64, limit: u32) -> Result<StorageRecordPage> {
+        let version = self.source.source_version()?;
+        if version != self.verified_version {
+            self.source.verify_fixed_prefix()?;
+            self.verified_version = self.source.source_version()?;
+        }
+        let page = self
+            .display
+            .as_mut()
+            .ok_or_else(|| anyhow::anyhow!("snapshot has no display projection"))?
+            .page(&self.identity, after, limit)?;
+        if self.source.source_version()? != self.verified_version {
+            self.source.verify_fixed_prefix()?;
+            self.verified_version = self.source.source_version()?;
+        }
+        Ok(page)
+    }
+    pub fn conversation_at(&mut self, point: StorageHistoryPoint) -> Result<StorageConversation> {
+        if point == StorageHistoryPoint::Current {
+            let state = self.fold()?;
+            return Ok(StorageConversation {
+                revision: state.revision(),
+                model_context: state.model_context.snapshot(),
+                messages: state.validation.into_history(),
+            });
+        }
+        self.reset_page_cursor();
+        self.source.reset()?;
+        let mut state = Fold::default();
+        let mut selected = matches!(
+            point,
+            StorageHistoryPoint::Revision {
+                history_revision: 0
+            }
+        )
+        .then(|| state.conversation());
+        while let Some(record) = self.source.next()? {
+            if let JournalEntry::HistoryMutated(mutation) = &record.entry {
+                let compacted = mutation
+                    .compaction
+                    .as_ref()
+                    .is_some_and(|report| report.changed);
+                if mutation.mutation == HistoryMutationKind::Replace && !compacted {
+                    // A deliberate reset must not resurrect the discarded branch.
+                    selected = None;
+                }
+                if let StorageHistoryPoint::BeforeReplacement { part_id } = point {
+                    if compacted
+                        && mutation
+                            .messages
+                            .iter()
+                            .any(|m| m.parts.iter().any(|p| p.part_id == part_id))
+                        && !state
+                            .validation
+                            .history()
+                            .iter()
+                            .any(|m| m.parts.iter().any(|p| p.part_id == part_id))
+                    {
+                        selected = Some(state.conversation());
+                    }
+                }
+            }
+            state.apply(self.identity.session.session_id, &record)?;
+            if let StorageHistoryPoint::Revision { history_revision } = point {
+                if selected.is_none() && state.validation.history_revision() == history_revision {
+                    selected = Some(state.conversation());
+                }
+            }
+        }
+        // Finish the immutable prefix verification before exposing a prior state.
+        selected.ok_or_else(|| {
+            anyhow::anyhow!(
+                "requested history revision/replacement is unavailable after the latest reset"
+            )
+        })
+    }
+}
+
+pub(crate) fn preview(messages: &[CanonicalMessage]) -> Option<String> {
+    use proteus_contracts::model_standard::{ContentPart, MessageRole};
+    let text = |message: &CanonicalMessage| {
+        message.parts.iter().find_map(|part| match &part.payload {
+            ContentPart::Text { text }
+            | ContentPart::ReasoningSummary { text }
+            | ContentPart::Reasoning { text, .. } => {
+                let text = text.trim();
+                (!text.is_empty()).then(|| text.to_owned())
+            }
+            ContentPart::ToolResult { result } => {
+                let text = result.text_or_status();
+                let text = text.trim();
+                (!text.is_empty()).then(|| text.to_owned())
+            }
+            _ => None,
+        })
+    };
+    let selected = messages
+        .iter()
+        .filter(|m| m.role == MessageRole::User)
+        .find_map(text)
+        .or_else(|| messages.iter().find_map(text))?;
+    Some(if selected.chars().count() <= 160 {
+        selected
+    } else {
+        format!("{}...", selected.chars().take(160).collect::<String>())
+    })
+}

@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { Effect, Layer, Stream } from "effect";
 import { AIError, InvalidRequestError, LanguageModel, LLMClient, LLMEvent, LLMRequest } from "@opencode/ai";
-import { Service as Compaction, layer as compactionLayer, estimateContext, estimatePrompt } from "@opencode/core/session/compaction";
+import { Service as Compaction, layer as compactionLayer, estimatePrompt } from "@opencode/core/session/compaction";
 import { Service as Bus } from "@opencode/core/bus";
 import { Service as Database } from "@opencode/core/database/database";
 import { Service as ModelRequest } from "@opencode/core/session/model-request";
@@ -179,6 +179,7 @@ export async function runNativeCompaction(context, template, config, { hostCall,
             signal.throwIfAborted();
             const response = await hostCall("host.model.complete", { request: {
                 ...template, instructions: request.system.map(part => ({ kind: "System", text: part.text, priority: 100 })),
+                operation: "Complete",
                 messages: request.messages.map(canonicalPrompt), tools: [], tool_choice: "None", response_format: "Text",
                 metadata: { ...(template.metadata ?? {}), suppress_stream_deltas: true },
             } });
@@ -195,7 +196,7 @@ export async function runNativeCompaction(context, template, config, { hostCall,
                 { error: { type: "compaction.model-failed", message: error.message ?? String(error) } };
         } })),
         compact: () => Effect.fail({ error: { type: "provider.unsupported-operation",
-            message: "Native provider compaction is unavailable through hook/v6 host.model.complete" } }),
+            message: "Native provider compaction is unavailable through hook/v8 host.model.complete" } }),
     };
     const services = Layer.mergeAll(
         Layer.succeed(Bus, { publish: (event, data) => Effect.sync(() => events.push({ type: event.type, ...data })) }),
@@ -203,7 +204,7 @@ export async function runNativeCompaction(context, template, config, { hostCall,
         Layer.succeed(ModelRequest, { compaction: input => {
             if (context.model.compaction?.type === "native") return Effect.fail({ error: {
                 type: "provider.unsupported-operation",
-                message: "Native provider remote compaction is unsupported by hook/v6 host.model.complete; no local summary was substituted",
+                message: "Native provider remote compaction is unsupported by hook/v8 host.model.complete; no local summary was substituted",
             } });
             events.push({ type: "proteus.compaction.prepared", budget: input.inputTokens.measured });
             return Effect.succeed({ event: {}, options: {}, retry: () => Effect.void,
@@ -232,9 +233,9 @@ export async function runNativeCompaction(context, template, config, { hostCall,
 }
 
 export function createCompactionExport(binding) {
-    if (binding.slot !== "hook" || binding.module_id !== "opencode_compact" || binding.contract_version !== "v6" || binding.composition !== "ordered_many") throw new Error("Expected hook/opencode_compact v6 ordered_many");
+    if (binding.slot !== "hook" || binding.module_id !== "opencode_compact" || binding.contract_version !== "v8" || binding.composition !== "ordered_many") throw new Error("Expected hook/opencode_compact v8 ordered_many");
     const config = validateConfig(binding.module_config);
-    return { manifest: { slot: "hook", module_id: "opencode_compact", contract_version: "v6", composition: "ordered_many", module_features: [], config_schema: configSchema },
+    return { manifest: { slot: "hook", module_id: "opencode_compact", contract_version: "v8", composition: "ordered_many", module_features: [], config_schema: configSchema },
         async invoke(method, params, invocation) {
             if (method !== "hook.invoke") throw new Error(`Unsupported compaction hook method ${method}`);
             const event = params.event;
@@ -243,7 +244,7 @@ export function createCompactionExport(binding) {
             const input = { ...event.input, messages: event.output.messages,
                 token_estimate: event.output.changed ? event.output.token_estimate : event.input.token_estimate };
             const context = await nativeContext(input, input.messages, config);
-            const original = estimateContext(context);
+            const promptEstimate = estimatePrompt(context);
             const reason = input.reason === "manual" ? "manual" : ["overflow", "context_window_exceeded"].includes(input.reason) ? "overflow" : "auto";
             const { outcome, events } = await runNativeCompaction(context, input.request, config, invocation, reason);
             if (outcome.status === "skipped") return { result: { action: "continue" } };
@@ -260,10 +261,10 @@ export function createCompactionExport(binding) {
             const currentUser = input.messages.findLast(message => message.role === "User");
             return { result: { action: "context_preparation", output: { ...event.output, messages: [checkpoint], changed: true,
                 summary: completed.text, user_message_replacements: currentUser ? [{ source_message_id: currentUser.id, replacement_message_id: checkpoint.id }] : [],
-                original_token_estimate: original, token_estimate: null,
+                original_token_estimate: promptEstimate.measured + promptEstimate.estimated, token_estimate: null,
                 trigger_tokens: reason === "auto" ? events.find(event => event.type === "proteus.compaction.prepared")?.budget ?? null : null,
                 summary_source: "model", skipped_reason: null,
                 metadata: { upstream: "@opencode/core@2.0.22/session/compaction", native_service: true,
-                    prompt_estimate: estimatePrompt(context), provider_compaction: false } } } };
+                    prompt_estimate: promptEstimate, provider_compaction: false } } } };
         } };
 }

@@ -8,7 +8,7 @@ use std::{
 use async_trait::async_trait;
 use proteus_contracts::contracts::{ApprovalRequest, ApprovalResponse, ApprovalTransport};
 use proteus_core::core::{
-    AgentRuntime, AppConfig, JournalEntry, ModuleCatalog, SessionStore, ToolCallRecordPhase,
+    AgentRuntime, AppConfig, JournalEntry, ModuleCatalog, ToolCallRecordPhase,
     TurnSettlementStatus, WorkflowReplayOptions, replay_workflow,
 };
 use proteus_core::process_adapters::ProcessComponentConfig;
@@ -39,6 +39,46 @@ pub(super) fn workspace_file(path: &str) -> PathBuf {
         std::env::var_os("PROTEUS_TEST_HARNESS_ROOT").expect("run python3 scripts/test.py"),
     )
     .join(path)
+}
+
+/// Keep synthetic fixture/journal evidence when a shell effect is missing;
+/// otherwise a TempDir panic discards the actual tool failure before diagnosis.
+pub(super) fn read_effect(path: &Path, fixture: &Path, session: &Path) -> String {
+    std::fs::read_to_string(path).unwrap_or_else(|error| {
+        let stamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let evidence = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../target/test-failures")
+            .join(format!("shell-effect-{}-{stamp}", std::process::id()));
+        fn copy_files(from: &Path, to: &Path) -> std::io::Result<()> {
+            std::fs::create_dir_all(to)?;
+            for entry in std::fs::read_dir(from)? {
+                let entry = entry?;
+                let kind = entry.file_type()?;
+                if kind.is_dir() {
+                    copy_files(&entry.path(), &to.join(entry.file_name()))?;
+                } else if kind.is_file() {
+                    std::fs::copy(entry.path(), to.join(entry.file_name()))?;
+                }
+            }
+            Ok(())
+        }
+        let fixture_copy = copy_files(fixture, &evidence.join("fixture"));
+        let session_copy = copy_files(session, &evidence.join("session"));
+        let results = crate::session_storage::open(session.to_owned())
+            .and_then(|store| store.load_projection())
+            .map(|projection| projection.records.into_iter().filter_map(|record| {
+                if let JournalEntry::ToolResultRecorded(tool) = record.entry {
+                    Some(tool.result)
+                } else { None }
+            }).collect::<Vec<_>>());
+        panic!(
+            "cannot read shell effect {}: {error}; tool results: {results:#?}; evidence: {} (fixture copy: {fixture_copy:?}, session copy: {session_copy:?})",
+            path.display(), evidence.display()
+        );
+    })
 }
 
 fn response(output: Value, round: usize) -> Value {
@@ -121,10 +161,10 @@ async fn serve(listener: TcpListener) -> Vec<Value> {
 }
 
 pub(super) async fn fixture_config(endpoint: &str) -> AppConfig {
-    let profile = workspace_file("configs/codex.config.toml");
+    let profile = workspace_file("configs/codex-subscription.config.toml");
     let mut config = AppConfig::load(Some(&profile))
         .await
-        .expect("tracked Codex profile loads");
+        .expect("tracked Codex subscription profile loads");
 
     // Exercise the maintained assembly against a local Responses fixture:
     // no OAuth credentials or live subscription endpoint are involved.
@@ -193,6 +233,7 @@ pub(super) async fn fixture_config(endpoint: &str) -> AppConfig {
     }
     config.runtime.model_timeout_ms = 5_000;
     config.runtime.workflow_timeout_ms = 15_000;
+    crate::session_storage::configure(&mut config);
     config
 }
 
@@ -278,10 +319,12 @@ fn request_tool_names(request: &Value) -> HashSet<&str> {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn standalone_codex_profile_sends_five_native_tools_with_freeform_patch() {
-    let profile = AppConfig::load(Some(&workspace_file("configs/codex.config.toml")))
-        .await
-        .unwrap();
+async fn standalone_codex_subscription_profile_sends_five_native_tools_with_freeform_patch() {
+    let profile = AppConfig::load(Some(&workspace_file(
+        "configs/codex-subscription.config.toml",
+    )))
+    .await
+    .unwrap();
     assert_eq!(
         profile.module_config["model"]["openai_codex"]["capabilities"]["supports_freeform_tools"],
         true
@@ -440,7 +483,7 @@ async fn extended_codex_profile_exposes_and_executes_policy_visible_tools_direct
     let note: Value =
         serde_json::from_slice(&std::fs::read(root.path().join("resume.json")).unwrap()).unwrap();
     let session_dir = PathBuf::from(note["session_dir"].as_str().unwrap());
-    let projection = SessionStore::open(session_dir.clone())
+    let projection = crate::session_storage::open(session_dir.clone())
         .unwrap()
         .load_projection()
         .unwrap();

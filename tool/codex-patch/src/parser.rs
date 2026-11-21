@@ -187,12 +187,7 @@ fn parse_patch_text(patch: &str, mode: ParseMode) -> Result<ApplyPatchArgs, Pars
     let patch = patch_lines.join("\n");
     let mut parser = StreamingPatchParser::default();
     parser.push_delta(&patch)?;
-    let hunks = parser.finish()?;
-    let environment_id = parser.environment_id().map(str::to_owned);
-    Ok(ApplyPatchArgs {
-        hunks,
-        environment_id,
-    })
+    parser.finish()
 }
 
 /// Checks the start and end lines of the patch text for `apply_patch`,

@@ -8,8 +8,8 @@ use proteus_contracts::{
     model_standard::ContentPart,
 };
 use proteus_core::core::{
-    AgentRuntime, HistoryMutationKind, JournalEntry, ModuleCatalog, SessionStore,
-    ToolCallRecordPhase, TurnSettlementStatus, WorkflowReplayOptions, replay_workflow,
+    AgentRuntime, HistoryMutationKind, JournalEntry, ModuleCatalog, ToolCallRecordPhase,
+    TurnSettlementStatus, WorkflowReplayOptions, replay_workflow,
 };
 use serde_json::{Value, json};
 use tokio::{io::AsyncWriteExt, net::TcpListener};
@@ -239,7 +239,7 @@ async fn check_surface(surface: Surface, policy_mode: PolicyMode, broken_stream:
         assert_eq!(std::fs::read_to_string(&target).unwrap(), CONTENT);
     }
 
-    let projection = SessionStore::open(session_dir.clone())
+    let projection = crate::session_storage::open(session_dir.clone())
         .unwrap()
         .load_projection()
         .unwrap();

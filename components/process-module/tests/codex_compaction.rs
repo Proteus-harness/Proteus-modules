@@ -1,12 +1,15 @@
 //! End-to-end Codex compaction through process workflow, process compactor and
 //! loopback Responses HTTP. The fixture never contacts a live provider.
+#[path = "fixtures/session_storage.rs"]
+mod session_storage;
+
 use std::time::Duration;
 
 use proteus_contracts::{
     domain::new_session_id,
     model_standard::{ContentPart, MessageRole},
 };
-use proteus_core::core::{AgentRuntime, AppConfig, JournalEntry, SessionStore};
+use proteus_core::core::{AgentRuntime, AppConfig, JournalEntry};
 use serde_json::{Value, json};
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
@@ -174,7 +177,7 @@ async fn serve(listener: TcpListener, replies: Vec<FixtureReply>) -> Vec<Value> 
 }
 
 fn config(endpoint: &str) -> AppConfig {
-    serde_json::from_value(json!({
+    let mut config = serde_json::from_value(json!({
         "active_provider": "fixture",
         "providers": {
             "fixture": {
@@ -228,7 +231,9 @@ fn config(endpoint: &str) -> AppConfig {
         "tools": {"enabled": ["read_file"]},
         "runtime": {"model_timeout_ms": 5000, "workflow_timeout_ms": 15000}
     }))
-    .expect("fixture config")
+    .expect("fixture config");
+    crate::session_storage::configure(&mut config);
+    config
 }
 
 fn text_at(item: &Value) -> &str {
@@ -405,7 +410,7 @@ async fn check_codex_compaction(retry: SummaryRetry) {
         "old assistant/tool tail must be replaced by the compaction summary"
     );
 
-    let cold = SessionStore::open(session_dir.clone())
+    let cold = crate::session_storage::open(session_dir.clone())
         .expect("cold session store")
         .load_projection()
         .expect("cold history projection");

@@ -4,7 +4,7 @@ pub(super) fn sanitize_provider_text(text: &str) -> String {
         .to_owned()
 }
 
-#[derive(Default)]
+#[derive(Debug, Clone, Default)]
 pub(super) struct DsmlStreamFilter {
     pending: String,
     in_tool_block: bool,

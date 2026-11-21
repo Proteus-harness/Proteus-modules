@@ -2,9 +2,9 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createServer } from 'node:http';
 import { existsSync } from 'node:fs';
-import { writeFile } from 'node:fs/promises';
+import { readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
-import { fixture, component, appServer, nativeCatalog, flash, second, core } from './model-fixture.mjs';
+import { fixture, component, appServer, nativeCatalog, flash, second, core, node, worker, moduleBin } from './model-fixture.mjs';
 
 // Module-only checkouts still exercise the real v3 worker. A ready Core artifact
 // additionally enables the host/UI DTO boundary; tests never build that artifact.
@@ -28,6 +28,33 @@ test('native OpenCode catalog and capabilities cross the real v3 worker, then wo
         const unknown = await host.invoke('describe', { model: { model: 'unknown-model' } }).result;
         assert.match(unknown.error.message, /unavailable/);
         assert.equal((await host.invoke('catalog').result).result.models.length, 2);
+    } finally { assert.deepEqual(await host.close(), { code: 0, signal: null }); }
+});
+
+test('one native worker keeps Go and Zen connections independent under concrete export IDs', async () => {
+    const f = await fixture(), source = nativeCatalog();
+    source.opencode = { ...source['opencode-go'], id: 'opencode', name: 'Synthetic Zen',
+        models: { 'zen-only': { ...source['opencode-go'].models[flash], id: 'zen-only', name: 'Zen only' } } };
+    await writeFile(f.catalog, JSON.stringify(source));
+    const authBefore = await readFile(f.database);
+    const host = component(f, f.config, { 'work-go': f.config,
+        'personal-zen': { ...f.config, provider: 'opencode' } });
+    try {
+        const initialized = await host.initialize();
+        assert.equal(initialized.error, undefined);
+        const exports = initialized.result.exports;
+        assert.deepEqual(exports.map(exported => exported.module_id), ['work-go', 'personal-zen']);
+        assert.deepEqual(exports[0].module_features, ['model.catalog.v1', 'model.quota.v1']);
+        assert.deepEqual(exports[1].module_features, ['model.catalog.v1']);
+        const [go, zen] = await Promise.all([
+            host.invoke('catalog', null, 'work-go').result,
+            host.invoke('catalog', null, 'personal-zen').result,
+        ]);
+        assert.deepEqual(go.result.models.map(model => model.id).sort(), [flash, second].sort());
+        assert.deepEqual(zen.result.models.map(model => model.id), ['zen-only']);
+        assert.match((await host.invoke('describe', { model: { model: 'zen-only' } }, 'work-go').result).error.message, /unavailable/);
+        assert.match((await host.invoke('describe', { model: { model: flash } }, 'personal-zen').result).error.message, /unavailable/);
+        assert.deepEqual(await readFile(f.database), authBefore);
     } finally { assert.deepEqual(await host.close(), { code: 0, signal: null }); }
 });
 
@@ -143,5 +170,87 @@ test('worker cancellation aborts native catalog HTTP and permits a fresh lookup'
         assert.equal(requests, 2);
     } finally {
         await host.close(); remote.closeAllConnections(); await new Promise(resolve => remote.close(resolve));
+    }
+});
+
+test('ready Core acknowledges native overflow compaction before resampling and preserves one tool effect through cold resume',
+    { timeout: 45000, skip: readyCore }, async () => {
+    const f = await fixture(), requests = [];
+    const summary = '## Objective\nFinish the current task.\n\n## Work State\n### Completed\nEarlier inspection.\n\n## Next Move\nContinue from the retained tool result.';
+    const callID = 'append-once';
+    function stream(response, content, call) {
+        response.writeHead(200, { 'Content-Type': 'text/event-stream' });
+        const chunk = (delta, reason = null, usage) => response.write('data: ' + JSON.stringify({
+            id: 'synthetic', model: flash, object: 'chat.completion.chunk',
+            choices: [{ index: 0, delta, finish_reason: reason }], ...(usage ? { usage } : {}),
+        }) + '\n\n');
+        chunk({ role: 'assistant' });
+        if (call) chunk({ tool_calls: [{ index: 0, id: callID, type: 'function', function: {
+            name: 'shell', arguments: JSON.stringify({ command: 'printf x >> counter', description: 'Append once' }),
+        } }] });
+        else chunk({ content });
+        chunk({}, call ? 'tool_calls' : 'stop', { prompt_tokens: 100, completion_tokens: 10,
+            prompt_tokens_details: { cached_tokens: 0 }, completion_tokens_details: { reasoning_tokens: 0 } });
+        response.end('data: [DONE]\n\n');
+    }
+    const remote = createServer(async (request, response) => {
+        let body = ''; for await (const chunk of request) body += chunk;
+        requests.push(JSON.parse(body));
+        if (requests.length === 3) {
+            response.writeHead(400, { 'Content-Type': 'application/json' });
+            response.end(JSON.stringify({ error: { message: 'maximum context length exceeded', type: 'invalid_request_error', code: 'context_length_exceeded' } }));
+        } else stream(response, requests.length === 1 ? 'Earlier inspection complete.' :
+            requests.length === 4 ? summary : requests.length === 5 ? 'finished after overflow' : 'cold resumed', requests.length === 2);
+    });
+    await new Promise(resolve => remote.listen(0, '127.0.0.1', resolve));
+    await writeFile(f.catalog, JSON.stringify(nativeCatalog(`http://127.0.0.1:${remote.address().port}/v1`)));
+    const runtime = { command: node, args: [worker], env_allowlist: Object.keys(f.env), exports: {
+        workflow: { opencode_loop: {} }, context: { opencode_context: {} },
+        hook: { opencode_prompt: {}, opencode_compact: {} }, tool: { opencode_tools: {} },
+    } };
+    const profile = { modules: { workflow: 'opencode_loop', context: 'opencode_context', policy: 'opencode_policy',
+        hooks: ['opencode_prompt', 'opencode_compact'] },
+        components: { runtime, policy: { command: moduleBin('proteus-policy-pack-module'), exports: { policy: { opencode_policy: {} } } } },
+        module_config: { hook: { opencode_compact: { keep: 0 } }, policy: { opencode_policy: { rules: [{ permission: '*', action: 'allow' }] } } },
+        tools: { enabled: ['shell'] }, permissions: { mode: 'normal' } };
+    let server, session;
+    try {
+        server = await appServer(f, 'overflow', profile);
+        session = (await server.request('/new-session', {})).output.session_dir;
+        const warmup = await server.request('/send', { session_dir: session,
+            text: 'Original task: ' + 'Earlier project context. '.repeat(3000) });
+        assert.equal(warmup.error, null, JSON.stringify(warmup));
+        const completed = await server.request('/send', { session_dir: session, text: 'Append once, then finish.' });
+        assert.equal(completed.error, null, JSON.stringify(completed));
+        assert.equal(await readFile(join(f.workspace, 'counter'), 'utf8'), 'x');
+        assert.equal(requests.length, 5);
+        assert.equal(requests[3].tools?.length ?? 0, 0, 'summary cannot execute tools');
+        assert.match(JSON.stringify(requests[4].messages), /conversation-checkpoint/);
+        assert.match(JSON.stringify(requests[4].messages), /printf x >> counter/);
+        assert.match(JSON.stringify(requests[4].messages), /Tool result/);
+        const journal = (await readFile(join(session, 'journal.jsonl'), 'utf8')).trim().split('\n').map(JSON.parse);
+        const settled = journal.filter(row => row.kind === 'turn_settled');
+        assert.equal(settled.at(-1).payload.value.status, 'success');
+        const results = journal.filter(row => row.kind === 'tool_result_recorded'
+            && row.payload.value.result.call_id === callID);
+        assert.equal(results.length, 1);
+        const checkpointIndex = journal.findIndex(row => row.kind === 'history_mutated'
+            && row.payload.value.mutation === 'checkpoint'
+            && row.payload.value.compaction?.reason === 'context_window_exceeded');
+        assert.ok(checkpointIndex >= 0, 'overflow replacement must be durable in the canonical journal');
+        const nextSampling = journal.findIndex((row, index) => index > checkpointIndex
+            && row.kind === 'model_request_recorded');
+        assert.ok(nextSampling > checkpointIndex, 'the authoritative replacement precedes the next request');
+        assert.deepEqual(await server.close(), { code: 0, signal: null }); server = undefined;
+        server = await appServer(f, 'overflow-restart', profile);
+        assert.equal((await server.request('/resume', { session_dir: session })).error, null);
+        const resumed = await server.request('/send', { session_dir: session, text: 'Report the retained state without tools.' });
+        assert.equal(resumed.error, null, JSON.stringify(resumed));
+        assert.equal(await readFile(join(f.workspace, 'counter'), 'utf8'), 'x');
+        assert.equal(requests.length, 6);
+        assert.match(JSON.stringify(requests[5].messages), /printf x >> counter/);
+    } finally {
+        try { if (server) assert.deepEqual(await server.close(), { code: 0, signal: null }); }
+        finally { remote.closeAllConnections(); await new Promise(resolve => remote.close(resolve)); }
     }
 });

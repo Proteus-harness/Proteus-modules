@@ -18,6 +18,7 @@ CATEGORIES = {
     "hook": "Hooks",
     "tool": "Инструменты",
     "context_provider": "Поиск и память",
+    "storage": "Хранение сессий",
 }
 
 # Human-facing copy only. Versions, paths, selection and exports come from
@@ -39,6 +40,7 @@ DESCRIPTIONS = {
     "rg-search": "Поиск по рабочей области через ripgrep.",
     "rust-lsp": "Инструменты работы с Rust language server.",
     "shell-tool": "Запуск команд и интерактивный терминал.",
+    "session-storage": "Хранение истории сессий в JSONL или SQLite.",
     "skill-pack": "Обнаружение и чтение навыков агента.",
     "sqlite-memory": "Память в SQLite с инструментами и поставщиком контекста.",
     "tool-selection-hook": "Динамический отбор доступных инструментов.",

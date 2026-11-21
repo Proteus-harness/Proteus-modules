@@ -1,3 +1,7 @@
+use proteus_contracts::model_standard::{
+    ContentPart,
+    input_estimates::{ContextTokenEstimateSource, ModelInputEstimate},
+};
 use proteus_contracts::{
     contracts::{ContextPreparationInput, ContextPreparationOutput},
     process_module::{HookModuleHost, ProcessModuleError},
@@ -15,39 +19,90 @@ use crate::{
 pub(crate) fn compact(
     input: ContextPreparationInput,
     config: &crate::config::CompactorConfig,
+    remote: bool,
     host: &mut dyn HookModuleHost,
 ) -> Result<ContextPreparationOutput, ProcessModuleError> {
-    let token_estimate = input
-        .token_estimate
-        .unwrap_or_else(|| estimate_messages_tokens(&input.messages));
+    let estimates = if remote {
+        match input.request.as_ref() {
+            Some(request) => {
+                crate::input_estimates::for_messages(&request.model, &input.messages, host)?
+            }
+            None => ModelInputEstimate::default(),
+        }
+    } else {
+        ModelInputEstimate::default()
+    };
+    let has_opaque = input
+        .messages
+        .iter()
+        .flat_map(|message| &message.parts)
+        .any(|part| matches!(part.payload, ContentPart::Opaque { .. }));
+    let token_estimate = if remote && has_opaque {
+        let fallback =
+            crate::remote_history::estimate_messages_with_estimates(&input.messages, &estimates);
+        match input
+            .request
+            .as_ref()
+            .and_then(|request| ContextTokenEstimateSource::from_metadata(&request.metadata))
+        {
+            Some(ContextTokenEstimateSource::Observed) => input.token_estimate.unwrap_or(fallback),
+            Some(ContextTokenEstimateSource::Estimated) => fallback,
+            None => input.token_estimate.unwrap_or(0).max(fallback),
+        }
+    } else {
+        input
+            .token_estimate
+            .unwrap_or_else(|| estimate_messages_tokens(&input.messages))
+    };
+    let unchanged = |mut output: ContextPreparationOutput| {
+        if remote {
+            estimates.write_metadata(&mut output.metadata);
+        }
+        output
+    };
     let Some(trigger_tokens) = resolve_trigger_tokens(&input, config) else {
-        return Ok(unchanged_without_trigger(input.messages, token_estimate));
+        return Ok(unchanged(unchanged_without_trigger(
+            input.messages,
+            token_estimate,
+        )));
     };
     if input.messages.is_empty() {
-        return Ok(unchanged_with_diagnostics(
+        return Ok(unchanged(unchanged_with_diagnostics(
             input.messages,
             token_estimate,
             trigger_tokens,
             "no_persistent_history_to_compact",
-        ));
+        )));
     }
     if token_estimate < trigger_tokens {
-        return Ok(unchanged_with_diagnostics(
+        return Ok(unchanged(unchanged_with_diagnostics(
             input.messages,
             token_estimate,
             trigger_tokens,
             "below_trigger_threshold",
-        ));
+        )));
     }
 
     let history = split_history(&input.messages);
     if history.compactable_history.is_empty() {
-        return Ok(unchanged_with_diagnostics(
+        return Ok(unchanged(unchanged_with_diagnostics(
             input.messages,
             token_estimate,
             trigger_tokens,
             "no_persistent_history_to_compact",
-        ));
+        )));
+    }
+
+    if remote {
+        return crate::remote::compact(
+            input,
+            config,
+            history,
+            token_estimate,
+            trigger_tokens,
+            &estimates,
+            host,
+        );
     }
 
     let user_messages = collect_user_messages(&history.compactable_history);

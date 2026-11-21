@@ -237,6 +237,7 @@ fn all_reference_exports_share_a_component_and_route_over_one_broker() {
         };
         let event = if target.module_id == "codex_compact" {
             HookEvent::BeforeContext {
+                model_capabilities: None,
                 input: proteus_contracts::contracts::ContextPreparationInput::new(vec![], None),
                 output: proteus_contracts::contracts::ContextPreparationOutput::unchanged(vec![]),
                 target: None,
@@ -697,6 +698,7 @@ fn policy_selection_provider_and_preparation_execute_in_worker() {
         PROCESS_HOOK_INVOKE_METHOD,
         serde_json::to_value(proteus_contracts::contracts::HookInput {
             event: proteus_contracts::contracts::HookEvent::BeforeContext {
+                model_capabilities: None,
                 output: proteus_contracts::contracts::ContextPreparationOutput::unchanged(
                     messages.clone(),
                 ),
@@ -1161,8 +1163,13 @@ fn workflow_input(workspace: &Path) -> Value {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn targeted_cancel_keeps_concurrent_sibling_and_generation_alive() {
     let workspace = tempfile::tempdir().expect("workspace");
-    let workflow = ProcessExportBinding::new("workflow", "coding.single_loop", "v20", json!({}))
-        .expect("workflow binding");
+    let workflow = ProcessExportBinding::new(
+        "workflow",
+        "coding.single_loop",
+        proteus_contracts::contracts::PROCESS_WORKFLOW_CONTRACT_VERSION,
+        json!({}),
+    )
+    .expect("workflow binding");
     let workflow_target = workflow.export_ref();
     let policy =
         ProcessExportBinding::new("policy", "allow_all", "v2", json!({})).expect("policy binding");

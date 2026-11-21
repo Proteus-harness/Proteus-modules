@@ -39,7 +39,7 @@ pub fn config_schema(id: &str) -> ModuleConfigSchema {
                 Kind::Array {
                     items: Box::new(Kind::text()),
                 },
-            ),
+            ).suggest_exports("context_provider"),
         );
         fields.push(
             Field::new(
@@ -123,4 +123,31 @@ pub fn config_schema(id: &str) -> ModuleConfigSchema {
             .filter(|v| *v != Value::Null);
     }
     ModuleConfigSchema { fields }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use proteus_contracts::domain::ConfigSuggestions;
+
+    #[test]
+    fn ordered_context_sources_discover_exports_without_restricting_the_default_names() {
+        for module in ["repo_aware", "codex_context"] {
+            let schema = config_schema(module);
+            schema.validate().unwrap();
+            let sources = schema
+                .fields
+                .iter()
+                .find(|field| field.key == "providers")
+                .unwrap();
+            assert_eq!(
+                sources.suggestions,
+                Some(ConfigSuggestions::Exports {
+                    slot: "context_provider".into()
+                })
+            );
+            assert!(matches!(sources.value, Kind::Array { .. }));
+            assert!(sources.default.as_ref().and_then(Value::as_array).is_some());
+        }
+    }
 }

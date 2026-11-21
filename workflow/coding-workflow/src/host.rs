@@ -7,8 +7,9 @@ use proteus_contracts::{
         CacheHints, ContextBundle, Event, HistoryCompactionReport, ToolCall, ToolResult, ToolSpec,
     },
     model_standard::{
-        CanonicalMessage, CanonicalModelRequest, CanonicalModelResponse, InstructionBlock,
-        InstructionKind, TokenUsage,
+        CanonicalMessage, CanonicalModelRequest, CanonicalModelResponse, ContentPart,
+        InstructionBlock, InstructionKind, TokenUsage,
+        input_estimates::{ContextTokenEstimateSource, ModelInputEstimate},
     },
     process_module::{ProcessModuleError, WorkflowModuleHostMut, WorkflowModuleInput},
 };
@@ -33,11 +34,10 @@ struct CompactedMessages {
 
 #[derive(Clone, Copy)]
 struct RequestOptions<'a> {
-    expose_tools: bool,
     include_dynamic_meta_tools: bool,
     last_usage: Option<&'a LastModelUsage>,
     context_hint: Option<u32>,
-    check_compaction: bool,
+    compaction_reason: Option<&'a str>,
     compaction_trigger_tokens: Option<u32>,
 }
 
@@ -66,11 +66,10 @@ pub(super) fn request_from_state(
         developer_instructions,
         phase,
         RequestOptions {
-            expose_tools: true,
             include_dynamic_meta_tools: phase != "review",
             last_usage,
             context_hint: None,
-            check_compaction: true,
+            compaction_reason: Some(phase),
             compaction_trigger_tokens: None,
         },
     )
@@ -94,11 +93,10 @@ pub(super) fn request_from_state_with_instruction_blocks(
         developer_instructions,
         phase,
         RequestOptions {
-            expose_tools: true,
             include_dynamic_meta_tools: phase != "review",
             last_usage,
             context_hint,
-            check_compaction: true,
+            compaction_reason: Some(phase),
             compaction_trigger_tokens: None,
         },
     )
@@ -116,13 +114,12 @@ pub(super) fn pre_turn_request(
         prior_messages,
         input.runtime.instructions.clone(),
         None,
-        "codex_pre_turn",
+        "codex_loop",
         RequestOptions {
-            expose_tools: false,
-            include_dynamic_meta_tools: false,
+            include_dynamic_meta_tools: true,
             last_usage: None,
             context_hint,
-            check_compaction: true,
+            compaction_reason: Some("codex_pre_turn"),
             compaction_trigger_tokens: None,
         },
     )
@@ -142,11 +139,10 @@ pub(super) fn first_sampling_request(
         None,
         "codex_loop",
         RequestOptions {
-            expose_tools: true,
             include_dynamic_meta_tools: true,
             last_usage: None,
             context_hint: None,
-            check_compaction: false,
+            compaction_reason: None,
             compaction_trigger_tokens,
         },
     )
@@ -164,17 +160,13 @@ fn request_from_state_with_instruction_blocks_and_options(
     if let Some(text) = super::intents::instructions(input)? {
         instructions.push(InstructionBlock::new(InstructionKind::Developer, text, 95));
     }
-    let selected = if options.expose_tools {
-        visible_tools(host, input, phase)?
-    } else {
-        SelectedTools::empty()
-    };
+    let selected = visible_tools(host, input, phase)?;
     let selection_metadata = selected.metadata;
     let mut tools = selected.tools;
     if phase == "plan" {
         tools.retain(|tool| matches!(tool.safety, proteus_contracts::domain::ToolSafety::ReadOnly));
     }
-    let dynamic_tools_enabled = if options.expose_tools && options.include_dynamic_meta_tools {
+    let dynamic_tools_enabled = if options.include_dynamic_meta_tools {
         let mut all_candidate_tools = dynamic_tools::all_policy_visible_tools(host, input)?;
         if phase == "plan" {
             all_candidate_tools.retain(|tool| {
@@ -218,12 +210,12 @@ fn request_from_state_with_instruction_blocks_and_options(
     // TokenUsageUpdated нёс max_input_tokens (хост-шейпер правит свою копию
     // уже после того, как module собрал снимок, поэтому делаем это здесь).
     request.limits.max_input_tokens = input.runtime.max_input_tokens;
-    let compacted = if options.check_compaction {
+    let compacted = if let Some(reason) = options.compaction_reason {
         compact_messages(
             input,
             host,
             &request,
-            phase,
+            reason,
             options.last_usage,
             options.context_hint,
         )?
@@ -235,6 +227,31 @@ fn request_from_state_with_instruction_blocks_and_options(
         }
     };
     request.messages = compacted.messages;
+    // Advisory estimates travel with the preparation report, never the durable
+    // canonical payload. Continuations reuse their recorded report without a new
+    // provider callback or another context preparation.
+    let estimates = compacted
+        .report
+        .as_ref()
+        .and_then(|report| ModelInputEstimate::from_metadata(&report.metadata))
+        .or_else(|| {
+            input
+                .runtime
+                .continuation
+                .as_ref()
+                .and_then(|continuation| {
+                    continuation
+                        .history
+                        .compactions
+                        .iter()
+                        .rev()
+                        .find_map(|report| ModelInputEstimate::from_metadata(&report.metadata))
+                })
+        });
+    if let Some(mut estimates) = estimates {
+        estimates.retain_for(&request.messages);
+        estimates.write_metadata(&mut request.metadata);
+    }
     // Порог автокомпакта считает компактор (он владеет конфигом), а возвращает
     // его в отчёте. Кладём в metadata запроса, чтобы снимок взял именно его —
     // тогда метка на индикаторе контекста совпадает с реальным триггером.
@@ -281,18 +298,36 @@ fn compact_messages(
     context_hint: Option<u32>,
 ) -> Result<CompactedMessages, ProcessModuleError> {
     ensure_not_cancelled(host)?;
-    let token_estimate = [
-        effective_token_estimate(&request.messages, last_usage),
-        context_hint,
-    ]
-    .into_iter()
-    .flatten()
-    .max();
-    let compaction_input =
-        ContextPreparationInput::new(request.messages.clone(), Some(request.clone()))
-            .with_reason(reason)
-            .with_token_estimate(token_estimate)
-            .with_window_tokens(input.runtime.max_input_tokens);
+    let valid_usage = last_usage.is_some_and(|usage| usage.message_count <= request.messages.len());
+    let observed = context_hint.is_some() || valid_usage;
+    let usage_estimate = effective_token_estimate(&request.messages, last_usage);
+    let has_opaque = request
+        .messages
+        .iter()
+        .flat_map(|message| &message.parts)
+        .any(|part| matches!(part.payload, ContentPart::Opaque { .. }));
+    let token_estimate = if has_opaque && observed {
+        // A restored usage hint covers the checkpoint even when the generic
+        // canonical estimate cannot interpret it.
+        if valid_usage {
+            usage_estimate
+        } else {
+            context_hint
+        }
+    } else {
+        [usage_estimate, context_hint].into_iter().flatten().max()
+    };
+    let mut preparation_request = request.clone();
+    let source = if observed {
+        ContextTokenEstimateSource::Observed
+    } else {
+        ContextTokenEstimateSource::Estimated
+    };
+    source.write_metadata(&mut preparation_request.metadata);
+    let compaction_input = ContextPreparationInput::from_request(preparation_request)
+        .with_reason(reason)
+        .with_token_estimate(token_estimate)
+        .with_window_tokens(input.runtime.max_input_tokens);
     let input_json = to_json_string(&compaction_input)?;
     let output_json = match host.prepare_context_json(String::from(input_json)) {
         Ok(json) => json,
@@ -348,15 +383,6 @@ pub(super) fn complete_model(
 pub(super) struct SelectedTools {
     pub(super) tools: Vec<ToolSpec>,
     pub(super) metadata: serde_json::Value,
-}
-
-impl SelectedTools {
-    fn empty() -> Self {
-        Self {
-            tools: Vec::new(),
-            metadata: serde_json::Value::Null,
-        }
-    }
 }
 
 fn visible_tools(

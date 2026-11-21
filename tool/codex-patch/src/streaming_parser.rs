@@ -2,6 +2,7 @@
 // Apache-2.0; see ../UPSTREAM.md, ../LICENSE and ../NOTICE.
 use std::path::PathBuf;
 
+use crate::ApplyPatchArgs;
 use crate::parser::ADD_FILE_MARKER;
 use crate::parser::BEGIN_PATCH_MARKER;
 use crate::parser::CHANGE_CONTEXT_MARKER;
@@ -48,10 +49,6 @@ enum StreamingParserMode {
 }
 
 impl StreamingPatchParser {
-    pub fn environment_id(&self) -> Option<&str> {
-        self.state.environment_id.as_deref()
-    }
-
     fn ensure_update_hunk_is_not_empty(&self, line: &str) -> Result<(), ParseError> {
         if let Some(UpdateFile { path, chunks, .. }) = self.state.hunks.last() {
             if chunks.is_empty()
@@ -138,7 +135,7 @@ impl StreamingPatchParser {
         Ok(false)
     }
 
-    pub fn push_delta(&mut self, delta: &str) -> Result<Vec<Hunk>, ParseError> {
+    pub fn push_delta(&mut self, delta: &str) -> Result<&[Hunk], ParseError> {
         for ch in delta.chars() {
             if ch == '\n' {
                 let mut line = std::mem::take(&mut self.line_buffer);
@@ -150,10 +147,10 @@ impl StreamingPatchParser {
             }
         }
 
-        Ok(self.state.hunks.clone())
+        Ok(&self.state.hunks)
     }
 
-    pub fn finish(&mut self) -> Result<Vec<Hunk>, ParseError> {
+    pub fn finish(mut self) -> Result<ApplyPatchArgs, ParseError> {
         if !self.line_buffer.is_empty() {
             let line = std::mem::take(&mut self.line_buffer);
             self.line_number += 1;
@@ -171,7 +168,10 @@ impl StreamingPatchParser {
             ));
         }
 
-        Ok(self.state.hunks.clone())
+        Ok(ApplyPatchArgs {
+            hunks: self.state.hunks,
+            environment_id: self.state.environment_id,
+        })
     }
 
     fn process_line(&mut self, line: &str) -> Result<(), ParseError> {

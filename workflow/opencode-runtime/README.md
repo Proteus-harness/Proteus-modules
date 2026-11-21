@@ -18,7 +18,9 @@ handlers, общий JSON-RPC broker, model bridge и общий Go quota helper
 
 ## Model Export
 
-`model/opencode` реализует `model/v13` и optional `model.catalog.v1`.
+Model export с конкретным ID (`opencode` или другим) реализует `model/v14`
+и optional `model.catalog.v1`. Один worker поддерживает несколько независимых
+подключений: их `module_config.model.<id>` и native маршруты не смешиваются.
 Для `provider="opencode-go"` дополнительно объявляется `model.quota.v1`
 (Go usage windows и USD). Каталог и inference используют непосредственно
 `ModelsDev`, `ModelResolver` и `LLMClient` pinned SDK. Полный OpenCode agent,
@@ -79,14 +81,26 @@ credential этого provider, затем API key из environment names native
 этому ограниченному adapter не принадлежит native refresh lifecycle. Pi auth и
 legacy `auth.json` не читаются. Для другого ПК подключите provider в OpenCode
 или передайте его API-key environment variable в allowlist процесса.
+Можно также задать явный `api_key` только для этого подключения. Это opt-in
+override перед native DB/environment; он не записывается в OpenCode и не меняет
+его сохранённую авторизацию. Без этого поля прежний native порядок сохраняется.
+Явное значение хранится в конфиге Proteus и показывается секретным полем формы.
 
 Optional config keys:
 
 | Параметр | Значение |
 |---|---|
+| `api_key` | Необязательный явный ключ этого подключения; без него native DB → environment |
 | `database_path` | Другой путь к OpenCode v2 DB; поддерживает `~/`, `$HOME/`, `${HOME}/` |
 | `models_file` | Локальный native ModelsDev metadata файл; без HTTP refresh |
 | `models_url` | Другой native ModelsDev metadata endpoint |
+
+Installer создаёт `share/modules/opencode-runtime/module.json` с wildcard
+model capacity и module-owned `model_connections` для Go, Zen и другого native
+маршрута. Это варианты создания, не список авторизованных аккаунтов. Клиент
+должен выбрать уникальный конкретный model export ID, а не регистрировать `*`.
+Helper `write_module_manifest(prefix)` обновляет только это описание по готовому
+launcher и не запускает npm, SDK или модель.
 
 Это transport surface SDK: function tools передаются с native `strict=false`,
 argument recovery выполняется native SDK. Freeform и provider-executed tools,
@@ -160,8 +174,16 @@ network/MCP, skills/subagents и оставшаяся tool registry не вкл�
 model/tool continuation использует Native Step. Native retry schedule применяется
 к типизированным временным model failures. Core передаёт только завершённые model
 items; незавершённый ответ не запускает tools и не дописывается в sampling history.
-Нативные Continue с partial assistant text, специфичный timeout budget,
-overflow и полный session recovery lifecycle остаются отдельными границами. Context initial text
+Типизированный `context_window_exceeded` до завершённого ответа запускает
+выбранную подготовку контекста с причиной overflow: штатный `SessionCompaction`
+выполняет forced compaction через Core. Повтор разрешён только при изменённой
+истории и durable checkpoint ACK; прежние подтверждённые tools не исполняются
+заново. Как в pinned `SessionRunner.runStep`, на один model step допускается
+одна такая recovery; следующий завершённый ответ вновь разрешает восстановление.
+Отключённый/отсутствующий compactor, ошибка summary/ACK и отмена не запускают
+скрытый повтор. Provider remote compaction остаётся явно неподдержанной.
+Нативные Continue с partial assistant text, специфичный timeout budget и
+полный session recovery lifecycle остаются отдельными границами. Context initial text
 проецируется в effective request; session instruction delta lifecycle всего
 OpenCode DB не воспроизводится. Поэтому этот профиль нельзя объявлять полной
 эквивалентностью всей vanilla упряжке; это перенесённые upstream slots с явно

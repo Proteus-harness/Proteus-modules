@@ -108,14 +108,14 @@ impl ToolModule for ListDirTool {
                 }
             };
             count += 1;
-            let name = entry.file_name().to_string_lossy().into_owned();
+            let name = entry.file_name();
             let kind = match entry.file_type() {
                 Ok(ft) if ft.is_dir() => "dir",
                 Ok(ft) if ft.is_symlink() => "symlink",
                 Ok(_) => "file",
                 Err(_) => "unknown",
             };
-            lines.push(format!("{kind}\t{name}"));
+            lines.push([kind, "\t", name.to_string_lossy().as_ref()].concat());
         }
         lines.sort();
 

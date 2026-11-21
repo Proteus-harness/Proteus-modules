@@ -177,6 +177,10 @@ pub fn handle_meta_tool_call(
     call: &ToolCall,
     phase: &str,
 ) -> Result<ToolResult, ProcessModuleError> {
+    // Deferred preparation normalizes its own call, including for checkpoints.
+    if call.name == TOOL_CALL {
+        return handle_deferred_call(host, input, call, phase);
+    }
     let effective = match normalized_meta_call(call, phase) {
         Ok(call) => call,
         Err(result) => return Ok(result),
@@ -185,7 +189,6 @@ pub fn handle_meta_tool_call(
     match call.name.as_str() {
         TOOL_SEARCH => handle_search(host, input, call),
         TOOL_DESCRIBE => handle_describe(host, input, call),
-        TOOL_CALL => handle_deferred_call(host, input, call, phase),
         _ => Ok(ToolResult::error(
             call.id.clone(),
             format!("unknown Proteus meta-tool '{}'", call.name),

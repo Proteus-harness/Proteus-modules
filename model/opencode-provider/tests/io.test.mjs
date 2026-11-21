@@ -31,7 +31,8 @@ test('request is an actual native schema with verbatim instructions and unmodifi
     const input = request({
         instructions: [{ kind: 'Developer', text: 'first', priority: 20 }, { kind: 'System', text: 'second', priority: 0 }],
         messages: [message('Developer', [text('chronological instruction')]), message('User', [text('A'),
-            { Context: { chunk: { content: 'untrusted context' } } }, text('B')])],
+            { Context: { chunk: { source: 'fixture', path: null, content: 'untrusted context',
+                render_mode: 'verbatim', score: null, metadata: null } } }, text('B')])],
     });
     const output = await toNativeRequest(input, model);
     assert.ok(output instanceof LLMRequest);
@@ -45,6 +46,28 @@ test('request is an actual native schema with verbatim instructions and unmodifi
     assert.equal(output.providerOptions, undefined);
     assert.equal(output.cache, 'none');
     assert.equal(output.toolChoice.type, 'auto');
+});
+
+
+test('context rendering follows canonical mode without changing request data or part order', async () => {
+    const chunks = [
+        { source: 'search', path: null, content: 'found', render_mode: 'source_annotated', metadata: { render_mode: 'verbatim' } },
+        { source: 'memory', path: 'src/δ.rs', content: 'line 1\r\nline 2\n', render_mode: 'source_annotated', metadata: null },
+        { source: 'empty-path', path: '', content: 'value', render_mode: 'source_annotated', metadata: null },
+        { source: 'empty-content', path: null, content: '', render_mode: 'source_annotated', metadata: null },
+        { source: 'private-label', path: 'private-path', content: 'exact\r\n  text\n', render_mode: 'verbatim', metadata: { render_mode: 'source_annotated' } },
+        { source: 'empty-verbatim', path: null, content: '', render_mode: 'verbatim', metadata: null },
+    ].map(chunk => ({ ...chunk, score: null }));
+    const expected = ['Context from search:\nfound', 'Context from memory (src/δ.rs):\nline 1\r\nline 2\n',
+        'Context from empty-path ():\nvalue', 'Context from empty-content:\n', 'exact\r\n  text\n', ''];
+    const input = request({ messages: [message('User', [text('before'),
+        ...chunks.map(chunk => ({ Context: { chunk } })), text('after')])] });
+    const original = structuredClone(input);
+    for (const chunk of chunks) Object.freeze(chunk);
+    const output = await toNativeRequest(input, model);
+    assert.ok(Schema.is(LLMRequest)(output));
+    assert.deepEqual(output.messages[0].content.map(item => item.text), ['before', ...expected, 'after']);
+    assert.deepEqual(input, original);
 });
 
 test('sampling and explicit output limit map once without a fallback token cap', async () => {

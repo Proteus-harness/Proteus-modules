@@ -98,9 +98,9 @@ export async function workflow({ task, history, runtime }, { hostCall, signal })
         compactions: [],
     };
     const emit = (event) => hostCall("host.events.emit", { event });
-    async function checkpoint(tool_results = [], preparation_target = null) {
+    async function checkpoint(tool_results = [], preparation_target = null, history = progress) {
         const ack = await hostCall("host.history.checkpoint", {
-            history: progress,
+            history,
             tool_results,
             preparation_target,
         });
@@ -108,6 +108,41 @@ export async function workflow({ task, history, runtime }, { hostCall, signal })
             progress = ack.history;
             messages = ack.messages;
         }
+        return ack;
+    }
+    async function prepare(input, durable = false) {
+        signal.throwIfAborted();
+        const prepared = await hostCall("host.context.prepare", { input });
+        signal.throwIfAborted();
+        const p = prepared.output;
+        if (!p.changed) return false;
+        const report = {
+            changed: true,
+            user_message_replacements: p.user_message_replacements,
+            reason: input.reason,
+            input_messages: messages.length,
+            output_messages: p.messages.length,
+            original_token_estimate: p.original_token_estimate,
+            output_token_estimate: p.token_estimate,
+            trigger_tokens: p.trigger_tokens,
+            summary_source: p.summary_source,
+            skipped_reason: p.skipped_reason,
+            summary: p.summary,
+            metadata: p.metadata,
+        };
+        const candidate = {
+            new_messages: [],
+            history_replacement: p.messages,
+            compactions: [...progress.compactions, report],
+        };
+        const ack = await checkpoint([], prepared.target, candidate);
+        if (ack.revision == null) {
+            if (durable) throw new Error("OpenCode overflow compaction requires a durable checkpoint acknowledgement");
+            progress = candidate;
+            messages = p.messages;
+        }
+        signal.throwIfAborted();
+        return true;
     }
     try {
         if (runtime.intent) throw new Error("Unsupported OpenCode workflow intent " + runtime.intent);
@@ -120,6 +155,9 @@ export async function workflow({ task, history, runtime }, { hostCall, signal })
         let text = "";
         let measured = runtime.model_context?.at(-1);
         let lastUsage = measured?.kind === "usage" ? measured.last_tokens : null;
+        // Pinned SessionRunner.runStep permits one overflow compaction before
+        // a completed model step; a later accepted step starts a new allowance.
+        let recoverOverflow = true;
         for (;;) {
             signal.throwIfAborted();
             const selection = await hostCall("host.tools.select", {
@@ -134,6 +172,7 @@ export async function workflow({ task, history, runtime }, { hostCall, signal })
             });
             selection.tools = await selectNativeTools(ref, selection.tools, signal);
             const request = {
+                operation: "Complete",
                 model: ref,
                 instructions: runtime.instructions,
                 messages,
@@ -163,37 +202,28 @@ export async function workflow({ task, history, runtime }, { hostCall, signal })
             const projected = await nativeContext(input, messages);
             const estimate = estimateContext(projected);
             input.token_estimate = lastUsage == null ? estimate : Math.max(estimate, lastUsage);
-            const prepared = await hostCall("host.context.prepare", { input });
-            const p = prepared.output;
-            if (p.changed) {
-                const report = {
-                    changed: true,
-                    user_message_replacements: p.user_message_replacements,
-                    reason: input.reason,
-                    input_messages: messages.length,
-                    output_messages: p.messages.length,
-                    original_token_estimate: p.original_token_estimate,
-                    output_token_estimate: p.token_estimate,
-                    trigger_tokens: p.trigger_tokens,
-                    summary_source: p.summary_source,
-                    skipped_reason: p.skipped_reason,
-                    summary: p.summary,
-                    metadata: p.metadata,
-                };
-                progress = {
-                    new_messages: [],
-                    history_replacement: p.messages,
-                    compactions: [...progress.compactions, report],
-                };
-                messages = p.messages;
-                await checkpoint([], prepared.target);
-            }
+            await prepare(input);
             request.messages = withContext(messages, context.chunks);
-            const reply = await receiveModelResponse(
-                request,
-                { hostCall, signal },
-                await createRetryDelay(runtime, signal),
-            );
+            let reply;
+            try {
+                reply = await receiveModelResponse(
+                    request,
+                    { hostCall, signal },
+                    await createRetryDelay(runtime, signal),
+                );
+            } catch (error) {
+                if (error.modelFailure?.kind !== "context_window_exceeded" || !recoverOverflow) throw error;
+                recoverOverflow = false;
+                // Failed sampling has produced no admissible tools or assistant
+                // items. Compact the committed history through its selected hook,
+                // then retry only after Core has accepted that exact replacement.
+                const changed = await prepare({ ...input, messages,
+                    request: { ...request, messages }, reason: "context_window_exceeded" }, true);
+                if (!changed) throw error;
+                lastUsage = null;
+                continue;
+            }
+            recoverOverflow = true;
             await emit({ ModelResponseReceived: { finish_reason: reply.finish_reason } });
             const events = nativeEvents(reply);
             const bindings = new Map(
@@ -301,7 +331,7 @@ export function createWorkflowExport(binding) {
     if (
         binding.module_id !== "opencode_loop" ||
         binding.slot !== "workflow" ||
-        binding.contract_version !== "v20" ||
+        binding.contract_version !== "v22" ||
         binding.composition !== "select_one" ||
         Object.keys(binding.module_config).length
     )
@@ -310,7 +340,7 @@ export function createWorkflowExport(binding) {
         manifest: {
             module_id: binding.module_id,
             slot: binding.slot,
-            contract_version: "v20",
+            contract_version: "v22",
             composition: "select_one",
             module_features: [],
             config_schema: null,

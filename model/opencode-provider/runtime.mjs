@@ -61,6 +61,7 @@ export function descriptor(model) {
         supports_freeform_tools: false, supports_streaming: true, supports_json_schema: false,
         supports_system_role: true, supports_developer_role: true, supports_cache_hints: true,
         supports_reasoning_config: model.variants.length > 0 || !!model.compatibility?.reasoningField,
+        supports_compaction: false,
         supports_image_input: model.capabilities.input.includes('image'), supports_file_input: false,
         provider_hosted_tools: [], max_input_tokens: model.limit.input ?? model.limit.context, max_output_tokens: model.limit.output,
     } };

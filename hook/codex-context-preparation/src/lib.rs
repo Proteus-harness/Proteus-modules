@@ -6,11 +6,16 @@ mod config_schema;
 pub use config_schema::config_schema;
 mod base_instructions;
 mod history;
+mod input_estimates;
 mod recovery;
+mod remote;
+mod remote_history;
+mod remote_window;
 mod summary;
 
 use proteus_contracts::{
     contracts::{HookEvent, HookInput, HookResponse},
+    model_standard::input_estimates::{ContextTokenEstimateSource, ModelInputEstimate},
     process_module::{HookModule, HookModuleHost, ModuleRegistry, ProcessModuleError},
 };
 
@@ -27,16 +32,35 @@ impl HookModule for CodexPreparationHook {
         let hook: HookInput = serde_json::from_str(&input_json).map_err(error)?;
         let response = match hook.event {
             HookEvent::BeforeContext {
-                mut input, output, ..
+                mut input,
+                mut output,
+                model_capabilities,
+                ..
             } => {
                 // Every participant transforms the validated preceding candidate.
-                input.messages = output.messages;
+                input.messages = std::mem::take(&mut output.messages);
                 if output.changed {
                     input.token_estimate = output.token_estimate;
+                    if let Some(request) = input.request.as_mut() {
+                        ContextTokenEstimateSource::Estimated.write_metadata(&mut request.metadata);
+                    }
                 }
-                let prepared = compaction::compact(input, &self.0, host)?;
+                let remote = model_capabilities.is_some_and(|value| value.supports_compaction);
+                let prepared = compaction::compact(input, &self.0, remote, host)?;
                 if output.changed && !prepared.changed {
-                    HookResponse::Continue
+                    if let Some(estimates) = ModelInputEstimate::from_metadata(&prepared.metadata) {
+                        estimates.write_metadata(&mut output.metadata);
+                        output.token_estimate = prepared.token_estimate;
+                        HookResponse::ContextPreparationDiagnostics {
+                            diagnostics: output.diagnostics(),
+                        }
+                    } else {
+                        HookResponse::Continue
+                    }
+                } else if !prepared.changed {
+                    HookResponse::ContextPreparationDiagnostics {
+                        diagnostics: prepared.diagnostics(),
+                    }
                 } else {
                     HookResponse::ContextPreparation { output: prepared }
                 }

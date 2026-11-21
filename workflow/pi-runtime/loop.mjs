@@ -56,12 +56,16 @@ export async function workflow({ task, runtime, history }, { hostCall, signal, c
         const specs = selection.tools.toSorted((a, b) => order.indexOf(a.name) - order.indexOf(b.name));
         const prompt = buildSystemPrompt({
             cwd: task.cwd,
+            customPrompt: context.chunks.find(c => c.metadata?.["pi/prompt"] === "system")?.content,
+            appendSystemPrompt: context.chunks.filter(c => c.metadata?.["pi/prompt"] === "append")
+                .map(c => c.content).join("\n\n"),
             selectedTools: specs.map((t) => t.name),
             toolSnippets: Object.fromEntries(specs.map((t) => [t.name, t.metadata?.["pi/prompt_snippet"]])),
             toolGuidelines: Object.fromEntries(
                 specs.map((t) => [t.name, t.metadata?.["pi/prompt_guidelines"] ?? []]),
             ),
-            contextFiles: context.chunks.map((c) => ({ path: c.path, content: c.content })),
+            contextFiles: context.chunks.filter(c => !c.metadata?.["pi/prompt"])
+                .map((c) => ({ path: c.path, content: c.content })),
             skills: [],
         });
         const definitions = new Map(createCodingToolDefinitions(task.cwd).map(t => [t.name, t]));
@@ -98,6 +102,7 @@ export async function workflow({ task, runtime, history }, { hostCall, signal, c
         const streamFn = async () => {
             signal.throwIfAborted();
             const request = {
+                operation: "Complete",
                 model: runtime.model_ref,
                 instructions: [...runtime.instructions, { kind: "System", text: prompt, priority: 100 }],
                 messages,

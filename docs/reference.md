@@ -28,13 +28,21 @@ slot authority.
 
 ## Native OpenCode Model
 
-`model/opencode-provider` экспортирует `model/opencode` (`v13`) через
-`proteus-opencode-module`. Он вызывает pinned `ModelsDev`, `ModelResolver` и
+`model/opencode-provider` предоставляет конкретные model exports (`v14`),
+по умолчанию `model/opencode`, через `proteus-opencode-module`.
+Он вызывает pinned `ModelsDev`, `ModelResolver` и
 `LLMClient` OpenCode напрямую. Это отдельный model slot: выбор его в профиле
 Codex сохраняет выбранные workflow, context, tools, policy и compactor Codex;
 native agent prompt и OpenCode session loop не добавляются.
 
-Обязательный `module_config.model.opencode.provider` выбирает native provider
+Для native routing адаптер переносит `client_metadata.session_id` в session
+headers OpenCode. Одна canonical session сохраняет affinity между модельными
+вызовами и после resume. Go требует эту identity: при её отсутствии запрос
+отклоняется явно до HTTP, без случайной подмены session на каждом retry.
+Ошибки провайдера показывают безопасную native category и HTTP status;
+исходные body, headers и credential-bearing messages не публикуются.
+
+Обязательный `module_config.model.<connection>.provider` выбирает native provider
 (например, `opencode-go`). Каталог `model.catalog.v1` публикует его chat-модели,
 названия, hidden status и точные native effort variants. Каталог удерживается
 на пять минут с объединением одновременных запросов; после TTL обновляется при
@@ -51,9 +59,40 @@ API key читается из credential table OpenCode v2 в read-only режи
 объявленными native provider. Адаптер не создаёт и не мигрирует DB, не использует
 Pi auth и старый `auth.json`. SQLite WAL/SHM coordination sidecars допустимы:
 чтение видит committed WAL без изменения данных и checkpoint. OAuth требует native refresh и в этом ограниченном
-model export явно отклоняется. Дополнительные параметры: `database_path`,
+model export явно отклоняется. Явный `api_key` — отдельный opt-in override
+одного подключения; если он задан, shared OpenCode DB не читается и не меняется.
+При отсутствии override прежний порядок DB → environment сохраняется.
+Дополнительные параметры: `database_path`,
 `models_file`, `models_url`; пример и способы проверки описаны в
 [README runtime](../workflow/opencode-runtime/README.md#model-export).
+Эти пять полей публикуются в module-owned `config_schema`: обязательный
+`provider` — свободный ID из native каталога, остальные поля — дополнительные
+строковые overrides без навязанных значений. Раздел подключения поясняет
+авторизацию через OpenCode; явный ключ — обычное секретное поле формы.
+OAuth и отдельного параметра `route` model export не предоставляет.
+Конкретный export ID произволен: несколько model exports одного worker могут
+независимо использовать Go, Zen и другие native маршруты. Именованные настройки
+моделей ссылаются на этот ID, а не на название native сервиса.
+
+`module.json.model_connections` — module-owned варианты создания подключения:
+`id`, `title`, `description`, конкретный начальный `module_id`, объект
+`module_config` и явный `env_allowlist`. Это шаблоны, а не подключённые аккаунты.
+`package.py` переносит необязательный `model-connections.json` рядом с
+`components/<package>/exports.json`; конкретные провайдеры в packager не зашиты.
+Model-pack публикует OpenAI API, Anthropic API, совместимый Responses API и
+существующую авторизацию ChatGPT. OpenCode installer публикует Go, Zen и
+произвольный native маршрут в `share/modules/opencode-runtime/module.json`.
+Клиент выбирает уникальный конкретный ID вместо wildcard и регистрирует
+его вместе с начальным config одной транзакцией Core. Создание записи не
+подтверждает ключ и не означает получение каталога: API-адаптеры без discovery
+требуют задать модель отдельно. Вход ChatGPT остаётся поддержанной CLI-командой
+`proteus-model-pack-module auth openai_codex login`, не универсальным process OAuth API.
+
+Pi и OpenCode используют одну проекцию `ContextChunk`: `source_annotated`
+сохраняет источник и присутствующий путь перед содержимым, а `verbatim`
+передаёт содержимое без оболочки. Пустой присутствующий путь отображается как
+`()`, отсутствие пути не добавляет скобки. Metadata не выбирает режим;
+порядок частей, Unicode и переводы строк сохраняются.
 
 `model.quota.v1` объявляется только для `opencode-go`: Go usage windows и USD
 показатели используют тот же ключ и общий stateless helper
@@ -82,27 +121,70 @@ policy/approval и authority остаётся на прежних граница
 ## Codex Base Instructions И Patch Surface
 
 Пакет `codex-context-preparation` дополнительно экспортирует
-`hook/codex_base_instructions`. На `BeforeModel` прямого запроса он выбирает
+`hook/codex_base_instructions`. На `BeforeModel` прямого запроса или
+вспомогательного native `Compact` он выбирает
 публичный model-specific `instructions_template` из OpenAI Codex
 `rust-v0.167.0`, commit `086ccc833bc9cf01024ad2dd6af7dbd421b6bf9a`.
 Включены `gpt-6.1-sol`, `gpt-6.1-terra`, `gpt-5.6-luna`; для остальных
 используется upstream `default.md`. Пользовательские инструкции сохраняются.
 Источники, лицензия Apache-2.0 и SHA256 находятся в
 `hook/codex-context-preparation/src/upstream/0.167.0/`.
-Auxiliary summary requests сохраняют собственную подготовку.
+Обычные вспомогательные summary requests сохраняют собственную подготовку.
 
 В `codex_patch` параметр `freeform=true` публикует custom tool с точной
 upstream Lark grammar этой версии. Canonical input имеет `{input: string}`;
 проверка schema, policy и workspace выполняется до применения patch.
 Default `freeform=false` сохраняет function binding `{patch: string}`.
-Профиль Core `codex` выбирает freeform; `code-mode` явно сохраняет function
-binding для своего `tools.call` API.
+Основной профиль Core `config.toml` сохраняет function binding для
+`tools.call` в CodeMode.
+
+Внутренний parser `codex_patch` отдаёт streaming preview заимствованным slice,
+а завершение потребляет parser и передаёт готовые hunks и `environment_id`
+одному владельцу. One-shot применение сохраняет прежние validation и ошибки;
+независимые snapshots и повторный `finish` одного parser не поддерживаются.
 
 Публичный pinned каталог отличается от обновляемого `/models` каталога
 конкретной native CLI-сессии. Применение pinned template и grammar не закрывает
 остальные fidelity gates. Native CLI `0.167.0` по умолчанию предоставляет
-programmatic `exec` через отдельный code-mode-host; local summary compactor
+programmatic `exec` через отдельный code-mode-host; compaction
 и protocol/tool/session orchestration этой сборки проверяются отдельно.
+
+## Native Codex Compaction
+
+`codex_compact` выбирает серверный путь по host-owned capability выбранной
+модели `supports_compaction`. Model-pack поддерживает его для OpenAI Responses
+и ChatGPT OAuth; совместимый Responses endpoint требует явной capability.
+Pi/OpenCode bridges её не объявляют: с DeepSeek через Go сохраняется локальное
+summary. Ошибка поддерживаемого серверного пути не подменяется локальным.
+
+Серверный запрос проходит обычную model authority с операцией `Compact`,
+историей и выбранными tools. Успешно завершённый stream должен содержать ровно
+один checkpoint. Он хранится как `Opaque` и передаётся следующей модели без
+перевода в текст; неизвестный формат или неподдерживаемый transport дают ошибку.
+История заменяется только после полного ответа и проверки отмены. Повторный
+compact получает прежний checkpoint, затем заменяет его новым. Бюджет
+сохраняемых пользователей и изображений повторяет remote-ветку Codex pin
+`67cc3c3`; локальная ветка сохраняет собственный алгоритм.
+
+Размер зашифрованного checkpoint оценивает сама модель через необязательный
+локальный `model.input_estimate.v1`. OpenAI adapter повторяет эвристику Codex:
+`ceil(max(floor(3 × utf8_bytes / 4) − 650, 0) / 4)` с насыщением арифметики.
+Обёртка и id не считаются, base64 не декодируется; результат может быть нулём.
+Этот путь работает и для старых сохранённых checkpoints, не меняет payload,
+не вызывает inference и не читает credentials.
+
+Hook и workflow используют оценку в пороге сжатия, preflight и категории
+контекста. После обычного model response реальные usage имеют приоритет:
+оценка checkpoint не прибавляется к ним повторно. После compact или изменения
+контекста оценка пересчитывается; холодное открытие без usage учитывает
+checkpoint. Это совпадение эвристики encrypted item, а не точного tokenizer
+всего запроса.
+
+Контрактный переход согласованный: `model/v14`, `hook/v8`, `workflow/v22`,
+`tool/v7`. Операция обычного запроса — `Complete`; поддержка compaction по
+умолчанию выключена. Core, SDK и process exports обновляются вместе.
+Подробности происхождения и ограничений оценки токенов — в
+[UPSTREAM.md](../hook/codex-context-preparation/UPSTREAM.md).
 
 ## Окончания Строк В Direct Patch
 
@@ -169,10 +251,9 @@ sandbox всего worker-процесса. Уже допущенные host cal
 или откат их эффектов. Фоновое исполнение и состояние между скриптами отсутствуют.
 
 Установка пакета: `python3 package.py --package code-mode --install /path/to/Proteus`.
-После установки укажите command `proteus-code-mode-module`, export
+CodeMode уже подключён в [`config.toml` Core](https://github.com/Proteus-harness/Proteus-core/blob/main/configs/config.toml).
+В своём профиле укажите command `proteus-code-mode-module`, export
 `components.<id>.exports.tool.code_mode` и включите `code_mode` в `tools.enabled`.
-Самостоятельный профиль находится в
-[профиле Core `code-mode`](https://github.com/Proteus-harness/Proteus-core/blob/main/configs/code-mode.config.toml).
 При использовании `tool_selection.dynamic` добавьте `code_mode` в `always_include`.
 `tools.call` принимает настоящие registry tool names: workflow-операции
 `proteus_tool_search`, `proteus_tool_describe` и `proteus_tool_call` внутри скрипта
@@ -201,6 +282,18 @@ identities и остаются request-only; tool-bearing ответы и око
 parts сохраняют прежнее ограничение классификации при ACK/compaction.
 
 ## Настройки Model-pack
+
+OpenAI Responses и Anthropic используют общий private renderer только для
+canonical instruction prefix: stable sort по убыванию priority, пропуск
+полностью blank blocks и сохранение текста непустых blocks. Provider-specific
+обёртки остаются отдельными: legacy System messages, cache-control и wire
+serialization не нормализуются между провайдерами.
+
+Codex catalog и quota используют общий metadata HTTP-переход: один refresh
+после первого 401 и не более одного повторного GET. Второй 401, 429 и 5xx
+завершаются прежней ошибкой без inference retries. Endpoint owners сохраняют
+свои TTL, cache locks, общий deadline, decode/validation и публикацию кеша
+только после успешной проверки ответа.
 
 Форма подключения описывает параметры адаптера, а не автоматически
 определённые возможности выбранной модели. Параметры разделены на подключение,
@@ -258,7 +351,12 @@ Anthropic Messages сохраняет `redacted_thinking` как непрозр�
 [контракт Anthropic для redacted thinking](https://platform.claude.com/docs/en/build-with-claude/thinking#redacted-thinking-blocks).
 
 Anthropic SSE сохраняет стартовый текст блока и стартовый `tool_use.input`,
-если JSON-дельты не заменили его. Закрытие HTTP 200 SSE без terminal event
+если JSON-дельты не заменили его. Каждый text block владеет своим DSML-фильтром:
+`content_block_stop` дописывает удержанный буквальный суффикс в этот же блок
+до следующих tool/text events; повторный stop не дублирует текст. При отсутствии
+stop terminal fallback сохраняет суффикс на исходном месте. Text delta без
+text-владельца игнорируется и не меняет соседние блоки. Алгоритм очистки DSML
+и trimming не меняются. Закрытие HTTP 200 SSE без terminal event
 возвращает `StreamDisconnected`; документированный overload возвращает
 `Retryable`, а HTTP 400 `prompt is too long` — `ContextWindowExceeded`.
 Тот же context failure возвращается для HTTP 200 ответа с

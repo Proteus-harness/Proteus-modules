@@ -11,7 +11,7 @@ use proteus_contracts::{
     model_standard::{CanonicalMessage, ContentPart},
 };
 use proteus_core::core::{
-    AgentRuntime, AppConfig, JournalEntry, ModuleCatalog, SessionStore, ToolCallRecordPhase,
+    AgentRuntime, AppConfig, JournalEntry, ModuleCatalog, ToolCallRecordPhase,
     TurnSettlementStatus, WorkflowReplayOptions, replay_workflow,
 };
 use serde_json::{Value, json};
@@ -233,7 +233,7 @@ async fn run_initial(root: &Path, config: AppConfig, config_path: &Path, mode: I
     if matches!(mode, Interruption::BatchError) {
         assert!(format!("{error:#}").contains(APPROVAL_FAILURE), "{error:#}");
     }
-    let before = SessionStore::open(session_dir)
+    let before = crate::session_storage::open(session_dir)
         .unwrap()
         .load_projection()
         .unwrap();
@@ -279,7 +279,7 @@ async fn check_interruption(mode: Interruption) {
     let session_dir = std::path::PathBuf::from(
         std::fs::read_to_string(root.path().join("session-path")).unwrap(),
     );
-    let store = SessionStore::open(session_dir.clone()).unwrap();
+    let store = crate::session_storage::open(session_dir.clone()).unwrap();
     let before = store.load_projection().unwrap();
     assert!(
         before.unsettled_turns.is_empty(),

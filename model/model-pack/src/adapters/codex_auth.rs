@@ -102,7 +102,7 @@ impl CodexAuth {
 
 fn default_auth_file() -> Result<PathBuf> {
     let home = std::env::var_os("HOME").context("HOME is required, or set auth_file explicitly")?;
-    Ok(PathBuf::from(home).join(".config/Proteus-agent/secrets/chatgpt.json"))
+    Ok(PathBuf::from(home).join(".config/Proteus-harness/secrets/chatgpt.json"))
 }
 
 pub(super) fn validate_endpoint(value: &str) -> Result<String> {

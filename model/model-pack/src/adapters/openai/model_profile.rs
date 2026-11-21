@@ -14,9 +14,8 @@ pub(super) struct OpenAiModelProfile {
     pub supports_freeform_tools: bool,
     pub supports_json_schema: bool,
     pub supports_reasoning_config: bool,
-    pub support_verbosity: bool,
-    pub verbosity: Option<String>,
-    pub default_verbosity: Option<String>,
+    pub supports_compaction: bool,
+    verbosity: Option<String>,
     pub service_tier: Option<String>,
     pub store: bool,
     pub client_metadata: BTreeMap<String, String>,
@@ -79,9 +78,13 @@ impl OpenAiModelProfile {
                 "supports_reasoning_config",
                 false,
             )?,
-            support_verbosity,
-            verbosity,
-            default_verbosity,
+            supports_compaction: bool_setting(
+                config,
+                capabilities,
+                "supports_compaction",
+                super::default_compaction_support(config),
+            )?,
+            verbosity: verbosity.or(default_verbosity),
             service_tier: optional_non_empty_string(config, "service_tier")?,
             store: false,
             client_metadata: string_map(config, "client_metadata")?,
@@ -100,19 +103,14 @@ impl OpenAiModelProfile {
             .with_developer_role(true)
             .with_cache_hints(true)
             .with_reasoning_config(self.supports_reasoning_config)
+            .with_compaction(self.supports_compaction)
             .with_streaming(true)
             .with_provider_hosted_tools(self.hosted_tools.supported_kinds().to_vec())
             .with_max_input_tokens(max_input_tokens)
     }
 
     pub fn effective_verbosity(&self) -> Option<&str> {
-        if self.support_verbosity {
-            self.verbosity
-                .as_deref()
-                .or(self.default_verbosity.as_deref())
-        } else {
-            None
-        }
+        self.verbosity.as_deref()
     }
 }
 
@@ -200,7 +198,7 @@ mod tests {
 
     #[test]
     fn explicit_model_capabilities_and_controls_are_parsed() {
-        let profile = OpenAiModelProfile::from_provider_config(&json!({
+        let mut config = json!({
             "capabilities": {
                 "supports_parallel_tool_calls": true,
                 "supports_freeform_tools": true,
@@ -211,8 +209,8 @@ mod tests {
             "default_verbosity": "low",
             "service_tier": "priority",
             "client_metadata": { "session_id": "session-1" }
-        }))
-        .unwrap();
+        });
+        let profile = OpenAiModelProfile::from_provider_config(&config).unwrap();
 
         assert!(profile.supports_parallel_tool_calls);
         assert!(profile.supports_freeform_tools);
@@ -221,6 +219,14 @@ mod tests {
         assert_eq!(profile.effective_verbosity(), Some("low"));
         assert_eq!(profile.service_tier.as_deref(), Some("priority"));
         assert_eq!(profile.client_metadata["session_id"], "session-1");
+
+        config["verbosity"] = json!("high");
+        let profile = OpenAiModelProfile::from_provider_config(&config).unwrap();
+        assert_eq!(profile.effective_verbosity(), Some("high"));
+
+        config["default_verbosity"] = json!("invalid");
+        let error = OpenAiModelProfile::from_provider_config(&config).unwrap_err();
+        assert!(error.to_string().contains("default_verbosity"));
     }
 
     #[test]

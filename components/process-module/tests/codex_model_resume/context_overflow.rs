@@ -12,9 +12,8 @@ use proteus_contracts::{
     model_standard::{ContentPart, MessageRole, ModelFailureKind},
 };
 use proteus_core::core::{
-    AgentRuntime, AppConfig, JournalEntry, ModelResponseOutcome, ModuleCatalog, SessionStore,
-    ToolCallRecordPhase, TurnSettlementStatus, WorkflowReplayOptions, read_eval_report,
-    replay_workflow,
+    AgentRuntime, AppConfig, JournalEntry, ModelResponseOutcome, ModuleCatalog,
+    ToolCallRecordPhase, TurnSettlementStatus, WorkflowReplayOptions, replay_workflow,
 };
 use serde_json::{Value, json};
 use tokio::{io::AsyncWriteExt, net::TcpListener, process::Command};
@@ -216,7 +215,7 @@ async fn assert_evidence(config: &AppConfig, root: &Path, session_dir: &Path, re
         std::fs::read_to_string(root.join("workspace").join(TARGET_FILE)).unwrap(),
         WRITTEN_CONTENT
     );
-    let projection = SessionStore::open(session_dir.to_owned())
+    let projection = crate::session_storage::open(session_dir.to_owned())
         .expect("cold session")
         .load_projection()
         .expect("cold projection");
@@ -323,7 +322,7 @@ async fn assert_evidence(config: &AppConfig, root: &Path, session_dir: &Path, re
             }))
     );
 
-    let eval = read_eval_report(session_dir).expect("eval report");
+    let eval = crate::session_storage::eval(session_dir).expect("eval report");
     assert_eq!(eval.model_calls, 4);
     assert_eq!(eval.provider_input_tokens, 130);
     assert_eq!(eval.provider_output_tokens, 19);

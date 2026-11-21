@@ -1,9 +1,17 @@
-//! Real standalone workers must preserve the aggregate fixture's public surface.
+//! Independent delivery preserves each declared contract; behavior modules also
+//! match the aggregate fixture's public surface.
 use std::{path::Path, time::Duration};
 
 use proteus_contracts::{
-    contracts::{ExecutionAttribution, ProcessComponentExportRef, ProcessToolInvokeInput},
-    domain::{ToolCall, new_call_id, new_execution_id},
+    contracts::{
+        ExecutionAttribution, ProcessComponentExportRef, ProcessModuleComposition,
+        ProcessToolInvokeInput, session_storage::*,
+    },
+    domain::{
+        ToolCall, new_call_id, new_execution_id, new_record_id, new_session_id, new_thread_id,
+    },
+    model_standard::{CanonicalMessage, MessageRole},
+    storage::journal::{HistoryMutated, HistoryMutationKind, JournalEntry},
 };
 use proteus_module_protocol::{
     ProcessComponentBinding, ProcessExportBinding, current_process_contract_authority,
@@ -110,10 +118,51 @@ async fn every_independent_package_preserves_manifests_and_tool_catalogs() {
             &exports,
         )
         .unwrap_or_else(|error| panic!("{identity}: {error:#}"));
-        let baseline = connect(reference, workspace.path(), &exports).unwrap();
         let manifest = worker
             .manifest()
             .unwrap_or_else(|error| panic!("{identity}: {error:#}"));
+        if identity == "session-storage" {
+            let declared = manifest
+                .exports
+                .iter()
+                .map(|export| (export.slot.as_str(), export.module_id.as_str()))
+                .collect::<std::collections::BTreeSet<_>>();
+            assert_eq!(
+                declared,
+                std::collections::BTreeSet::from([
+                    ("session_storage", "jsonl"),
+                    ("session_storage", "sqlite")
+                ])
+            );
+            for export in &manifest.exports {
+                assert_eq!(
+                    export.contract_version,
+                    PROCESS_SESSION_STORAGE_CONTRACT_VERSION
+                );
+                assert_eq!(export.composition, ProcessModuleComposition::SelectOne);
+                assert!(
+                    export.module_features.is_empty(),
+                    "storage has no execution callbacks"
+                );
+                let authority = current_process_contract_authority(&export.slot).unwrap();
+                assert!(authority.host_methods.is_empty());
+                check_storage_boundary(
+                    &worker,
+                    &ProcessComponentExportRef {
+                        slot: export.slot.clone(),
+                        module_id: export.module_id.clone(),
+                    },
+                    workspace.path(),
+                )
+                .await;
+            }
+            assert!(
+                connect(reference, workspace.path(), &exports).is_err(),
+                "aggregate intentionally contains no storage implementation"
+            );
+            continue;
+        }
+        let baseline = connect(reference, workspace.path(), &exports).unwrap();
         assert_eq!(
             serde_json::to_value(&manifest).unwrap(),
             serde_json::to_value(baseline.manifest().unwrap()).unwrap(),
@@ -178,4 +227,130 @@ fn independent_packages_reject_exports_from_other_packages() {
         );
         assert!(worker.is_err(), "{identity} admitted {foreign}");
     }
+}
+
+async fn storage_request(
+    worker: &ComponentBroker,
+    target: &ProcessComponentExportRef,
+    request: SessionStorageRequest,
+) -> SessionStorageResponse {
+    request.validate().unwrap();
+    let result = invoke(
+        worker,
+        target,
+        PROCESS_SESSION_STORAGE_EXECUTE_METHOD,
+        serde_json::to_value(&request).unwrap(),
+    )
+    .await;
+    let response: SessionStorageResponse = serde_json::from_value(result).unwrap();
+    request.validate_response(&response).unwrap();
+    response
+}
+
+async fn check_storage_boundary(
+    worker: &ComponentBroker,
+    target: &ProcessComponentExportRef,
+    workspace: &Path,
+) {
+    let root = tempfile::tempdir().unwrap();
+    let SessionStorageResponse::Session { descriptor } = storage_request(
+        worker,
+        target,
+        SessionStorageRequest::Create {
+            config_root: root.path().into(),
+            workspace_path: workspace.into(),
+            session_id: new_session_id(),
+            parent_session_id: None,
+        },
+    )
+    .await
+    else {
+        panic!()
+    };
+    assert!(
+        !descriptor.local_path.as_ref().unwrap().exists(),
+        "read-only reservation must not create a session folder"
+    );
+    let SessionStorageResponse::Writer { lease, revision } = storage_request(
+        worker,
+        target,
+        SessionStorageRequest::AcquireWriter {
+            session: descriptor.session.clone(),
+        },
+    )
+    .await
+    else {
+        panic!()
+    };
+    assert_eq!(revision, StorageRevision::default());
+    let message = CanonicalMessage::text(MessageRole::User, "independent storage delivery");
+    storage_request(
+        worker,
+        target,
+        SessionStorageRequest::Commit {
+            commit: StorageCommit {
+                lease: lease.clone(),
+                operation_id: new_record_id(),
+                expected: revision,
+                timestamp_ms: 1,
+                attribution: StorageRecordAttribution {
+                    execution_id: None,
+                    thread_id: Some(new_thread_id()),
+                    turn_id: None,
+                },
+                entry: JournalEntry::HistoryMutated(HistoryMutated {
+                    previous_revision: 0,
+                    new_revision: 1,
+                    mutation: HistoryMutationKind::Append,
+                    messages: vec![message.clone()],
+                    compaction: None,
+                    tool_results: vec![],
+                }),
+            },
+        },
+    )
+    .await;
+    storage_request(
+        worker,
+        target,
+        SessionStorageRequest::ReleaseWriter { lease },
+    )
+    .await;
+    let SessionStorageResponse::Snapshot { snapshot } = storage_request(
+        worker,
+        target,
+        SessionStorageRequest::OpenSnapshot {
+            session: descriptor.session,
+        },
+    )
+    .await
+    else {
+        panic!()
+    };
+    let SessionStorageResponse::Conversation { conversation } = storage_request(
+        worker,
+        target,
+        SessionStorageRequest::ReadConversation {
+            snapshot: snapshot.clone(),
+            point: StorageHistoryPoint::Current,
+        },
+    )
+    .await
+    else {
+        panic!()
+    };
+    assert_eq!(conversation.messages, [message]);
+    assert_eq!(
+        conversation.revision,
+        StorageRevision {
+            session_seq: 1,
+            history_revision: 1
+        }
+    );
+    storage_request(
+        worker,
+        target,
+        SessionStorageRequest::ReleaseSnapshot { snapshot },
+    )
+    .await;
 }

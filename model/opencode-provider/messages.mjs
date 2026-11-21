@@ -1,6 +1,7 @@
-// Pure model/v13 -> @opencode/ai bridge. Agent prompts, model selection,
+// Pure model/v14 -> @opencode/ai bridge. Agent prompts, model selection,
 // authentication and provider variants belong to their own slots.
 import { readFile } from 'node:fs/promises';
+import { contextText } from '../../components/model-runtime-js/context.mjs';
 import { LLM, Media } from '../../workflow/opencode-runtime/node_modules/@opencode/ai/dist/index.js';
 
 function unsupported(message) {
@@ -60,11 +61,26 @@ function toolDefinition(tool) {
     };
 }
 
-export async function toNativeRequest(request, model, { signal } = {}) {
+export async function toNativeRequest(request, model, { signal, modelInfo } = {}) {
     signal?.throwIfAborted();
     if (request.response_format !== 'Text') unsupported('OpenCode model slot currently requires Text response format');
     if (request.tool_choice !== 'None' && request.tool_choice !== 'Auto')
         unsupported('Unsupported OpenCode tool choice');
+    // Native SessionModelRequest binds Go routing to the session, including
+    // follow-up requests. Keep Core's stable identity rather than inventing a
+    // new affinity on each model call or forwarding arbitrary client metadata.
+    const sessionID = request.client_metadata?.session_id;
+    const hasSession = typeof sessionID === 'string' && sessionID.trim().length > 0;
+    if (modelInfo?.providerID === 'opencode-go' && !hasSession) {
+        const error = new Error('OpenCode Go requires client_metadata.session_id for stable session routing');
+        error.code = 'OPENCODE_MISSING_SESSION';
+        throw error;
+    }
+    const headers = hasSession ? {
+        'x-opencode-session-id': sessionID, 'x-opencode-session': sessionID,
+        'x-session-affinity': sessionID, 'X-Session-Id': sessionID,
+        'x-opencode-client': 'proteus',
+    } : undefined;
     const names = new Map();
     for (const message of request.messages)
         for (const part of message.parts)
@@ -80,7 +96,7 @@ export async function toNativeRequest(request, model, { signal } = {}) {
             const payload = message.parts[index].payload;
             let native;
             if (payload.Text) native = { type: 'text', text: payload.Text.text };
-            else if (payload.Context) native = { type: 'text', text: payload.Context.chunk.content };
+            else if (payload.Context) native = { type: 'text', text: contextText(payload.Context.chunk) };
             else if (payload.FileRef && payload.FileRef.content != null)
                 native = { type: 'text', text: payload.FileRef.content };
             else if (payload.Image) native = await imagePart(payload.Image.image, signal);
@@ -118,6 +134,7 @@ export async function toNativeRequest(request, model, { signal } = {}) {
     signal?.throwIfAborted();
     return LLM.request({
         model,
+        ...(headers ? { http: { headers } } : {}),
         system: request.instructions.map(instruction => ({ type: 'text', text: instruction.text })),
         messages, tools: request.tools.map(toolDefinition),
         toolChoice: request.tool_choice === 'None' ? 'none' : 'auto',

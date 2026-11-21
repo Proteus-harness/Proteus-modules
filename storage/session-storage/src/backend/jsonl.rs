@@ -1,0 +1,357 @@
+use super::*;
+use crate::{
+    codec,
+    io::{MAX_PAYLOAD_BYTES, complete_jsonl_offset, restore_offset, sync_directory},
+};
+use anyhow::{Context, bail, ensure};
+use ring::digest::{Context as HashContext, SHA256};
+use std::{
+    fs::{File, OpenOptions},
+    io::{BufRead, BufReader, Read, Seek, SeekFrom, Write},
+    path::PathBuf,
+};
+
+#[derive(Default)]
+pub(crate) struct Jsonl {
+    committed_offset: Option<u64>,
+    blob_threshold: usize,
+}
+impl Jsonl {
+    pub(crate) fn new() -> Self {
+        Self {
+            committed_offset: None,
+            blob_threshold: codec::DEFAULT_BLOB_THRESHOLD,
+        }
+    }
+}
+
+impl JournalBackend for Jsonl {
+    fn snapshot(&mut self, dir: &Path, id: SessionId) -> Result<Box<dyn RecordSnapshot>> {
+        ensure!(
+            !dir.join("journal.sqlite").try_exists()?,
+            "session contains a SQLite journal; select its storage implementation or explicitly migrate it"
+        );
+        Ok(Box::new(JsonlSnapshot::open(dir, id, None)?))
+    }
+    fn snapshot_warm(
+        &mut self,
+        dir: &Path,
+        id: SessionId,
+        hint: &PrefixHint,
+    ) -> Result<Box<dyn RecordSnapshot>> {
+        ensure!(
+            !dir.join("journal.sqlite").try_exists()?,
+            "session contains a SQLite journal"
+        );
+        Ok(Box::new(JsonlSnapshot::open(dir, id, Some(hint))?))
+    }
+    fn recover(&mut self, dir: &Path, _id: SessionId) -> Result<()> {
+        ensure!(
+            !dir.join("journal.sqlite").try_exists()?,
+            "session contains a SQLite journal; storage implementations cannot silently replace it"
+        );
+        let path = dir.join(codec::JOURNAL_FILE);
+        let length = match File::open(&path) {
+            Ok(mut file) => complete_jsonl_offset(&mut file)?,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => 0,
+            Err(e) => return Err(e.into()),
+        };
+        restore_offset(&path, length)?;
+        self.committed_offset = Some(length);
+        Ok(())
+    }
+    fn append(&mut self, dir: &Path, record: &JournalRecord) -> Result<Append> {
+        let path = dir.join(codec::JOURNAL_FILE);
+        let committed = self
+            .committed_offset
+            .context("JSONL writer must recover before append")?;
+        restore_offset(&path, committed)?;
+        let (line, blobs) = codec::encode(dir, record, self.blob_threshold)?;
+        let next = committed
+            .checked_add(line.len() as u64)
+            .context("journal offset overflow")?;
+        let existed = path.try_exists()?;
+        let result = (|| {
+            let mut file = OpenOptions::new().create(true).append(true).open(&path)?;
+            file.write_all(&line)?;
+            file.sync_data()?;
+            if !existed {
+                sync_directory(dir)?;
+            }
+            Ok(())
+        })();
+        if let Err(error) = result {
+            restore_offset(&path, committed).context("journal rollback failed")?;
+            return Err(error);
+        }
+        self.committed_offset = Some(next);
+        Ok(Append {
+            extent: next,
+            bytes: line,
+            blobs,
+        })
+    }
+    fn description_path(&self, dir: &Path) -> PathBuf {
+        dir.join(codec::JOURNAL_FILE)
+    }
+}
+
+struct PageBoundary {
+    after: u64,
+    offset: u64,
+    hash: HashContext,
+}
+
+struct JsonlSnapshot {
+    file: Option<BufReader<std::io::Take<File>>>,
+    dir: PathBuf,
+    id: SessionId,
+    length: u64,
+    fingerprint: String,
+    current_hash: HashContext,
+    consumed: u64,
+    has_external_payloads: bool,
+    // A resident writer can attest semantics before this reader has scanned blobs.
+    fully_read: bool,
+    page_boundary: Option<PageBoundary>,
+}
+impl JsonlSnapshot {
+    fn open(dir: &Path, id: SessionId, hint: Option<&PrefixHint>) -> Result<Self> {
+        let path = dir.join(codec::JOURNAL_FILE);
+        let mut file = match File::open(&path) {
+            Ok(file) => Some(file),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
+            Err(e) => return Err(e.into()),
+        };
+        let length = if let Some(file) = &mut file {
+            ensure!(file.metadata()?.is_file(), "journal is not a regular file");
+            if let Some(hint) = hint {
+                ensure!(
+                    file.metadata()?.len() >= hint.extent,
+                    "journal shortened below cached prefix"
+                );
+                hint.extent
+            } else {
+                complete_jsonl_offset(file)?
+            }
+        } else {
+            0
+        };
+        let mut hash = HashContext::new(&SHA256);
+        if hint.is_none()
+            && let Some(file) = &mut file
+        {
+            file.seek(SeekFrom::Start(0))?;
+            let mut source = file.take(length);
+            let mut block = [0_u8; 64 * 1024];
+            loop {
+                let read = source.read(&mut block)?;
+                if read == 0 {
+                    break;
+                }
+                crate::diagnostics::fingerprint(read);
+                hash.update(&block[..read]);
+            }
+            ensure!(
+                source.limit() == 0,
+                "journal shortened during snapshot capture"
+            );
+            file.seek(SeekFrom::Start(0))?;
+        }
+        let fingerprint = if let Some(hint) = hint {
+            hint.fingerprint.clone()
+        } else {
+            hash.finish()
+                .as_ref()
+                .iter()
+                .map(|b| format!("{b:02x}"))
+                .collect()
+        };
+        if let Some(file) = &mut file {
+            file.seek(SeekFrom::Start(0))?;
+        }
+        Ok(Self {
+            file: file.map(|f| BufReader::with_capacity(64 * 1024, f.take(length))),
+            dir: dir.to_owned(),
+            id,
+            length,
+            fingerprint,
+            current_hash: HashContext::new(&SHA256),
+            consumed: 0,
+            has_external_payloads: false,
+            fully_read: false,
+            page_boundary: None,
+        })
+    }
+    fn position(&mut self, offset: u64, hash: HashContext) -> Result<()> {
+        if let Some(reader) = &mut self.file {
+            reader.get_mut().get_mut().seek(SeekFrom::Start(offset))?;
+            reader.consume(reader.buffer().len());
+            reader.get_mut().set_limit(self.length - offset);
+        }
+        self.consumed = offset;
+        self.current_hash = hash;
+        Ok(())
+    }
+}
+impl RecordSnapshot for JsonlSnapshot {
+    fn source_version(&self) -> Result<Option<SourceVersion>> {
+        let Some(reader) = &self.file else {
+            return Ok(None);
+        };
+        let metadata = reader.get_ref().get_ref().metadata()?;
+        #[cfg(unix)]
+        let changed = {
+            use std::os::unix::fs::MetadataExt;
+            (metadata.ctime(), metadata.ctime_nsec())
+        };
+        #[cfg(not(unix))]
+        let changed = (0, 0);
+        Ok(Some(SourceVersion {
+            bytes: metadata.len(),
+            modified: metadata.modified()?,
+            changed,
+        }))
+    }
+    fn verify_fixed_prefix(&self) -> Result<()> {
+        let Some(reader) = &self.file else {
+            return Ok(());
+        };
+        let file = reader.get_ref().get_ref();
+        ensure!(
+            file.metadata()?.len() >= self.length,
+            "journal shortened below snapshot prefix"
+        );
+        let mut hash = HashContext::new(&SHA256);
+        let mut offset = 0;
+        let mut block = [0_u8; 64 * 1024];
+        #[cfg(not(unix))]
+        let mut fallback = file.try_clone()?;
+        #[cfg(not(unix))]
+        let saved_position = fallback.stream_position()?;
+        let verification = (|| {
+            while offset < self.length {
+                let count = (self.length - offset).min(block.len() as u64) as usize;
+                #[cfg(unix)]
+                let read = {
+                    use std::os::unix::fs::FileExt;
+                    file.read_at(&mut block[..count], offset)?
+                };
+                #[cfg(not(unix))]
+                let read = {
+                    fallback.seek(SeekFrom::Start(offset))?;
+                    fallback.read(&mut block[..count])?
+                };
+                ensure!(read > 0, "journal shortened during prefix verification");
+                crate::diagnostics::fingerprint(read);
+                hash.update(&block[..read]);
+                offset += read as u64;
+            }
+            let actual: String = hash
+                .finish()
+                .as_ref()
+                .iter()
+                .map(|b| format!("{b:02x}"))
+                .collect();
+            ensure!(
+                actual == self.fingerprint,
+                "journal complete prefix changed during snapshot read"
+            );
+            Ok(())
+        })();
+        #[cfg(not(unix))]
+        fallback.seek(SeekFrom::Start(saved_position))?;
+        verification
+    }
+    fn reset(&mut self) -> Result<()> {
+        self.position(0, HashContext::new(&SHA256))
+    }
+    fn remember_page_boundary(&mut self, after: u64) {
+        self.page_boundary = Some(PageBoundary {
+            after,
+            offset: self.consumed,
+            hash: self.current_hash.clone(),
+        });
+    }
+    fn reset_for_page(&mut self, after: u64) -> Result<()> {
+        if let Some(cut) = &self.page_boundary
+            && cut.after == after
+            && cut.offset >= self.length - cut.offset
+            && !self.has_external_payloads
+        {
+            // An offset is not authority: authenticate all pinned bytes before
+            // skipping older records. Resume hashing at the actual line boundary.
+            self.verify_fixed_prefix()?;
+            return self.position(cut.offset, cut.hash.clone());
+        }
+        self.reset()
+    }
+    fn next(&mut self) -> Result<Option<JournalRecord>> {
+        let Some(reader) = &mut self.file else {
+            return Ok(None);
+        };
+        let mut line = Vec::new();
+        // Bound even a malicious unterminated line before allocation reaches file size.
+        let count = reader
+            .by_ref()
+            .take((MAX_PAYLOAD_BYTES * 2 + 1) as u64)
+            .read_until(b'\n', &mut line)?;
+        if count == 0 {
+            ensure!(
+                self.consumed == self.length && reader.get_ref().limit() == 0,
+                "journal shortened during snapshot read"
+            );
+            let actual = self.consumed_fingerprint();
+            ensure!(
+                actual == self.fingerprint,
+                "journal complete prefix changed during snapshot read"
+            );
+            self.fully_read = true;
+            return Ok(None);
+        }
+        ensure!(
+            line.len() <= MAX_PAYLOAD_BYTES * 2,
+            "journal line exceeds maximum"
+        );
+        if !line.ends_with(b"\n") {
+            bail!("journal snapshot lost a complete line");
+        }
+        self.consumed += line.len() as u64;
+        self.current_hash.update(&line);
+        line.pop();
+        ensure!(!line.is_empty(), "journal contains an empty complete line");
+        let (record, external) = codec::decode(&self.dir, self.id, &line)?;
+        self.has_external_payloads |= external;
+        Ok(Some(record))
+    }
+    fn consumed_fingerprint(&self) -> String {
+        crate::io::digest_hex(self.current_hash.clone().finish())
+    }
+    fn confirm_verified_data(&self) -> Result<bool> {
+        if !self.fully_read || self.has_external_payloads {
+            // Even an unchanged journal cannot prove blobs still exist.
+            return Ok(false);
+        }
+        self.verify_fixed_prefix()?;
+        Ok(true)
+    }
+    fn fingerprint(&self) -> &str {
+        &self.fingerprint
+    }
+    fn read_hash(&self) -> HashContext {
+        self.current_hash.clone()
+    }
+    fn extent(&self) -> u64 {
+        self.length
+    }
+    fn prefix_fingerprint(&mut self, sequence: u64) -> Result<Option<String>> {
+        self.reset()?;
+        let mut found = (sequence == 0).then(|| crate::io::sha256_hex(b""));
+        while let Some(record) = self.next()? {
+            if record.session_seq == sequence {
+                found = Some(self.consumed_fingerprint());
+            }
+        }
+        Ok(found)
+    }
+}

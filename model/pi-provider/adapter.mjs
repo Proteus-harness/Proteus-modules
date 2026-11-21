@@ -1,4 +1,4 @@
-// Keep Pi's transport, authentication, GPT tool conversion and usage accounting inside model/v13.
+// Keep Pi's transport, authentication, GPT tool conversion and usage accounting inside model/v14.
 import { randomUUID } from "node:crypto";
 import { createGoQuotaReader } from "../../components/model-runtime-js/opencode-go-quota.mjs";
 import { readFile } from "node:fs/promises";
@@ -30,6 +30,7 @@ function descriptor(model) {
             supports_developer_role: true,
             supports_cache_hints: true,
             supports_reasoning_config: model.reasoning,
+            supports_compaction: false,
             supports_image_input: model.input.includes("image"),
             supports_file_input: false,
             provider_hosted_tools: [],
@@ -186,7 +187,7 @@ export function modelFailure(error, { signal, started = false, nativeMessage } =
 export function modelExport(binding) {
     if (
         binding.module_id !== "pi_codex" ||
-        binding.contract_version !== "v13" ||
+        binding.contract_version !== "v14" ||
         Object.keys(binding.module_config).length !== 1 ||
         typeof binding.module_config.implementation !== "string"
     )
@@ -197,7 +198,7 @@ export function modelExport(binding) {
         manifest: {
             slot: "model",
             module_id: "pi_codex",
-            contract_version: "v13",
+            contract_version: "v14",
             composition: "select_one",
             module_features: goQuota ? ["model.quota.v1"] : [],
             config_schema: null,
@@ -219,6 +220,8 @@ export function modelExport(binding) {
             let started = false;
             let nativeMessage;
             try {
+                if (r.operation !== undefined && r.operation !== "Complete")
+                    throw new Error("Pi provider bridge does not support native model compaction");
                 if (!["None", "Auto"].includes(r.tool_choice)) throw new Error("Unsupported Pi tool choice");
                 const stream = runtime.streamSimple(model, await context(r, model), {
                     signal,

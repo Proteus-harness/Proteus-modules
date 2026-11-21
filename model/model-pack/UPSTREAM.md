@@ -4,6 +4,57 @@
 Responses endpoint. Это адаптация сетевого пути, а не копия всего runtime
 Codex или OpenCode.
 
+## Серверное Сжатие Контекста
+
+Typed model operation `Compact` использует V2-путь Codex на
+`67cc3c318dc8b5532db6ade4182b1dc6f3870889`:
+[collector](https://github.com/openai/codex/blob/67cc3c318dc8b5532db6ade4182b1dc6f3870889/codex-rs/core/src/compact_remote_v2.rs)
+и [trigger request](https://github.com/openai/codex/blob/67cc3c318dc8b5532db6ade4182b1dc6f3870889/codex-rs/core/src/compact_remote_v2_attempt.rs).
+Обычный Responses запрос сохраняет историю, instructions, tools и controls;
+адаптер снимает output schema и добавляет последним `compaction_trigger`.
+Это также описано в [официальной документации OpenAI](https://developers.openai.com/api/docs/guides/compaction#request-compaction-with-an-explicit-trigger).
+
+- `supports_compaction` включён по умолчанию у ChatGPT OAuth и стандартного
+  `https://api.openai.com/v1`. Для другого Responses сервера требуется явное
+  `capabilities.supports_compaction = true`; OpenAI-совместимость сама по себе
+  не подтверждает поддержку encrypted checkpoint. Явное `false` отключает её.
+- `Compact` всегда использует SSE независимо от настройки обычной генерации.
+  Успех требует `response.completed` и ровно одного завершённого compaction
+  item. HTTP 200, один `output_item.done` без terminal либо копия checkpoint
+  только в финальном output array недостаточны. Промежуточный checkpoint не
+  публикуется как завершённое сообщение.
+- Содержимое хранится как conversation `Opaque` с форматом
+  `openai.responses.compaction.v1`. Сохраняется точный provider item, включая
+  ciphertext и optional id; он повторно кодируется в исходном месте input.
+  Только upstream alias `compaction_summary` при чтении нормализуется в
+  `compaction`, как при serde roundtrip нативного Codex.
+  Это не поддержка произвольных provider item ids или `store=true`.
+- При повторном `Compact` прежний checkpoint входит в его input. Encoder
+  проверяет discriminator и non-empty `encrypted_content` и отклоняет чужие
+  opaque formats, а также отправку checkpoint серверу без этой capability.
+  Ciphertext не превращается в обычный текст. Совместимость между разными
+  аккаунтами/моделями этим не гарантируется.
+- Ошибка или обрыв не переключает запрос в diagnostic non-stream fallback.
+  Обычные OAuth refresh и transport retries сохраняются; выбор локальной
+  стратегии и bounded remote retries принадлежат preparation hook.
+
+Сохранение пользовательских anchors и durable history replacement выполняет
+hook/workflow через общий model contract. Адаптер не вызывает их напрямую и
+не читает credentials других приложений.
+
+Для encrypted checkpoint доступна отдельная локальная операция
+`model.input_estimate.v1`. Формула взята из
+[history.rs:656–674,699–712](https://github.com/openai/codex/blob/67cc3c318dc8b5532db6ade4182b1dc6f3870889/codex-rs/core/src/context_manager/history.rs#L656)
+на том же pin: UTF-8 длина `encrypted_content` умножается с насыщением на 3,
+делится на 4, затем с насыщением вычитается 650; результат округляется вверх
+при делении на 4 и ограничивается canonical `u32`. Base64 не декодируется,
+обёртка, id и status не учитываются; нулевой результат остаётся нулём.
+Операция работает и для ранее сохранённого `openai.responses.compaction.v1`,
+не добавляет hints, не меняет ciphertext и не читает credentials или сеть.
+Неизвестные opaque formats пропускаются, повреждённый известный checkpoint
+возвращает ошибку. Feature объявляет наличие optional handler; провайдеры без
+`supports_compaction` возвращают `None`, не обращаясь к авторизации или сети.
+
 ## Зафиксированные Источники
 
 - OpenCode `77429f59823c8c6df9cfee95d4c663043b017f46`:

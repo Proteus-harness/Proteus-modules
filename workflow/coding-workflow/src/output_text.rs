@@ -56,7 +56,7 @@ fn tool_result_summary(result: &ToolResult) -> String {
     let mut parts = Vec::new();
     let output = result.output.trim();
     if !output.is_empty() {
-        parts.push(output.to_owned());
+        parts.push(output);
     }
     if let Some(error) = result
         .error
@@ -64,14 +64,15 @@ fn tool_result_summary(result: &ToolResult) -> String {
         .map(str::trim)
         .filter(|error| !error.is_empty())
     {
-        parts.push(error.to_owned());
+        parts.push(error);
     }
     parts.join("\n")
 }
 
 fn truncate_chars(text: &str, limit: usize) -> String {
-    let mut truncated = text.chars().take(limit).collect::<String>();
-    if text.chars().count() > limit {
+    let mut chars = text.chars();
+    let mut truncated = chars.by_ref().take(limit).collect::<String>();
+    if chars.next().is_some() {
         truncated.push_str("\n[truncated]");
     }
     truncated

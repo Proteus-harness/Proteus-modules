@@ -261,7 +261,14 @@ fn workspace_path_policy_still_applies_before_any_writes() {
     let dir = tempfile::tempdir().unwrap();
     for path in [
         "../outside".to_owned(),
-        dir.path().join("absolute").display().to_string(),
+        dir.path()
+            .parent()
+            .unwrap()
+            .join("outside")
+            .display()
+            .to_string(),
+        format!("{}-other/outside", dir.path().display()),
+        dir.path().join("nested/../outside").display().to_string(),
     ] {
         assert!(
             apply_patch(
@@ -285,4 +292,100 @@ fn workspace_path_policy_still_applies_before_any_writes() {
         );
         assert!(!dir.path().join("real/f").exists());
     }
+}
+
+#[test]
+fn absolute_paths_support_all_operations_inside_the_selected_directory() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().canonicalize().unwrap();
+    fs::write(root.join("source"), "old\n").unwrap();
+    fs::write(root.join("delete"), "gone\n").unwrap();
+    apply_patch(
+        &patch(&format!(
+            "*** Add File: {}/added\n+first\n*** Update File: {}/source\n*** Move to: {}/moved\n@@\n-old\n+new\n*** Delete File: {}/delete",
+            root.display(), root.display(), root.display(), root.display()
+        )),
+        &root,
+    ).unwrap();
+    apply_patch(
+        &patch(&format!(
+            "*** Update File: {}/added\n@@\n-first\n+second",
+            root.display()
+        )),
+        &root,
+    )
+    .unwrap();
+    assert_eq!(fs::read_to_string(root.join("added")).unwrap(), "second\n");
+    assert_eq!(fs::read_to_string(root.join("moved")).unwrap(), "new\n");
+    assert!(!root.join("source").exists());
+    assert!(!root.join("delete").exists());
+}
+
+#[test]
+fn absolute_aliases_keep_duplicate_and_self_move_verification_before_writes() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().canonicalize().unwrap();
+    fs::write(root.join("f"), "old\n").unwrap();
+    for (source, destination) in [
+        ("f".to_owned(), root.join("f").display().to_string()),
+        (root.join("f").display().to_string(), "./f".to_owned()),
+    ] {
+        let duplicate = patch(&format!(
+            "*** Add File: first\n+ok\n*** Update File: {source}\n@@\n-old\n+new\n*** Delete File: {destination}"
+        ));
+        assert!(
+            apply_patch(&duplicate, &root)
+                .unwrap_err()
+                .contains("multiple operations")
+        );
+        let self_move = patch(&format!(
+            "*** Add File: first\n+ok\n*** Update File: {source}\n*** Move to: {destination}\n@@\n-old\n+new"
+        ));
+        assert!(
+            super::apply_patch(
+                &self_move,
+                &root,
+                &CodexPatchConfig {
+                    reject_self_move: true,
+                    ..Default::default()
+                }
+            )
+            .unwrap_err()
+            .contains("self-move rejected")
+        );
+        assert_eq!(fs::read_to_string(root.join("f")).unwrap(), "old\n");
+        assert!(!root.join("first").exists());
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn absolute_symlinks_and_paths_outside_nested_workdir_remain_rejected() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().canonicalize().unwrap();
+    let nested = root.join("nested");
+    fs::create_dir(&nested).unwrap();
+    fs::create_dir(root.join("real")).unwrap();
+    fs::write(root.join("real/file"), "old\n").unwrap();
+    std::os::unix::fs::symlink(root.join("real"), nested.join("link")).unwrap();
+    std::os::unix::fs::symlink(root.join("real/file"), nested.join("leaf")).unwrap();
+    for path in [
+        nested.join("link/new"),
+        nested.join("leaf"),
+        root.join("outside"),
+    ] {
+        assert!(
+            apply_patch(
+                &patch(&format!(
+                    "*** Add File: first\n+ok\n*** Add File: {}\n+bad",
+                    path.display()
+                )),
+                &nested
+            )
+            .is_err()
+        );
+        assert!(!nested.join("first").exists());
+    }
+    assert_eq!(fs::read_to_string(root.join("real/file")).unwrap(), "old\n");
+    assert!(!root.join("real/new").exists());
 }

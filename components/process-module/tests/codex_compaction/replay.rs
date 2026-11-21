@@ -2,8 +2,8 @@ use std::path::Path;
 
 use proteus_contracts::{contracts::ModelCallOrigin, domain::TurnId};
 use proteus_core::core::{
-    AppConfig, JournalEntry, ModuleCatalog, SessionStore, TurnSettlementStatus,
-    WorkflowReplayOptions, read_eval_report, replay_workflow,
+    AppConfig, JournalEntry, ModuleCatalog, TurnSettlementStatus, WorkflowReplayOptions,
+    replay_workflow,
 };
 
 pub(super) async fn check(
@@ -12,7 +12,7 @@ pub(super) async fn check(
     config: &AppConfig,
     context_window_once: bool,
 ) {
-    let projection = SessionStore::open(session_dir.to_owned())
+    let projection = crate::session_storage::open(session_dir.to_owned())
         .expect("cold session")
         .load_projection()
         .expect("cold projection");
@@ -30,7 +30,7 @@ pub(super) async fn check(
     }
     expected_origins.push(ModelCallOrigin::Direct);
     assert_eq!(origins, expected_origins);
-    let eval = read_eval_report(session_dir).expect("recorded model usage");
+    let eval = crate::session_storage::eval(session_dir).expect("recorded model usage");
     assert_eq!(eval.model_calls, expected_origins.len());
     assert_eq!(eval.provider_input_tokens, 12_800);
     assert_eq!(eval.provider_output_tokens, 460);

@@ -2,6 +2,55 @@ use super::*;
 use crate::model_standard::{InstructionBlock, InstructionKind};
 
 #[test]
+fn canonical_prefix_preserves_legacy_system_and_cache_semantics() {
+    let cache = AnthropicPromptCacheConfig::from_provider_config(&json!({
+        "prompt_cache_ttl": "1h"
+    }));
+    for (canonical, legacy, expected) in [
+        ("", "", None),
+        (" \n\t", "", None),
+        ("", " \n\t", Some(" \n\t")),
+        (" canonical ", "", Some(" canonical ")),
+        (" canonical ", " legacy ", Some(" canonical \n\n legacy ")),
+        (" \n\t", " legacy ", Some(" legacy ")),
+    ] {
+        for cache_instructions in [false, true] {
+            let request = CanonicalModelRequest::new(
+                ModelRef::new("anthropic", "fixture"),
+                vec![
+                    CanonicalMessage::text(MessageRole::System, legacy),
+                    CanonicalMessage::text(MessageRole::User, "question"),
+                ],
+            )
+            .with_instructions(vec![InstructionBlock::new(
+                InstructionKind::System,
+                canonical,
+                100,
+            )])
+            .with_cache(crate::domain::CacheHints::new(cache_instructions, false));
+            let source = serde_json::to_value(&request).unwrap();
+            let body = to_anthropic_request_with_cache(&request, &cache).unwrap();
+            let expected_system = expected.map(|text| {
+                if cache_instructions {
+                    json!([{
+                        "type": "text",
+                        "text": text,
+                        "cache_control": { "type": "ephemeral", "ttl": "1h" },
+                    }])
+                } else {
+                    json!(text)
+                }
+            });
+            assert_eq!(body.get("system"), expected_system.as_ref());
+            assert!(body.get("cache_control").is_none());
+            assert_eq!(body["messages"].as_array().unwrap().len(), 1);
+            assert_eq!(body["messages"][0]["content"][0]["text"], "question");
+            assert_eq!(serde_json::to_value(&request).unwrap(), source);
+        }
+    }
+}
+
+#[test]
 fn shaped_output_limits_keep_required_anthropic_max_tokens() {
     let adapter = AnthropicMessagesClient::from_provider_config(json!({})).unwrap();
     for (requested, expected) in [(None, 64_000), (Some(1_024), 1_024)] {

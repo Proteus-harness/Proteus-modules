@@ -3,7 +3,7 @@ use anyhow::{Context, Result, bail};
 use futures_util::StreamExt;
 use reqwest::{
     StatusCode,
-    header::{AUTHORIZATION, CONTENT_TYPE, HeaderMap, HeaderValue},
+    header::{ACCEPT, AUTHORIZATION, CONTENT_TYPE, HeaderMap, HeaderValue},
 };
 use serde_json::{Value, json};
 
@@ -18,7 +18,36 @@ use crate::{
     },
 };
 
-pub(super) fn metadata_request_error(operation: &str, error: reqwest::Error) -> anyhow::Error {
+/// Metadata reads refresh once after 401, but never use inference retries.
+/// Callers own their deadline, cache lock, response decoding and publication.
+pub(super) async fn send_metadata_request<F>(
+    auth: &CodexAuth,
+    operation: &str,
+    mut build: F,
+) -> Result<reqwest::Response>
+where
+    F: FnMut() -> reqwest::RequestBuilder,
+{
+    let mut access = auth.access(None).await?;
+    for attempt in 0..2 {
+        let response = build()
+            .headers(access.headers.clone())
+            .send()
+            .await
+            .map_err(|error| metadata_request_error(operation, error))?;
+        if response.status() == StatusCode::UNAUTHORIZED && attempt == 0 {
+            access = auth.access(Some(access.token)).await?;
+            continue;
+        }
+        if !response.status().is_success() {
+            bail!("ChatGPT {operation} returned HTTP {}", response.status());
+        }
+        return Ok(response);
+    }
+    unreachable!()
+}
+
+fn metadata_request_error(operation: &str, error: reqwest::Error) -> anyhow::Error {
     // Metadata failures cross the worker boundary as a message, not an error
     // chain. Keep the transport cause, but never its URL or response payload.
     let cause = anyhow::Error::new(error.without_url());
@@ -40,6 +69,9 @@ impl OpenAiResponsesClient {
         object
             .entry("base_url")
             .or_insert_with(|| json!(CODEX_BASE_URL));
+        object
+            .entry("supports_compaction")
+            .or_insert_with(|| json!(true));
         let base_url = validate_endpoint(
             object["base_url"]
                 .as_str()
@@ -173,11 +205,17 @@ impl OpenAiResponsesClient {
         body: &Value,
         headers: &HeaderMap,
     ) -> reqwest::RequestBuilder {
-        self.http
+        let request = self
+            .http
             .post(url)
             .headers(headers.clone())
             .header(CONTENT_TYPE, "application/json")
-            .json(body)
+            .json(body);
+        if body.get("stream").and_then(Value::as_bool) == Some(true) {
+            request.header(ACCEPT, "text/event-stream")
+        } else {
+            request
+        }
     }
 
     pub(super) async fn collect_codex_response(

@@ -138,7 +138,7 @@ async fn check(failure: Failure, workflow: &str) {
         Failure::Cancel => assert_eq!(requests.len(), 1),
     }
     let session = runtime.session_dir().unwrap().to_owned();
-    let projection = SessionStore::open(session.clone())
+    let projection = crate::session_storage::open(session.clone())
         .unwrap()
         .load_projection()
         .unwrap();

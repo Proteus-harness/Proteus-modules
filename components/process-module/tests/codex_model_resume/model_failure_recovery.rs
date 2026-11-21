@@ -5,7 +5,7 @@ use std::{
 };
 
 use proteus_core::core::{
-    AgentRuntime, AppConfig, JournalEntry, ModuleCatalog, SessionStore, ToolCallRecordPhase,
+    AgentRuntime, AppConfig, JournalEntry, ModuleCatalog, ToolCallRecordPhase,
     TurnSettlementStatus, WorkflowReplayOptions, replay_workflow,
 };
 use serde_json::{Value, json};
@@ -209,7 +209,7 @@ fn assert_resume_request(failed_round_request: &Value, request: &Value, deferred
 }
 
 async fn assert_canonical_session(config: &AppConfig, session_dir: &Path) {
-    let projection = SessionStore::open(session_dir.to_owned())
+    let projection = crate::session_storage::open(session_dir.to_owned())
         .unwrap()
         .load_projection()
         .unwrap();

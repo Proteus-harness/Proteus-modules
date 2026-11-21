@@ -6,9 +6,9 @@
 ## Runtime SDK
 
 - Репозиторий: [Proteus-core](https://github.com/Proteus-harness/Proteus-core).
-- Revision: `bee0e409e746e2df9db32748d4f8ea02201bd4af`.
-- Public JS entry API: `examples/modules/hook-process`; `hook/v6`, wire v3.
-- Лицензия: [MIT](https://github.com/Proteus-harness/Proteus-core/blob/bee0e409e746e2df9db32748d4f8ea02201bd4af/LICENSE).
+- Revision: `d6939cad236fe64aed6856a98f8251675636aeb3`.
+- Public JS entry API: `examples/modules/hook-process`; `hook/v8`, wire v3.
+- Лицензия: [MIT](https://github.com/Proteus-harness/Proteus-core/blob/d6939cad236fe64aed6856a98f8251675636aeb3/LICENSE).
 - Helper/runtime digests: [sdk-pin.json](sdk-pin.json). Подключение — явный
   локальный путь; автоматического скачивания или npm install нет.
 

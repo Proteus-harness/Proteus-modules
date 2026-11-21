@@ -51,14 +51,14 @@ pub(crate) fn complete_summary_with_recovery(
 
 // Pinned Codex uses a 200ms exponential reconnect backoff (factor 2) plus a
 // random multiplier in [0.9, 1.1).
-fn retry_delay(attempt: u64) -> Duration {
+pub(crate) fn retry_delay(attempt: u64) -> Duration {
     let exponent = attempt.saturating_sub(1).min(63);
     let base = 200u64.saturating_mul(1u64 << exponent);
     let jitter = rand::rng().random_range(0.9..1.1);
     Duration::from_millis((base as f64 * jitter) as u64)
 }
 
-fn wait_for_retry(
+pub(crate) fn wait_for_retry(
     host: &mut dyn HookModuleHost,
     delay: Duration,
 ) -> Result<(), ProcessModuleError> {

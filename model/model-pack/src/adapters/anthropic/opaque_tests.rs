@@ -144,14 +144,23 @@ async fn redacted_stream_and_nonstream_survive_cold_journal_and_tool_continuatio
         let history = serialized_history(response);
         let root = tempfile::tempdir().unwrap();
         let workspace = tempfile::tempdir().unwrap();
-        let store = SessionStore::new(root.path(), workspace.path(), new_session_id()).unwrap();
+        let store = SessionStore::new(
+            crate::test_storage::service(workspace.path()),
+            root.path(),
+            workspace.path(),
+            new_session_id(),
+        )
+        .unwrap();
         store
             .append_history(new_thread_id(), None, &history)
             .await
             .unwrap();
         let dir = store.session_dir().to_path_buf();
         drop(store);
-        let restored = SessionStore::open(dir).unwrap().load_messages().unwrap();
+        let restored = SessionStore::open(crate::test_storage::service(workspace.path()), dir)
+            .unwrap()
+            .load_messages()
+            .unwrap();
         assert_eq!(restored, history);
         assert_next_request(restored, &blocks);
     }

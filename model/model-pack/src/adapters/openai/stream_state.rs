@@ -16,6 +16,7 @@ mod tests;
 
 #[derive(Default)]
 pub(super) struct OpenAiStreamState {
+    compact: bool,
     call_ids: HashMap<String, String>,
     ids: HashMap<String, MessageId>,
     phases: HashMap<String, Option<MessagePhase>>,
@@ -25,6 +26,13 @@ pub(super) struct OpenAiStreamState {
 }
 
 impl OpenAiStreamState {
+    pub(super) fn for_compaction(compact: bool) -> Self {
+        Self {
+            compact,
+            ..Self::default()
+        }
+    }
+
     pub(super) fn translate(&mut self, data: &str) -> Vec<ModelStreamEvent> {
         let Ok(parsed) = serde_json::from_str::<Value>(data) else {
             return Vec::new();
@@ -147,6 +155,43 @@ impl OpenAiStreamState {
                 }]
             }
             "response.completed" => {
+                if self.compact {
+                    let checkpoint =
+                        match super::compaction::completed_checkpoint(&mut self.completed_items) {
+                            Ok(checkpoint) => checkpoint,
+                            Err(error) => {
+                                return vec![ModelStreamEvent::Error {
+                                    failure: crate::model_standard::ModelFailure::other(
+                                        error.to_string(),
+                                    ),
+                                }];
+                            }
+                        };
+                    let mut parsed = parsed;
+                    let Some(response) = parsed
+                        .get_mut("response")
+                        .filter(|response| response.is_object())
+                    else {
+                        return vec![ModelStreamEvent::Error {
+                            failure: crate::model_standard::ModelFailure::other(
+                                "OpenAI compaction terminal response is missing",
+                            ),
+                        }];
+                    };
+                    if response
+                        .get("status")
+                        .and_then(Value::as_str)
+                        .is_some_and(|status| status != "completed")
+                    {
+                        return vec![ModelStreamEvent::Error {
+                            failure: crate::model_standard::ModelFailure::other(
+                                "OpenAI compaction terminal response was not completed",
+                            ),
+                        }];
+                    }
+                    response["output"] = json!([checkpoint]);
+                    return finalize_completed_event(parsed, &[], Vec::new, &self.ids);
+                }
                 let streamed_items = || {
                     self.streamed_items.values().map(|(key, parts)| json!({
                     "id": key, "type": "message", "role": "assistant",

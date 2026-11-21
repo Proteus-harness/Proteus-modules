@@ -8,9 +8,7 @@ use std::{
 };
 
 use proteus_contracts::{contracts::CancellationToken, model_standard::ModelFailureKind};
-use proteus_core::core::{
-    AgentRuntime, JournalEntry, ModelResponseOutcome, SessionStore, TurnSettlementStatus,
-};
+use proteus_core::core::{AgentRuntime, JournalEntry, ModelResponseOutcome, TurnSettlementStatus};
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
     net::TcpListener,
@@ -99,7 +97,7 @@ async fn check(keep_open: bool) {
     loop {
         // Directory creation precedes the atomic identity metadata write.
         let projection = if session_dir.join("session.json").is_file() {
-            SessionStore::open(session_dir.clone())
+            crate::session_storage::open(session_dir.clone())
                 .unwrap()
                 .load_projection()
                 .unwrap()
@@ -137,7 +135,7 @@ async fn check(keep_open: bool) {
         tokio::time::sleep(Duration::from_millis(2)).await;
     }
     if keep_open {
-        let projection = SessionStore::open(session_dir.clone())
+        let projection = crate::session_storage::open(session_dir.clone())
             .unwrap()
             .load_projection()
             .unwrap();
@@ -174,7 +172,7 @@ async fn check(keep_open: bool) {
         EFFECT
     );
 
-    let projection = SessionStore::open(session_dir.clone())
+    let projection = crate::session_storage::open(session_dir.clone())
         .unwrap()
         .load_projection()
         .unwrap();

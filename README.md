@@ -14,6 +14,7 @@ alpha-выпусками не обещана; потребитель закре�
 | `policy/` | Разрешения и подтверждения |
 | `hook/` | Обработка истории, отбор инструментов |
 | `tool/` | Файлы, shell, git, patch, plan, skills, Rust LSP, CodeMode |
+| `storage/` | [Хранение истории сессий: JSONL и SQLite](storage/session-storage/README.md) |
 | `context_provider/` | Поиск и память; некоторые также экспортируют tool |
 | `components/` | Исполняемые сборки с несколькими exports |
 | `research/` | Эксперименты вне основного Cargo workspace |
@@ -53,7 +54,8 @@ python3 -m unittest discover -s tests -p 'test_catalog.py'
 
 Нужны Rust, Git, Python 3.11+ и LLD на Linux x86_64; для сборки CodeMode
 также нужен C-компилятор. Gate Claude command hooks дополнительно требует
-Node.js 22.18+; сам CodeMode работает без Node.js.
+Node.js 22.19+ и npm. Проверка установки Pi/OpenCode в полном gate готовит
+их закреплённые npm-зависимости через `npm ci`; сам CodeMode работает без Node.js.
 Контракты и test harness подключены по фиксированному Git commit в Cargo.toml;
 соседний checkout harness для обычной сборки не требуется.
 
@@ -108,6 +110,9 @@ API, ограничения исполнения и пример — в [CodeMod
 Авторизация ChatGPT выполняется через поставляемый пакет моделей:
 `proteus-model-pack-module auth openai_codex login`.
 Состояние локального входа: `proteus-model-pack-module auth openai_codex status`.
+Без явного `auth_file` используется
+`~/.config/Proteus-harness/secrets/chatgpt.json`; CLI принимает свой путь через
+`--auth-file`.
 
 Native OpenCode model export устанавливается отдельно от Rust-пакетов:
 `python3 workflow/opencode-runtime/install.py --prefix /absolute/ready/Proteus`.

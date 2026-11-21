@@ -1,0 +1,199 @@
+//! A disposable catalog index over a previously validated journal and blobs.
+use super::*;
+use std::{collections::BTreeMap, fs::OpenOptions, io::Write};
+
+const FILE: &str = ".storage-catalog-v1.json";
+const MAX_BYTES: usize = 4 * 1024 * 1024;
+const MAX_BLOBS: usize = 16_384;
+pub(in crate::service) type BlobStamps = BTreeMap<PathBuf, FileStamp>;
+pub(in crate::service) type BlobStampDigest = [u8; 32];
+
+#[derive(Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct Index {
+    summary: StorageSessionSummary,
+    stamps: SourceStamp,
+    blobs: BlobStamps,
+    revision: StorageRevision,
+    extent: u64,
+    fingerprint: String,
+}
+
+#[derive(Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct Envelope {
+    checksum: String,
+    data: Index,
+}
+
+pub(in crate::service) fn blob_stamps(dir: &Path) -> Option<BlobStamps> {
+    let root = dir.join("blobs");
+    let mut stamps = BTreeMap::new();
+    let mut pending = vec![(PathBuf::new(), 0)];
+    while let Some((relative, depth)) = pending.pop() {
+        let entries = match std::fs::read_dir(root.join(&relative)) {
+            Ok(entries) => entries,
+            Err(error) if depth == 0 && error.kind() == std::io::ErrorKind::NotFound => {
+                return Some(BTreeMap::new());
+            }
+            Err(_) => return None,
+        };
+        for entry in entries {
+            let entry = entry.ok()?;
+            if stamps.len() >= MAX_BLOBS {
+                return None;
+            }
+            let meta = std::fs::symlink_metadata(entry.path()).ok()?;
+            let name = relative.join(entry.file_name());
+            if meta.is_dir() && depth < 16 {
+                pending.push((name.clone(), depth + 1));
+            } else if !meta.is_file() {
+                return None;
+            }
+            stamps.insert(name, file_stamp(&meta).ok()?);
+        }
+    }
+    Some(stamps)
+}
+
+/// Keep only a fixed-size proof in the in-process catalog, including for
+/// archives with thousands of payload files.
+pub(in crate::service) fn blob_stamp_digest(stamps: &BlobStamps) -> BlobStampDigest {
+    let mut hash = ring::digest::Context::new(&ring::digest::SHA256);
+    for (path, stamp) in stamps {
+        let path = path.as_os_str().as_encoded_bytes();
+        hash.update(&(path.len() as u64).to_le_bytes());
+        hash.update(path);
+        hash.update(&stamp.len.to_le_bytes());
+        hash.update(&stamp.modified.to_le_bytes());
+        hash.update(&stamp.device.to_le_bytes());
+        hash.update(&stamp.inode.to_le_bytes());
+        hash.update(&stamp.changed.0.to_le_bytes());
+        hash.update(&stamp.changed.1.to_le_bytes());
+    }
+    hash.finish()
+        .as_ref()
+        .try_into()
+        .expect("SHA-256 digest length")
+}
+
+pub(super) fn update_blobs(
+    dir: &Path,
+    stamps: &mut BlobStamps,
+    touched: Vec<PathBuf>,
+) -> Option<()> {
+    let root = dir.join("blobs");
+    for file in touched {
+        for path in file.ancestors().filter(|p| !p.as_os_str().is_empty()) {
+            let meta = std::fs::symlink_metadata(root.join(path)).ok()?;
+            let expected_type = if path == file {
+                meta.is_file()
+            } else {
+                meta.is_dir()
+            };
+            if !expected_type {
+                return None;
+            }
+            stamps.insert(path.to_owned(), file_stamp(&meta).ok()?);
+        }
+        if stamps.len() > MAX_BLOBS {
+            return None;
+        }
+    }
+    Some(())
+}
+
+pub(super) fn load(
+    dir: &Path,
+    descriptor: &StorageSessionDescriptor,
+    stamps: &SourceStamp,
+) -> Option<(StorageSessionSummary, super::super::views::PrefixCache)> {
+    let bytes = crate::io::bounded_read(&dir.join(FILE), MAX_BYTES).ok()?;
+    let envelope: Envelope = serde_json::from_slice(&bytes).ok()?;
+    let index = envelope.data;
+    if envelope.checksum != crate::io::sha256_hex(&serde_json::to_vec(&index).ok()?)
+        || index.summary.descriptor.session != descriptor.session
+        || &index.stamps != stamps
+        || blob_stamps(dir)? != index.blobs
+        || source_stamp(dir, journal_kind(descriptor)?)
+            .ok()?
+            .as_slice()
+            != stamps.as_slice()
+        || index.fingerprint.len() != 64
+        || !index
+            .fingerprint
+            .bytes()
+            .all(|byte| byte.is_ascii_hexdigit())
+    {
+        return None;
+    }
+    let prefix = super::super::views::PrefixCache {
+        stamps: index.stamps,
+        revision: index.revision,
+        hint: crate::backend::PrefixHint {
+            extent: index.extent,
+            fingerprint: index.fingerprint,
+        },
+        blob_digest: Some(blob_stamp_digest(&index.blobs)),
+    };
+    let mut summary = index.summary;
+    summary.descriptor = descriptor.clone();
+    Some((summary, prefix))
+}
+
+fn journal_kind(descriptor: &StorageSessionDescriptor) -> Option<BackendKind> {
+    match descriptor.record_location.as_ref()?.file_name()?.to_str()? {
+        "journal.jsonl" => Some(BackendKind::Jsonl),
+        "journal.sqlite" => Some(BackendKind::Sqlite),
+        _ => None,
+    }
+}
+
+pub(super) fn save(
+    dir: &Path,
+    summary: &StorageSessionSummary,
+    prefix: &super::super::views::PrefixCache,
+    blobs: BlobStamps,
+) {
+    let result = (|| -> Result<()> {
+        let kind = journal_kind(&summary.descriptor).context("catalog journal kind")?;
+        // A concurrent append or payload replacement makes this generation unusable.
+        ensure!(
+            source_stamp(dir, kind)? == prefix.stamps,
+            "catalog source changed"
+        );
+        ensure!(
+            blob_stamps(dir).as_ref() == Some(&blobs),
+            "catalog blobs changed"
+        );
+        let data = Index {
+            summary: summary.clone(),
+            stamps: prefix.stamps.clone(),
+            blobs,
+            revision: prefix.revision,
+            extent: prefix.hint.extent,
+            fingerprint: prefix.hint.fingerprint.clone(),
+        };
+        let checksum = crate::io::sha256_hex(&serde_json::to_vec(&data)?);
+        let bytes = serde_json::to_vec(&Envelope { checksum, data })?;
+        ensure!(bytes.len() <= MAX_BYTES, "catalog index exceeds maximum");
+        let temporary = dir.join(format!(".storage-catalog-{}.tmp", Uuid::new_v4()));
+        let write = (|| -> Result<()> {
+            // Never create a session directory from a cache write.
+            let mut file = OpenOptions::new()
+                .create_new(true)
+                .write(true)
+                .open(&temporary)?;
+            file.write_all(&bytes)?;
+            file.sync_data()?;
+            std::fs::rename(&temporary, dir.join(FILE))?;
+            crate::io::sync_directory(dir)?;
+            Ok(())
+        })();
+        if write.is_err() {
+            let _ = std::fs::remove_file(&temporary);
+        }
+        write
+    })();
+    let _ = result;
+}

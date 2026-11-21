@@ -102,16 +102,16 @@ enum PlanStepStatus {
 }
 
 fn invoke_impl(call_json: &str) -> Result<String, String> {
-    let call: Value = serde_json::from_str(call_json)
+    let mut call: Value = serde_json::from_str(call_json)
         .map_err(|error| format!("invalid ToolCall JSON: {error}"))?;
     let call_id = call
         .get("id")
         .and_then(Value::as_str)
         .unwrap_or("")
         .to_owned();
-    let args = call.get("args").cloned().unwrap_or(Value::Null);
+    let args = call.get_mut("args").map(Value::take).unwrap_or(Value::Null);
 
-    match validate_plan(&args) {
+    match validate_plan(args) {
         Ok(plan_args) => {
             let counts = status_counts(&plan_args.plan);
             let result = json!({
@@ -165,8 +165,8 @@ fn status_counts(steps: &[PlanStep]) -> StatusCounts {
     counts
 }
 
-fn validate_plan(args: &Value) -> Result<PlanArgs, String> {
-    serde_json::from_value(args.clone()).map_err(|error| {
+fn validate_plan(args: Value) -> Result<PlanArgs, String> {
+    serde_json::from_value(args).map_err(|error| {
         format!("plan entries must be {{step, status: pending|in_progress|completed}}: {error}")
     })
 }
@@ -189,9 +189,9 @@ mod tests {
     #[test]
     fn accepts_valid_plan_and_reports_counts() {
         let result = invoke(json!({
-            "explanation": "starting",
+            "explanation": "  начало\n",
             "plan": [
-                { "step": "Read the failing test", "status": "completed" },
+                { "step": "Read \"test\" at C:\\repo\n", "status": "completed" },
                 { "step": "Fix the parser", "status": "in_progress" },
                 { "step": "Run the suite", "status": "pending" }
             ]
@@ -202,46 +202,42 @@ mod tests {
         assert_eq!(result["metadata"]["in_progress"], 1);
         assert_eq!(result["metadata"]["pending"], 1);
         assert_eq!(result["metadata"]["plan"][1]["status"], "in_progress");
+        assert_eq!(result["metadata"]["explanation"], "  начало\n");
+        assert_eq!(
+            result["metadata"]["plan"][0]["step"],
+            "Read \"test\" at C:\\repo\n"
+        );
         assert_eq!(result["output"], "Plan updated");
+    }
+
+    fn assert_two_step_counts(status: &str, [pending, in_progress, completed]: [u64; 3]) {
+        let result = invoke(json!({
+            "plan": [
+                { "step": "a", "status": status },
+                { "step": "b", "status": status }
+            ]
+        }));
+
+        assert_eq!(result["ok"], true);
+        let metadata = &result["metadata"];
+        assert_eq!(metadata["pending"], pending);
+        assert_eq!(metadata["in_progress"], in_progress);
+        assert_eq!(metadata["completed"], completed);
     }
 
     #[test]
     fn allows_fully_completed_plan_without_in_progress() {
-        let result = invoke(json!({
-            "plan": [
-                { "step": "a", "status": "completed" },
-                { "step": "b", "status": "completed" }
-            ]
-        }));
-
-        assert_eq!(result["ok"], true);
+        assert_two_step_counts("completed", [0, 0, 2]);
     }
 
     #[test]
     fn allows_pending_plan_without_in_progress_step() {
-        let result = invoke(json!({
-            "plan": [
-                { "step": "a", "status": "pending" },
-                { "step": "b", "status": "pending" }
-            ]
-        }));
-
-        assert_eq!(result["ok"], true);
-        assert_eq!(result["metadata"]["in_progress"], 0);
-        assert_eq!(result["metadata"]["pending"], 2);
+        assert_two_step_counts("pending", [2, 0, 0]);
     }
 
     #[test]
     fn accepts_multiple_in_progress_steps_like_upstream_handler() {
-        let result = invoke(json!({
-            "plan": [
-                { "step": "a", "status": "in_progress" },
-                { "step": "b", "status": "in_progress" }
-            ]
-        }));
-
-        assert_eq!(result["ok"], true);
-        assert_eq!(result["metadata"]["in_progress"], 2);
+        assert_two_step_counts("in_progress", [0, 2, 0]);
     }
 
     #[test]

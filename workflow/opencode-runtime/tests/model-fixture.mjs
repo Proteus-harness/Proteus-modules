@@ -8,7 +8,8 @@ import { join, resolve } from 'node:path';
 export const root = fileURLToPath(new URL('../../../', import.meta.url));
 export const node = join(root, 'workflow/opencode-runtime/node_modules/node-linux-x64/bin/node');
 export const worker = join(root, 'workflow/opencode-runtime/worker.mjs');
-export const core = resolve(root, '../Proteus-desktop/build/Proteus/bin/proteus');
+export const core = process.env.PROTEUS_TEST_CORE_BIN ?? resolve(root, '../Proteus-desktop/build/Proteus/bin/proteus');
+export const moduleBin = name => join(process.env.PROTEUS_TEST_MODULES_BIN_DIR ?? resolve(core, '..'), name);
 export const flash = 'deepseek-v4.1-flash';
 export const second = 'synthetic-second';
 
@@ -44,7 +45,7 @@ export async function fixture() {
     return { dir, workspace, database, catalog, config, env };
 }
 
-export function component(f, config = f.config) {
+export function component(f, config = f.config, connections = { opencode: config }) {
     const child = spawn(node, [worker], { cwd: f.workspace, env: f.env, stdio: ['pipe', 'pipe', 'pipe'] });
     const pending = new Map(); let seq = 0, stderr = '';
     child.stderr.on('data', chunk => { stderr += chunk; });
@@ -68,21 +69,25 @@ export function component(f, config = f.config) {
         return result;
     }
     return { child, exit, initialize: () => request('initialize', { protocol_version: 'v3', component_id: 'synthetic-opencode',
-        exports: [{ slot: 'model', module_id: 'opencode', contract_version: 'v13', composition: 'select_one',
-            module_config: config, host_features: ['model.catalog.v1', 'model.quota.v1'] }] }, 'h:1:0'),
-    invoke(method, params = null) { const id = `h:1:${++seq}`; return { id, result: request(method, {
-        export: { slot: 'model', module_id: 'opencode' }, lineage: { root_invocation_id: id, parent_invocation_id: null, depth: 0 }, params }, id) }; },
+        exports: Object.entries(connections).map(([module_id, module_config]) => ({ slot: 'model', module_id,
+            contract_version: 'v14', composition: 'select_one', module_config,
+            host_features: ['model.catalog.v1', 'model.quota.v1'] })) }, 'h:1:0'),
+    invoke(method, params = null, module_id = 'opencode') { const id = `h:1:${++seq}`; return { id, result: request(method, {
+        export: { slot: 'model', module_id }, lineage: { root_invocation_id: id, parent_invocation_id: null, depth: 0 }, params }, id) }; },
     cancel(id) { child.stdin.write(JSON.stringify({ jsonrpc: '2.0', method: '$/cancelRequest', params: { invocation_id: id, cause: 'user' } }) + '\n'); },
     async close() { child.stdin.end(); const timer = setTimeout(() => child.kill('SIGKILL'), 5000); try { return await exit; } finally { clearTimeout(timer); } } };
 }
 
-export async function appServer(f, name) {
+export async function appServer(f, name, overrides = {}) {
     const configPath = join(f.dir, 'synthetic.json');
-    await writeFile(configPath, JSON.stringify({ active_provider: 'go',
+    const config = { active_provider: 'go',
         providers: { go: { provider: 'opencode', model: flash, stream: true, reasoning: { effort: 'high', summary: true } } },
         components: { model: { command: node, args: [...(f.preload ? ['--import', f.preload] : []), worker],
             env_allowlist: Object.keys(f.env), exports: { model: { opencode: {} } } } },
-        module_config: { model: { opencode: f.config } } }));
+        module_config: { model: { opencode: f.config } } };
+    await writeFile(configPath, JSON.stringify({ ...config, ...overrides,
+        components: { ...config.components, ...overrides.components },
+        module_config: { ...config.module_config, ...overrides.module_config } }));
     const child = spawn(core, ['--config', configPath, '--cwd', f.workspace, 'server', 'http', '--host', '127.0.0.1', '--port', '0', '--token', 'synthetic-token', '--ready-stdout'],
         { cwd: f.workspace, env: f.env, stdio: ['ignore', 'pipe', 'pipe'] });
     let stdout = '', stderr = '';

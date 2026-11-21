@@ -1,9 +1,33 @@
 #!/usr/bin/env python3
 """Install the pinned OpenCode adapters into an existing Proteus prefix."""
 import argparse
+import hashlib
+import json
 from pathlib import Path
 import shutil
 import subprocess
+import sys
+
+
+def write_module_manifest(prefix, source=None):
+    """Describe creation options without npm, network or runtime startup."""
+    source = source or Path(__file__).resolve().parent
+    modules = source.parent.parent
+    sys.path.insert(0, str(modules))
+    from package import atomic_json, model_connections
+    prefix = prefix.resolve()
+    binary = prefix / "bin/proteus-opencode-module"
+    exports = json.loads((source / "module-exports.json").read_text())
+    version = json.loads((source / "package.json").read_text())["version"]
+    with binary.open("rb") as stream:
+        digest = hashlib.file_digest(stream, "sha256").hexdigest()
+    manifest = {"id": "opencode-runtime", "version": version,
+                "command": ["bin/proteus-opencode-module"], "exports": exports,
+                "sha256": digest,
+                "model_connections": model_connections(source / "model-connections.json", exports)}
+    destination = prefix / "share/modules/opencode-runtime/module.json"
+    atomic_json(manifest, destination)
+    return destination
 
 
 def main():
@@ -37,6 +61,7 @@ root = Path(__file__).resolve().parent.parent / "share/opencode-runtime/workflow
 os.execv(str(root / "node_modules/node-linux-x64/bin/node"), ["node", str(root / "worker.mjs")])
 ''')
     binary.chmod(0o755)
+    write_module_manifest(args.prefix, source)
     print(binary)
 
 

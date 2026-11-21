@@ -117,10 +117,10 @@ export async function executeNativeFile(input, signal, snapshot) {
 }
 
 export function createFilesExport(binding) {
-    if (binding.slot !== "tool" || binding.module_id !== "opencode_tools" || binding.contract_version !== "v6" || binding.composition !== "ordered_many") throw new Error("Expected tool/opencode_tools v6 ordered_many");
+    if (binding.slot !== "tool" || binding.module_id !== "opencode_tools" || binding.contract_version !== "v7" || binding.composition !== "ordered_many") throw new Error("Expected tool/opencode_tools v7 ordered_many");
     if (Object.keys(binding.module_config).length) throw new Error("OpenCode files take no module config");
     return {
-        manifest: { slot: "tool", module_id: "opencode_tools", contract_version: "v6", composition: "ordered_many", module_features: [], config_schema: null },
+        manifest: { slot: "tool", module_id: "opencode_tools", contract_version: "v7", composition: "ordered_many", module_features: [], config_schema: null },
         async invoke(method, params, { signal, hostCall }) {
             if (method === "list") {
                 if (params !== null) throw new Error("Expected null tool-list params");

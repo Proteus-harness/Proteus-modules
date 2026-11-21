@@ -1,3 +1,6 @@
+#[path = "fixtures/session_storage.rs"]
+mod session_storage;
+
 use std::{
     path::{Path, PathBuf},
     sync::Arc,
@@ -8,8 +11,8 @@ use proteus_contracts::contracts::{ApprovalRequest, ApprovalResponse, ApprovalTr
 use proteus_contracts::model_standard::MessageRole;
 use proteus_core::{
     core::{
-        AgentRuntime, AppConfig, JournalEntry, ModuleCatalog, SessionStore, ToolCallRecordPhase,
-        TurnSettlementStatus, WorkflowReplayOptions, read_eval_report, replay_workflow,
+        AgentRuntime, AppConfig, JournalEntry, ModuleCatalog, ToolCallRecordPhase,
+        TurnSettlementStatus, WorkflowReplayOptions, replay_workflow,
     },
     process_adapters::ProcessComponentConfig,
 };
@@ -74,6 +77,7 @@ async fn project_check_config(git_failure: bool, test_failure: bool) -> AppConfi
             },
         })),
     );
+    crate::session_storage::configure(&mut config);
     config
 }
 
@@ -163,7 +167,7 @@ async fn check_model_free_replay(git_failure: bool, test_failure: bool, continua
     assert_eq!(output.metadata["project_check"]["model_calls"], 0);
 
     let session_dir = runtime.session_dir().expect("session dir").to_path_buf();
-    let projection = SessionStore::open(session_dir.clone())
+    let projection = crate::session_storage::open(session_dir.clone())
         .expect("session store")
         .load_projection()
         .expect("canonical projection");
@@ -205,7 +209,7 @@ async fn check_model_free_replay(git_failure: bool, test_failure: bool, continua
         settlement.output.as_ref().expect("settled output").metadata["project_check"]["status"],
         expected_status
     );
-    let eval = read_eval_report(&session_dir).expect("model-free eval report");
+    let eval = crate::session_storage::eval(&session_dir).expect("model-free eval report");
     assert!(eval.succeeded());
     assert_eq!(eval.model_calls, 0);
     assert_eq!(eval.tool_calls, expected_tools.len());

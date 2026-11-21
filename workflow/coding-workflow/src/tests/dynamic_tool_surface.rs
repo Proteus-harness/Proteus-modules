@@ -58,11 +58,9 @@ fn proteus_tool_call_preserves_execution_identity_and_actual_result() {
     let outer_call = ToolCall::new(
         new_call_id(),
         dynamic_tools::TOOL_CALL,
-        json!({
-            "name": "hidden_echo",
-            "args": { "path": "README.md" }
-        }),
-    );
+        json!({"name": "not_the_tool", "args": {}}),
+    )
+    .with_raw_arguments(r#"{"name":"hidden_echo","args":{"path":"README.md"}}"#);
     let input = workflow_input("call hidden tool");
     let input_json = serde_json::to_string(&input).expect("input json");
     let hidden_echo = test_tool("hidden_echo", "Echo hidden file", ToolSafety::ReadOnly);
@@ -85,6 +83,7 @@ fn proteus_tool_call_preserves_execution_identity_and_actual_result() {
     let executed_calls = host.executed_calls.lock().expect("executed calls");
     assert_eq!(executed_calls.len(), 1);
     assert_eq!(executed_calls[0].name, "hidden_echo");
+    assert_eq!(executed_calls[0].args, json!({"path": "README.md"}));
     assert_eq!(executed_calls[0].id, outer_call.id);
 
     let result = output

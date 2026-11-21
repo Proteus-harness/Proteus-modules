@@ -99,6 +99,15 @@ class CatalogTests(unittest.TestCase):
         with self.assertRaisesRegex(SystemExit, "Invalid build requirements"):
             catalog.catalog(self.root)
 
+    def test_session_storage_is_independently_deliverable(self):
+        value = catalog.catalog()
+        entry = next(entry for entry in value["entries"] if entry["id"] == "session-storage")
+        self.assertEqual(entry["category"], "storage")
+        self.assertEqual(entry["path"], "components/session-storage-module")
+        self.assertIn("session_storage/jsonl", entry["description"])
+        self.assertIn("session_storage/sqlite", entry["description"])
+        self.assertIn({"id": "storage", "title": "Хранение сессий"}, value["categories"])
+
     def test_committed_index_is_current(self):
         with contextlib.redirect_stdout(io.StringIO()):
             self.assertEqual(catalog.main(["--check"]), 0)

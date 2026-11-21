@@ -1,0 +1,18 @@
+{
+  "model": [
+    "*"
+  ],
+  "workflow": [
+    "opencode_loop"
+  ],
+  "context": [
+    "opencode_context"
+  ],
+  "tool": [
+    "opencode_tools"
+  ],
+  "hook": [
+    "opencode_prompt",
+    "opencode_compact"
+  ]
+}

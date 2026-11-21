@@ -5,13 +5,14 @@ use serde_json::{Value, json};
 
 use super::{OpenAiPromptCacheConfig, model_profile::OpenAiModelProfile};
 use crate::{
-    adapters::context_render::context_text,
+    adapters::context_render::{context_text, instruction_text},
     domain::{
         FileSearchHostedToolConfig, HostedToolConfig, ResponseFormat, ToolCall, ToolCallSurface,
         ToolChoice, ToolContent, ToolSpec, ToolSurface, WebSearchHostedToolConfig,
     },
     model_standard::{
         CanonicalMessage, CanonicalModelRequest, ContentPart, MessagePhase, MessageRole,
+        ModelOperation,
     },
 };
 
@@ -32,6 +33,20 @@ pub(super) fn to_openai_request_with_cache(
     prompt_cache: &OpenAiPromptCacheConfig,
     profile: &OpenAiModelProfile,
 ) -> Result<Value> {
+    match request.operation {
+        ModelOperation::Complete => {}
+        ModelOperation::Compact if profile.supports_compaction => {}
+        ModelOperation::Compact => {
+            return Err(anyhow!(
+                "openai.responses endpoint does not support native compaction"
+            ));
+        }
+        _ => {
+            return Err(anyhow!(
+                "openai.responses does not support this model operation"
+            ));
+        }
+    }
     let mut body = json!({
         "model": request.model.model,
         "input": [],
@@ -50,6 +65,7 @@ pub(super) fn to_openai_request_with_cache(
     body["input"] = Value::Array(to_openai_input(
         &request.messages,
         profile.supports_image_input,
+        profile.supports_compaction,
     )?);
 
     if let Some(instructions) = joined_instructions(request) {
@@ -121,6 +137,19 @@ pub(super) fn to_openai_request_with_cache(
     }
     if let Some(client_metadata) = openai_client_metadata(request, profile)? {
         body["client_metadata"] = client_metadata;
+    }
+
+    if request.operation == ModelOperation::Compact {
+        if let Some(text) = body.get_mut("text").and_then(Value::as_object_mut) {
+            text.remove("format");
+            if text.is_empty() {
+                body.as_object_mut().unwrap().remove("text");
+            }
+        }
+        body["input"]
+            .as_array_mut()
+            .expect("Responses input array")
+            .push(json!({"type": "compaction_trigger"}));
     }
 
     Ok(body)
@@ -198,14 +227,7 @@ fn apply_openai_prompt_cache(
 }
 
 fn joined_instructions(request: &CanonicalModelRequest) -> Option<String> {
-    let mut instructions: Vec<_> = request.instructions.iter().collect();
-    instructions.sort_by_key(|instruction| std::cmp::Reverse(instruction.priority));
-    let text = instructions
-        .into_iter()
-        .map(|instruction| instruction.text.as_str())
-        .filter(|text| !text.trim().is_empty())
-        .collect::<Vec<_>>()
-        .join("\n\n");
+    let text = instruction_text(&request.instructions);
     if text.is_empty() { None } else { Some(text) }
 }
 
@@ -341,6 +363,7 @@ fn collect_hosted_tool_includes<'a>(tools: &'a [ToolSpec], include: &mut BTreeSe
 fn to_openai_input(
     messages: &[CanonicalMessage],
     supports_image_input: bool,
+    supports_compaction: bool,
 ) -> Result<Vec<Value>> {
     let mut input: Vec<Value> = Vec::new();
     let mut tool_call_surfaces = HashMap::new();
@@ -433,8 +456,15 @@ fn to_openai_input(
                 ContentPart::Reasoning { text, signature } => {
                     input.push(openai_reasoning_item(text, signature.as_deref()))
                 }
-                ContentPart::Opaque { format, .. } => {
-                    return Err(anyhow!("openai.responses does not support opaque format '{format}'"));
+                ContentPart::Opaque { format, data } => {
+                    if format != super::compaction::FORMAT {
+                        return Err(anyhow!("openai.responses does not support opaque format '{format}'"));
+                    }
+                    if !supports_compaction {
+                        return Err(anyhow!("openai.responses endpoint cannot replay compaction checkpoints"));
+                    }
+                    super::compaction::validate_item(data)?;
+                    input.push(data.clone());
                 }
                 ContentPart::Image { image } => {
                     let block = json!({ "type": "input_image", "image_url": super::super::images::data_url(image)?, "detail": "auto" });

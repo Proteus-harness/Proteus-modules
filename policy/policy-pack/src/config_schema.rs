@@ -53,25 +53,12 @@ pub fn config_schema(id: &str) -> ModuleConfigSchema {
         };
     }
     if id != "allow_all" {
-        for (key, title, description) in [
-            (
-                "allow",
-                "Разрешать",
-                "Инструменты, выполняемые без подтверждения.",
-            ),
-            (
-                "ask_before",
-                "Спрашивать",
-                "Инструменты, требующие подтверждения.",
-            ),
-            (
-                "deny",
-                "Запрещать",
-                "Инструменты, выполнение которых запрещено.",
-            ),
+        for (key, description) in [
+            ("allow", "Инструменты, выполняемые без подтверждения."),
+            ("ask_before", "Инструменты, требующие подтверждения."),
+            ("deny", "Инструменты, выполнение которых запрещено."),
             (
                 "allow_sandboxed",
-                "Разрешать ограниченные вызовы",
                 "Инструменты со своей изоляцией; расширение прав требует подтверждения.",
             ),
         ] {
@@ -79,8 +66,9 @@ pub fn config_schema(id: &str) -> ModuleConfigSchema {
                 continue;
             }
             fields.push(
-                ConfigField::new(key, title, description, ConfigValueSchema::strings())
-                    .with_default(serde_json::json!([])),
+                ConfigField::new(key, key, description, ConfigValueSchema::strings())
+                    .with_default(serde_json::json!([]))
+                    .suggest_tools(),
             );
         }
     }

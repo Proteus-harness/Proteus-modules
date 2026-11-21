@@ -63,3 +63,31 @@ fn estimates_tokens_from_text_context_and_tool_results() {
 
     assert_eq!(estimate_message_tokens(&messages), Some(4));
 }
+
+#[test]
+fn empty_final_output_truncates_tool_summary_at_unicode_scalar_boundary() {
+    let message = CanonicalMessage::new(MessageRole::Assistant, Vec::new());
+    for unit in ["x", "🦀"] {
+        for length in [1_999, 2_000, 2_001] {
+            let result = ToolResult::ok(
+                proteus_contracts::domain::new_call_id(),
+                unit.repeat(length),
+            );
+            let messages = vec![CanonicalMessage::new(
+                MessageRole::Tool,
+                vec![ContentPart::ToolResult { result }],
+            )];
+            let suffix = if length > 2_000 { "\n[truncated]" } else { "" };
+            let expected = format!(
+                "Model returned an empty final response after the last tool call.\n\nLast tool result:\n{}{suffix}",
+                unit.repeat(length.min(2_000)),
+            );
+
+            assert_eq!(
+                output_text(&message, &messages),
+                expected,
+                "{unit} {length}"
+            );
+        }
+    }
+}

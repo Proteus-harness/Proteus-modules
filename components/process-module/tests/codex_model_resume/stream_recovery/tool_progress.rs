@@ -146,7 +146,7 @@ async fn check(ending: Ending) {
     );
 
     let session_dir = runtime.session_dir().unwrap().to_owned();
-    let projection = SessionStore::open(session_dir.clone())
+    let projection = crate::session_storage::open(session_dir.clone())
         .unwrap()
         .load_projection()
         .unwrap();

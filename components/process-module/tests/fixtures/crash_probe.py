@@ -9,7 +9,7 @@ from pathlib import Path
 from component_runtime import PROTOCOL_VERSION, ProtocolError, run_component
 
 EXPORT = {
-    "slot": "tool", "module_id": "crash-probe", "contract_version": "v6",
+    "slot": "tool", "module_id": "crash-probe", "contract_version": "v7",
     "composition": "ordered_many", "module_features": [], "config_schema": None,
 }
 SPEC = {
@@ -32,7 +32,7 @@ def initialize(params):
     exports = params.get("exports") or []
     if [(item.get("slot"), item.get("module_id"),
          item.get("contract_version"), item.get("composition"))
-            for item in exports] != [("tool", "crash-probe", "v6", "ordered_many")]:
+            for item in exports] != [("tool", "crash-probe", "v7", "ordered_many")]:
         raise ProtocolError("unexpected crash probe exports")
     return {"protocol_version": PROTOCOL_VERSION,
             "component_id": params["component_id"], "exports": [EXPORT]}

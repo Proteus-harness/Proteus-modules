@@ -179,7 +179,7 @@ fn parse_diagnostic(value: &Value) -> Result<RustDiagnostic> {
         severity: severity_name(object.get("severity")),
         code,
         source,
-        message: truncate_utf8(&normalize_message(message), MAX_MESSAGE_BYTES),
+        message: normalize_message(message),
         range: parse_range(range)?,
     })
 }
@@ -240,18 +240,20 @@ fn render_code(value: &Value) -> Option<String> {
 }
 
 fn normalize_message(message: &str) -> String {
-    message.split_whitespace().collect::<Vec<_>>().join(" ")
-}
-
-fn truncate_utf8(value: &str, max_bytes: usize) -> String {
-    if value.len() <= max_bytes {
-        return value.to_owned();
+    let mut output = String::new();
+    for word in message.split_whitespace() {
+        if !output.is_empty() && output.len() < MAX_MESSAGE_BYTES {
+            output.push(' ');
+        }
+        let remaining = MAX_MESSAGE_BYTES - output.len();
+        if word.len() > remaining {
+            output.push_str(&word[..word.floor_char_boundary(remaining)]);
+            output.push_str("...");
+            break;
+        }
+        output.push_str(word);
     }
-    let mut end = max_bytes;
-    while !value.is_char_boundary(end) {
-        end -= 1;
-    }
-    format!("{}...", &value[..end])
+    output
 }
 
 #[cfg(test)]
@@ -289,6 +291,32 @@ mod tests {
                 .render(Path::new("src/lib.rs"))
                 .contains("error[E0308] src/lib.rs:2:3-2:6 (rustc): mismatched types")
         );
+    }
+
+    #[test]
+    fn diagnostic_message_preserves_normalized_utf8_prefix() {
+        let full = "a".repeat(MAX_MESSAGE_BYTES);
+        let near = &full[..MAX_MESSAGE_BYTES - 1];
+        let short = &full[..MAX_MESSAGE_BYTES - 3];
+        let cases = [
+            ("\t\u{00a0}\n".to_owned(), String::new()),
+            ("  a\t b\u{2003}界 \n".to_owned(), "a b 界".to_owned()),
+            (format!("{full}\n "), full.clone()),
+            (format!("{full} \tb"), format!("{full}...")),
+            (format!("{near}\u{2003}🦀"), format!("{near} ...")),
+            (format!("{near}é"), format!("{near}...")),
+            (format!("{short}界"), format!("{short}界")),
+            (format!("{short}界!"), format!("{short}界...")),
+            (format!("{short}🦀"), format!("{short}...")),
+        ];
+        let position = json!({ "line": 0, "character": 0 });
+        for (input, expected) in cases {
+            let diagnostic = json!({
+                "range": { "start": position, "end": position },
+                "message": input,
+            });
+            assert_eq!(parse_diagnostic(&diagnostic).unwrap().message, expected);
+        }
     }
 
     #[test]

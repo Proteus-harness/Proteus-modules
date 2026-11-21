@@ -12,9 +12,9 @@
 python3 package.py --package code-mode --install /absolute/path/to/Proteus
 ```
 
-Выберите поставляемый opt-in профиль
-[`code-mode.config.toml`](https://github.com/Proteus-harness/Proteus-core/blob/main/configs/code-mode.config.toml)
-и перезапустите backend. Профиль сохраняет обычные описания инструментов,
+Поставляемый [`config.toml`](https://github.com/Proteus-harness/Proteus-core/blob/main/configs/config.toml)
+уже включает CodeMode. После изменения конфига перезапустите backend.
+Профиль сохраняет обычные описания инструментов,
 чтобы модель знала их имена и аргументы. CodeMode не заменяет workflow,
 policy, approval или MCP adapter. Core должен поддерживать invocation-local
 scheduling вложенных callbacks; оно сохраняет shared/exclusive разрешения

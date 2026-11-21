@@ -2,15 +2,20 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { createInterface } from "node:readline";
-import { mkdir, mkdtemp, readFile, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import { resolve, join } from "node:path";
 
-test("real tool/v6 process lists, invokes all four tools and cancels bash", async () => {
+test("real tool/v7 and context/v3 process preserves native prompts, four tools and bash cancellation", async () => {
     const base = fileURLToPath(new URL("../../../target/pi-tools-tests",import.meta.url));
     await mkdir(base, { recursive: true });
     const cwd = await mkdtemp(join(base, "wire-"));
-    const child = spawn(process.execPath, [fileURLToPath(new URL("../worker.mjs",import.meta.url))], { stdio: ["pipe", "pipe", "pipe"] });
+    const agent = join(cwd, "agent");
+    await mkdir(agent);
+    await writeFile(join(agent, "SYSTEM.md"), "Wire native system prompt");
+    await writeFile(join(agent, "APPEND_SYSTEM.md"), "Wire native append prompt");
+    const child = spawn(process.execPath, [fileURLToPath(new URL("../worker.mjs",import.meta.url))], {
+        env: { ...process.env, PI_CODING_AGENT_DIR: agent }, stdio: ["pipe", "pipe", "pipe"] });
     const lines = createInterface({ input: child.stdout });
     let stderr = "";
     child.stderr.on("data", data => { stderr += data; });
@@ -28,16 +33,23 @@ test("real tool/v6 process lists, invokes all four tools and cancels bash", asyn
         send({ jsonrpc: "2.0", id, method, params });
         return { id, response };
     }
-    function invoke(method, params) {
+    function invoke(method, params, selected = { slot: "tool", module_id: "pi_tools" }) {
         const id = `h:7:${nextId}`;
-        return rpc(method, { export: { slot: "tool", module_id: "pi_tools" }, lineage: { root_invocation_id: id, parent_invocation_id: null, depth: 0 }, params });
+        return rpc(method, { export: selected, lineage: { root_invocation_id: id, parent_invocation_id: null, depth: 0 }, params });
     }
     function tool(name, args) {
         return invoke("invoke", { call: { id: "test-call", name, args }, cwd, attribution: { execution_id: "test", agent: null }, skills: { disabled: [], packages: [] } });
     }
     try {
-        const initialized = await rpc("initialize", { protocol_version: "v3", component_id: "pi", exports: [{ slot: "tool", module_id: "pi_tools", contract_version: "v6", composition: "ordered_many", module_config: {}, host_features: [] }] }).response;
+        const initialized = await rpc("initialize", { protocol_version: "v3", component_id: "pi", exports: [
+            { slot: "tool", module_id: "pi_tools", contract_version: "v7", composition: "ordered_many", module_config: {}, host_features: [] },
+            { slot: "context", module_id: "pi_context", contract_version: "v3", composition: "select_one", module_config: {}, host_features: [] },
+        ] }).response;
         assert.ok(initialized.result, stderr);
+        const built = await invoke("build", { task: { cwd } }, { slot: "context", module_id: "pi_context" }).response;
+        assert.equal(built.error, undefined, stderr);
+        assert.equal(built.result.result.chunks.find(c => c.metadata?.["pi/prompt"] === "system").content, "Wire native system prompt");
+        assert.equal(built.result.result.chunks.find(c => c.metadata?.["pi/prompt"] === "append").content, "Wire native append prompt");
         const listed = await invoke("list", null).response;
         assert.deepEqual(listed.result.result.map(entry => entry.spec.name), ["read", "bash", "edit", "write"]);
         assert.equal((await tool("write", { path: "sample.txt", content: "before\n" }).response).result.result.ok, true);

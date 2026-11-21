@@ -1,0 +1,24 @@
+{
+  "repository": "https://github.com/NousResearch/hermes-agent",
+  "release": "v0.23.1",
+  "revision": "3b421578588243f920886e6fe79a6faa87ea026e",
+  "files": {
+    "LICENSE": "821556e6336796450ab852d375117b48a4887e71d255794fd6318d99982a5ab6",
+    "agent/tool_executor.py": "201ef6dafb7ea1a78080aa55eb8e101d4f6713430716222d9901acf4ca1f26b7",
+    "agent/inline_tool_executors.py": "b6ffcad0008c9152e2c8af75eaeaf94c94cc6582231832600ab6f92ccdee1c9b",
+    "agent/context_compressor.py": "932180e738e02ff90c62a1175db3ee0727b922f835583e6a4862e111d0eec1b2",
+    "agent/session_persistence.py": "ea1eb6a430a9ef738c80f79f36f5c6fd5e61b481d7a6c27d72fa2b66c35a023d",
+    "hermes_cli/middleware.py": "1fe2e27888aab268f5938b3efc33cb70cd137443c6dea1587c37bdb370b66a2d",
+    "tools/todo_tool.py": "a895fb70e9d6d118cc7992114e7efaece753d57af115cf822caf27e67cef4c87",
+    "pyproject.toml": "ee825ad304ad685625c8878cd34b7923ec64579cdc08e646b84b76ba3d4c1cfc",
+    "uv.lock": "d0ae8bfd20db7a8ca0e75418df718315c58088b120366227cc62ee8fe25d4274",
+    "run_agent.py": "633c968343fe4c54f8f81a07a67bbc753deb0e3cc64ef87c1aa49d053a76ebc9",
+    "hermes_bootstrap.py": "909862a202ee78d61c1d533f5f849a8b6c0f72a68c6eaf90eaa88d029a5d6b8c",
+    "agent/agent_init.py": "bd7adefd16bc728934e54b89d1d72ae04063b3e23650c39651ff664e9b56794f",
+    "agent/turn_context.py": "541d76f7f9b9a8b0e75c274f018b5c3a6b9416a15cfc4e63782f66751b8c1f80",
+    "agent/turn_finalizer.py": "44d5b86f2f76c8668cf28ac853b3a29347223ece9e1b3d4ce3abf2fddd1ae49c",
+    "agent/background_review.py": "76a3c5e4a30c5c5e069f57085b20953dff3f2c1ee8b826fe29c4e2dd1e39919b",
+    "hermes_cli/config_defaults.py": "24ac09830344046445f98f78e0b71afed77844f4caf2a93a4045c9d7ffb241bd",
+    "toolsets.py": "ac6691b02d1fbe0a20a6d936588d28c86cdf53b9d56bdfbf4a183b357b0cc467"
+  }
+}

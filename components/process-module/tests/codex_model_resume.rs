@@ -1,5 +1,8 @@
 //! Real process workflow + loopback Responses server + cold runtime restart.
 //! No live model, credentials or user workspace are involved.
+#[path = "fixtures/session_storage.rs"]
+mod session_storage;
+
 use std::{
     path::{Path, PathBuf},
     time::Duration,
@@ -10,7 +13,7 @@ use proteus_contracts::{
     model_standard::ContentPart,
 };
 use proteus_core::core::{
-    AgentRuntime, AppConfig, JournalEntry, ModuleCatalog, SessionStore, TurnSettlementStatus,
+    AgentRuntime, AppConfig, JournalEntry, ModuleCatalog, TurnSettlementStatus,
     WorkflowReplayOptions, replay_workflow,
 };
 use serde_json::{Value, json};
@@ -191,7 +194,7 @@ async fn serve(listener: TcpListener, streaming: bool) -> Vec<Value> {
 }
 
 fn config(endpoint: &str, streaming: bool) -> AppConfig {
-    serde_json::from_value(json!({
+    let mut config = serde_json::from_value(json!({
         "active_provider": "fixture",
         "providers": {"fixture": {"provider": "openai", "model": "fixture-model",
             "stream": streaming, "reasoning": {"effort": "high", "summary": true}}},
@@ -206,7 +209,9 @@ fn config(endpoint: &str, streaming: bool) -> AppConfig {
         "tools": {"enabled": ["read_file"]},
         "runtime": {"model_timeout_ms": 5000, "workflow_timeout_ms": 15000}
     }))
-    .unwrap()
+    .unwrap();
+    crate::session_storage::configure(&mut config);
+    config
 }
 
 // The test executable is also a small runtime harness. Each invocation has fresh
@@ -331,7 +336,7 @@ async fn check_resume(streaming: bool, subscription: bool) {
     let note: Value =
         serde_json::from_slice(&std::fs::read(root.path().join("resume.json")).unwrap()).unwrap();
     let session_dir = PathBuf::from(note["session_dir"].as_str().unwrap());
-    let first = SessionStore::open(session_dir.clone())
+    let first = crate::session_storage::open(session_dir.clone())
         .unwrap()
         .load_projection()
         .unwrap();
@@ -427,7 +432,7 @@ async fn check_resume(streaming: bool, subscription: bool) {
         start + expected.len() + 1,
         "only continuation follows saved history"
     );
-    let restored = SessionStore::open(session_dir.clone())
+    let restored = crate::session_storage::open(session_dir.clone())
         .unwrap()
         .load_projection()
         .unwrap();

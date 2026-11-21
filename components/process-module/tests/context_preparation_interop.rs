@@ -131,6 +131,7 @@ impl HookHost for SummaryHost {
 fn hook_input(input: ContextPreparationInput, cwd: &Path) -> HookInput {
     HookInput {
         event: HookEvent::BeforeContext {
+            model_capabilities: None,
             output: ContextPreparationOutput::unchanged(input.messages.clone()),
             input,
             target: None,
