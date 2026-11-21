@@ -4,7 +4,7 @@
   "type": "module",
   "version": "0.1.0-alpha.4",
   "scripts": {
-    "test": "node_modules/node-linux-x64/bin/node --test tests/*.test.mjs"
+    "test": "node_modules/node-linux-x64/bin/node --test tests/*.test.mjs ../../model/opencode-provider/tests/*.test.mjs"
   },
   "dependencies": {
     "@opencode/core": "2.0.22",

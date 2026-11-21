@@ -1,6 +1,6 @@
 // Keep Pi's transport, authentication, GPT tool conversion and usage accounting inside model/v13.
 import { randomUUID } from "node:crypto";
-import { createGoQuotaReader } from "./go-quota.mjs";
+import { createGoQuotaReader } from "../../components/model-runtime-js/opencode-go-quota.mjs";
 import { readFile } from "node:fs/promises";
 import { ModelRuntime } from "../../tool/pi-tools/node_modules/@earendil-works/pi-coding-agent/dist/core/model-runtime.js";
 import {

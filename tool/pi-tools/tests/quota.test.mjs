@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { modelExport } from "../../../model/pi-provider/adapter.mjs";
-import { createGoQuotaReader, goUsageBucket, budgetBuckets } from "../../../model/pi-provider/go-quota.mjs";
+import { createGoQuotaReader, goUsageBucket, budgetBuckets } from "../../../components/model-runtime-js/opencode-go-quota.mjs";
 import { ModelRuntime } from "../node_modules/@earendil-works/pi-coding-agent/dist/core/model-runtime.js";
 
 const resetsAt = "2026-11-15T00:00:00.000Z";

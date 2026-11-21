@@ -179,3 +179,80 @@ test("cancellation after a summary callback rejects instead of returning changed
     };
     await assert.rejects(createCompactionExport(binding({})).invoke("hook.invoke", fixture(), host.invocation), /turn canceled/);
 });
+
+const imageBlock = { type: "image", mime_type: "image/png",
+    data: "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADElEQVR4nGNgYGAAAAAEAAH2FzhVAAAAAElFTkSuQmCC" };
+function toolMediaFixture(ok = true, content = [imageBlock], output = "Image output") {
+    const input = fixture();
+    const call = { id: "image-call", name: "read", args: { path: "image.png" }, surface: "function", raw_arguments: null };
+    const result = { call_id: call.id, ok, output, content, error: ok ? null : "Read failed after partial output", metadata: null };
+    input.event.output.messages.splice(2, 0,
+        canonical("Assistant", { ToolCall: { call } }, "model"),
+        canonical("Tool", { ToolResult: { result } }, "tool"));
+    return { input, call, result };
+}
+function projectedTool(context) {
+    return context.messages.flatMap(message => message.type === "assistant" ? message.content : [])
+        .find(part => part.type === "tool" && part.id === "image-call");
+}
+function callbackResult(host) {
+    return host.requests[0].messages.flatMap(message => message.parts)
+        .find(part => part.payload.ToolResult?.result.call_id === "image-call").payload.ToolResult.result;
+}
+
+test("native context retains ordered tool text and inline image for success and error", async () => {
+    const content = [{ type: "text", text: "before" }, imageBlock, { type: "text", text: "after" }];
+    for (const ok of [true, false]) {
+        const { input } = toolMediaFixture(ok, content);
+        input.event.input.token_estimate = null;
+        const before = structuredClone(input);
+        const context = await nativeContext(input.event.input, input.event.output.messages);
+        const tool = projectedTool(context);
+        assert.equal(tool.state.status, ok ? "completed" : "error");
+        assert.deepEqual(tool.state.content, [{ type: "text", text: "Image output" },
+            { type: "text", text: "before" },
+            { type: "file", mime: imageBlock.mime_type, uri: `data:${imageBlock.mime_type};base64,${imageBlock.data}` },
+            { type: "text", text: "after" }]);
+        if (!ok) assert.equal(tool.state.error.message, "Read failed after partial output");
+        assert.ok(Number.isFinite(estimateContext(context)));
+        if (ok) {
+            const plain = toolMediaFixture(true, content.filter(item => item.type !== "image")).input;
+            plain.event.input.token_estimate = null;
+            const plainContext = await nativeContext(plain.event.input, plain.event.output.messages);
+            assert.equal(estimateContext(context) - estimateContext(plainContext), 1500,
+                "pinned native unmeasured image estimate, not a measured-token anchor");
+        }
+        assert.deepEqual(input, before);
+    }
+});
+
+test("actual native compaction callback keeps typed tool text image and failure", async () => {
+    for (const ok of [true, false]) {
+        for (const content of [[], [{ type: "text", text: "additional text" }],
+            [imageBlock, { type: "text", text: "after image" }]]) {
+            const { input, result } = toolMediaFixture(ok, content), before = structuredClone(input), host = fakeHost();
+            await createCompactionExport(binding({})).invoke("hook.invoke", input, host.invocation);
+            assert.deepEqual(callbackResult(host), result);
+            assert.deepEqual(input, before);
+        }
+    }
+});
+
+test("image-first native content does not move later text before the image", async () => {
+    const { input } = toolMediaFixture(true, [imageBlock, { type: "text", text: "later" }], "");
+    const context = await nativeContext(input.event.input, input.event.output.messages);
+    projectedTool(context).state.content.shift(); // Native normalization may omit the leading empty text.
+    const host = fakeHost();
+    await runNativeCompaction(context, input.event.input.request, {}, host.invocation);
+    const result = callbackResult(host);
+    assert.equal(result.output, "");
+    assert.deepEqual(result.content, [imageBlock, { type: "text", text: "later" }]);
+});
+
+test("unsupported non-image tool content is explicit rather than silently discarded", async () => {
+    for (const block of [{ type: "binary", mime_type: "application/pdf", data: "cGRm" },
+        { type: "json", value: { unsupported: true } }]) {
+        const { input } = toolMediaFixture(true, [block]);
+        await assert.rejects(nativeContext(input.event.input, input.event.output.messages), /only text and inline images/);
+    }
+});

@@ -120,6 +120,7 @@ use crate::{
     summary::{COMPACTION_PROMPT, SUMMARY_PREFIX, validate_summary_response_for_test},
 };
 
+mod history_recovery;
 mod stream_recovery;
 
 #[derive(Default)]

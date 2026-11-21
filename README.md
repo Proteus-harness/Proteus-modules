@@ -109,6 +109,15 @@ API, ограничения исполнения и пример — в [CodeMod
 `proteus-model-pack-module auth openai_codex login`.
 Состояние локального входа: `proteus-model-pack-module auth openai_codex status`.
 
+Native OpenCode model export устанавливается отдельно от Rust-пакетов:
+`python3 workflow/opencode-runtime/install.py --prefix /absolute/ready/Proteus`.
+Он использует pinned SDK OpenCode для каталога и model transport и читает
+существующий API key из OpenCode v2; Pi для этого пути не нужен. Выбор этого
+model export не включает workflow, tools, context или compactor OpenCode.
+Каталог моделей и точные effort variants поступают автоматически через
+`model.catalog.v1`, без списка aliases в конфиге. Авторизация, пример подключения,
+ограничения и Node-тесты — в [OpenCode Native Adapters](workflow/opencode-runtime/README.md).
+
 На Linux/glibc каждый worker до запуска потоков ограничивает malloc
 двумя аренами, чтобы уменьшить удержание свободной памяти при множестве
 компонентов. Явные `MALLOC_ARENA_MAX` и `GLIBC_TUNABLES` с

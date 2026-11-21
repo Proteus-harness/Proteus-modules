@@ -50,15 +50,19 @@ pub(super) fn request_from_state(
     phase: &str,
     last_usage: Option<&LastModelUsage>,
 ) -> Result<PreparedRequest, ProcessModuleError> {
+    let mut instructions = vec![InstructionBlock::new(
+        InstructionKind::System,
+        system_instructions,
+        100,
+    )];
+    // Keep runtime order and priorities, including the host's continuation reason.
+    // The workflow base precedes runtime blocks; phase-specific blocks follow them.
+    instructions.extend(input.runtime.instructions.iter().cloned());
     request_from_state_with_instruction_blocks_and_options(
         input,
         host,
         messages,
-        vec![InstructionBlock::new(
-            InstructionKind::System,
-            system_instructions,
-            100,
-        )],
+        instructions,
         developer_instructions,
         phase,
         RequestOptions {

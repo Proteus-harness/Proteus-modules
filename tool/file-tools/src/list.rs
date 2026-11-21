@@ -93,7 +93,20 @@ impl ToolModule for ListDirTool {
 
         let mut lines = Vec::new();
         let mut count = 0usize;
-        for entry in entries.flatten() {
+        for entry in entries {
+            let entry = match entry {
+                Ok(entry) => entry,
+                Err(error) => {
+                    return err_result(
+                        &call.id,
+                        &call.name,
+                        format!(
+                            "failed to enumerate directory {}: {error}",
+                            target_path.display()
+                        ),
+                    );
+                }
+            };
             count += 1;
             let name = entry.file_name().to_string_lossy().into_owned();
             let kind = match entry.file_type() {

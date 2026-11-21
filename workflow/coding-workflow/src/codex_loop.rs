@@ -36,7 +36,7 @@ pub(crate) fn run_codex_loop(
         &mut turn.model_messages,
         &input.runtime.interrupted_turns,
     );
-    super::codex_recovery::normalize_missing_tool_outputs(&mut turn.model_messages);
+    super::history::normalize_missing_tool_outputs(&mut turn.model_messages);
     match run_loop(&input, host, module_id, &mut turn, stream_retry) {
         Ok((text, metadata)) => turn
             .finish(host, text, metadata)

@@ -18,10 +18,16 @@ def main():
     for filename in ["package.json", "package-lock.json", "NOTICE", "LICENSE.upstream", "README.md", *[path.name for path in source.glob("*.mjs")]]:
         shutil.copy2(source / filename, destination / filename)
     shutil.copytree(source / "node_modules", destination / "node_modules", dirs_exist_ok=True)
-    shared = runtime / "components/module-runtime-js"
-    shared.mkdir(parents=True, exist_ok=True)
-    for path in (source.parent.parent / "components/module-runtime-js").glob("*.mjs"):
-        shutil.copy2(path, shared / path.name)
+    modules = source.parent.parent
+    for relative in ["components/module-runtime-js", "components/model-runtime-js", "model/opencode-provider"]:
+        source_dir = modules / relative
+        for path in source_dir.rglob("*.mjs"):
+            name = path.relative_to(source_dir)
+            if "tests" in name.parts:
+                continue
+            target = runtime / relative / name
+            target.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(path, target)
     binary = args.prefix.resolve() / "bin/proteus-opencode-module"
     binary.parent.mkdir(parents=True, exist_ok=True)
     binary.write_text('''#!/usr/bin/env python3

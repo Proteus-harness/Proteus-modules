@@ -1,15 +1,15 @@
 use crate::SINGLE_LOOP_MODULE_ID;
 use crate::{
-    host::{complete_model, emit_event, execute_tools, request_from_state},
+    host::execute_tools,
     metadata::{output_metadata, output_metadata_with_extra},
     output_text::output_text,
-    scaffold::{PersistentRepair, TurnScaffold},
+    sampling::{SamplingStep, sample_step},
+    scaffold::TurnScaffold,
     token_accounting::LastModelUsage,
-    validation::{response_output_message, validate_model_response},
+    validation::response_output_message,
 };
 use proteus_contracts::{
     contracts::WorkflowFailure,
-    domain::{Event, ToolChoice},
     model_standard::FinishReason,
     process_module::{
         ProcessModuleError, WorkflowModuleHostMut, WorkflowModuleInput, WorkflowModuleOutput,
@@ -45,40 +45,18 @@ fn run_loop(
     let mut last_usage: Option<LastModelUsage> = None;
 
     for _round in 0..max_tool_rounds {
-        let mut prepared = request_from_state(
+        let response = sample_step(
             input,
             host,
-            &turn.model_messages,
-            SYSTEM_INSTRUCTIONS,
-            None,
-            "single_loop",
-            last_usage.as_ref(),
-        )?;
-        if turn.apply_compaction_report(
-            prepared.compaction.as_ref(),
-            prepared.preparation_target.as_ref(),
-            &prepared.request.messages,
-            PersistentRepair::Rebuild,
-        )? {
-            last_usage = None;
-            turn.checkpoint(host, &[])?;
-            prepared.request.messages = turn.model_messages.clone();
-        }
-        let request = prepared.request;
-        emit_event(
-            host,
-            &Event::ModelRequestPrepared {
-                model: request.model.clone(),
+            turn,
+            &mut last_usage,
+            SamplingStep {
+                phase: "single_loop",
+                system_instructions: SYSTEM_INSTRUCTIONS,
+                developer_instructions: None,
+                disable_tools: false,
             },
         )?;
-        let response = complete_model(host, &request, "single_loop")?;
-        emit_event(
-            host,
-            &Event::ModelResponseReceived {
-                finish_reason: response.finish_reason.clone(),
-            },
-        )?;
-        validate_model_response("single_loop", &request, &response)?;
 
         turn.model_messages
             .extend(response.messages.iter().cloned());
@@ -115,41 +93,18 @@ fn run_loop(
         turn.checkpoint(host, &[])?;
     }
 
-    let mut prepared = request_from_state(
+    let response = sample_step(
         input,
         host,
-        &turn.model_messages,
-        SYSTEM_INSTRUCTIONS,
-        None,
-        "single_loop_final",
-        last_usage.as_ref(),
-    )?;
-    if turn.apply_compaction_report(
-        prepared.compaction.as_ref(),
-        prepared.preparation_target.as_ref(),
-        &prepared.request.messages,
-        PersistentRepair::Rebuild,
-    )? {
-        turn.checkpoint(host, &[])?;
-        prepared.request.messages = turn.model_messages.clone();
-    }
-    let mut request = prepared.request;
-    request.tools.clear();
-    request.tool_choice = ToolChoice::None;
-    emit_event(
-        host,
-        &Event::ModelRequestPrepared {
-            model: request.model.clone(),
+        turn,
+        &mut last_usage,
+        SamplingStep {
+            phase: "single_loop_final",
+            system_instructions: SYSTEM_INSTRUCTIONS,
+            developer_instructions: None,
+            disable_tools: true,
         },
     )?;
-    let response = complete_model(host, &request, "single_loop_final")?;
-    emit_event(
-        host,
-        &Event::ModelResponseReceived {
-            finish_reason: response.finish_reason.clone(),
-        },
-    )?;
-    validate_model_response("single_loop_final", &request, &response)?;
 
     turn.model_messages
         .extend(response.messages.iter().cloned());

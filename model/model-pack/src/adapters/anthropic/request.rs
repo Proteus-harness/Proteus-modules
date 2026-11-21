@@ -4,7 +4,7 @@ use serde_json::{Value, json};
 use super::AnthropicPromptCacheConfig;
 use crate::{
     adapters::context_render::context_text,
-    domain::{ToolCallSurface, ToolChoice, ToolSpec, ToolSurface},
+    domain::{ToolCallSurface, ToolChoice, ToolContent, ToolSpec, ToolSurface},
     model_standard::{CanonicalMessage, CanonicalModelRequest, ContentPart, MessageRole},
 };
 
@@ -317,12 +317,37 @@ fn tool_result_blocks(message: &CanonicalMessage) -> Vec<Value> {
 }
 
 fn tool_result_block(result: &crate::domain::ToolResult) -> Value {
-    json!({
+    let mut images = result
+        .content
+        .iter()
+        .filter_map(|content| match content {
+            ToolContent::Image { mime_type, data } => Some((mime_type, data)),
+            _ => None,
+        })
+        .peekable();
+    let content = if images.peek().is_some() {
+        // Retain the existing text/error projection, then preserve inline images.
+        let mut text = json!({ "type": "text", "text": null });
+        text["text"] = Value::String(result.text_or_status());
+        let mut blocks = vec![text];
+        for (mime_type, data) in images {
+            blocks.push(json!({
+                "type": "image",
+                "source": { "type": "base64", "media_type": mime_type, "data": data },
+            }));
+        }
+        Value::Array(blocks)
+    } else {
+        Value::String(result.text_or_status())
+    };
+    let mut block = json!({
         "type": "tool_result",
         "tool_use_id": result.call_id,
-        "content": result.text_or_status(),
+        "content": null,
         "is_error": !result.ok,
-    })
+    });
+    block["content"] = content;
+    block
 }
 
 fn push_message(out: &mut Vec<Value>, role: &str, blocks: Vec<Value>) {

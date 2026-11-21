@@ -173,16 +173,21 @@ fn row_to_item(row: &rusqlite::Row<'_>) -> rusqlite::Result<MemoryItem> {
 }
 
 fn fts_match_expression(text: &str) -> String {
+    // Keep whitespace-delimited spans as literal phrases. SQLite owns their
+    // punctuation/diacritic tokenization; deleting separators would join words.
     let tokens: Vec<String> = text
         .split_whitespace()
-        .map(|token| {
+        .filter(|token| {
             token
                 .chars()
-                .filter(|c| c.is_alphanumeric() || *c == '_' || *c == '-')
-                .collect::<String>()
+                .any(|c| c.is_alphanumeric() || c == '_' || c == '-')
         })
-        .filter(|token| !token.is_empty())
-        .map(|token| format!("\"{token}\"*"))
+        .map(|token| {
+            // MATCH expressions are NUL-terminated. Keep NUL as a separator,
+            // and double quotes inside the FTS literal instead of dropping them.
+            let literal = token.replace('\0', " ").replace('"', "\"\"");
+            format!("\"{literal}\"*")
+        })
         .collect();
     tokens.join(" AND ")
 }
@@ -223,6 +228,8 @@ pub fn register_modules(registry: &mut dyn ModuleRegistry) -> Result<(), Process
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    mod recall;
 
     fn fresh_conn() -> Mutex<Connection> {
         let conn = Connection::open_in_memory().expect("in-memory sqlite");
@@ -307,10 +314,10 @@ mod tests {
     }
 
     #[test]
-    fn fts_match_expression_sanitizes_tokens() {
+    fn fts_match_expression_keeps_literal_spans() {
         assert_eq!(
             fts_match_expression("React Router!!! v6"),
-            "\"React\"* AND \"Router\"* AND \"v6\"*"
+            "\"React\"* AND \"Router!!!\"* AND \"v6\"*"
         );
     }
 }

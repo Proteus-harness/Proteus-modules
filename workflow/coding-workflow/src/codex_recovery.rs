@@ -1,9 +1,6 @@
-use std::collections::HashSet;
-
 use proteus_contracts::{
     contracts::WorkflowHistoryInterruption,
-    domain::ToolResult,
-    model_standard::{CanonicalMessage, ContentPart, MessageRole, PartProvenance, PartScope},
+    model_standard::{CanonicalMessage, MessageRole, PartProvenance, PartScope},
 };
 
 const INTERRUPTED_GUIDANCE: &str = "The user interrupted the previous turn on purpose. Any running unified exec processes may still be running in the background. If any tools/commands were aborted, they may have partially executed.";
@@ -38,38 +35,6 @@ pub(crate) fn prepare_interrupted_turns(
         marker.parts[0].provenance = PartProvenance::Runtime;
         marker.parts[0].scope = PartScope::Request;
         messages.insert(index + 1, marker);
-    }
-}
-
-/// Pinned Codex context_manager/normalize.rs: missing call outputs become
-/// prompt-only "aborted" outputs. This does not assert whether an effect ran.
-/// The journal and durable history retain the original unresolved call.
-pub(crate) fn normalize_missing_tool_outputs(messages: &mut Vec<CanonicalMessage>) {
-    let completed = messages
-        .iter()
-        .flat_map(|message| &message.parts)
-        .filter_map(|part| match &part.payload {
-            ContentPart::ToolResult { result } => Some(result.call_id.clone()),
-            _ => None,
-        })
-        .collect::<HashSet<_>>();
-    let mut inserts = Vec::new();
-    for (index, message) in messages.iter().enumerate() {
-        for part in &message.parts {
-            if let ContentPart::ToolCall { call } = &part.payload
-                && !completed.contains(&call.id)
-            {
-                let mut output = crate::history::tool_result_message(ToolResult::error(
-                    call.id.clone(),
-                    "aborted",
-                ));
-                output.parts[0].scope = PartScope::Request;
-                inserts.push((index + 1, output));
-            }
-        }
-    }
-    for (index, output) in inserts.into_iter().rev() {
-        messages.insert(index, output);
     }
 }
 

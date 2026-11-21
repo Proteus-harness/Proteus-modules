@@ -22,11 +22,20 @@ pub(crate) fn split_history(messages: &[CanonicalMessage]) -> HistoryParts {
     let mut compactable_history = Vec::new();
 
     for message in messages {
+        summary_history.push(message.clone());
         if is_structured_ephemeral_context_message(message) {
-            ephemeral_context.push(message.clone());
-            summary_history.push(message.clone());
+            // Request scope alone does not make a message independent context.
+            // Tool pairs belong in the summary input, but this replacement
+            // retains only users and a summary, not the calls they refer to.
+            if !message.parts.iter().any(|part| {
+                matches!(
+                    part.payload,
+                    ContentPart::ToolCall { .. } | ContentPart::ToolResult { .. }
+                )
+            }) {
+                ephemeral_context.push(message.clone());
+            }
         } else {
-            summary_history.push(message.clone());
             compactable_history.push(message.clone());
         }
     }

@@ -8,6 +8,9 @@ use serde_json::{Value, json};
 use super::*;
 use crate::{find::FindFilesTool, read_many::ReadManyFilesTool, search::GrepTool};
 
+mod read_eol;
+mod read_utf8;
+
 struct TestToolHost;
 
 impl ToolModuleHost for TestToolHost {

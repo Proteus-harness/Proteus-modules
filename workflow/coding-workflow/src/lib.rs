@@ -20,6 +20,7 @@ mod model_context;
 mod output_text;
 mod plan_execute_review;
 mod project_check;
+mod sampling;
 mod scaffold;
 mod single_loop;
 mod token_accounting;

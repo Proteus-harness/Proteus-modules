@@ -1,4 +1,4 @@
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 
 use anyhow::{Result, anyhow};
 use async_trait::async_trait;
@@ -16,7 +16,7 @@ use crate::{
     domain::ModelRef,
     model_standard::{
         CanonicalModelRequest, CanonicalModelResponse, ModelCapabilities, ModelFailure,
-        ModelStreamEvent,
+        ModelFailureKind, ModelStreamEvent,
     },
 };
 
@@ -26,6 +26,7 @@ use crate::{
     model_standard::{CanonicalMessage, ContentPart, FinishReason, MessageRole},
 };
 
+mod errors;
 #[cfg(test)]
 mod image_tests;
 mod request;
@@ -34,6 +35,8 @@ mod request_tests;
 mod response;
 mod sanitize;
 mod stream;
+#[cfg(test)]
+mod transport_tests;
 mod usage;
 
 const REDACTED_THINKING_FORMAT: &str = "anthropic.messages.redacted_thinking";
@@ -197,11 +200,24 @@ impl AnthropicMessagesClient {
         let status = response.status();
         let response_text = response.text().await?;
         if !status.is_success() {
-            return Err(anyhow!("Anthropic API error {status}: {response_text}"));
+            return Err(anyhow::Error::new(errors::http_failure(
+                status,
+                &response_text,
+            )));
         }
 
         let response: Value = serde_json::from_str(&response_text)?;
-        from_anthropic_response(response)
+        let response = from_anthropic_response(response)?;
+        if let Some(failure) = errors::context_window_stop_failure(
+            status,
+            response
+                .provider_metadata
+                .get("stop_reason")
+                .and_then(Value::as_str),
+        ) {
+            return Err(failure.into());
+        }
+        Ok(response)
     }
 
     async fn stream_response(&self, request: CanonicalModelRequest) -> Result<ModelEventStream> {
@@ -209,26 +225,35 @@ impl AnthropicMessagesClient {
         body["stream"] = json!(true);
         let url = format!("{}/v1/messages", self.base_url);
         let api_key = self.api_key()?;
-        let response = send_with_transport_retry(|| self.request_builder(&url, &body, &api_key))
-            .await?
-            .error_for_status()?;
+        let response =
+            send_with_transport_retry(|| self.request_builder(&url, &body, &api_key)).await?;
+        let status = response.status();
+        if matches!(status.as_u16(), 400 | 529) {
+            let response_text = response.text().await?;
+            return Err(anyhow::Error::new(errors::http_failure(
+                status,
+                &response_text,
+            )));
+        }
+        // Preserve the existing handling of every other HTTP status.
+        let response = response.error_for_status()?;
 
         // Anthropic SSE stateful: content_block_start открывает блок,
         // множество content_block_delta расширяют его, content_block_stop
         // закрывает. Для tool_use input_json_delta приходит инкрементально;
         // собираем всё в state и на message_stop отдаём Response.
-        let state = Arc::new(Mutex::new(AnthropicStreamState::default()));
+        let mut state = AnthropicStreamState::new(status);
         let mut sse = response.bytes_stream().eventsource();
         let events = async_stream::stream! {
             let mut saw_terminal_event = false;
             while let Some(chunk) = sse.next().await {
                 match chunk {
                     Ok(event) => {
-                        let mapped = {
-                            let mut guard = state.lock().unwrap();
-                            guard.translate(&event.event, &event.data)
-                        };
-                        for mapped in mapped {
+                        let mapped = state.translate(&event.event, &event.data);
+                        for mut mapped in mapped {
+                            if let ModelStreamEvent::Error { failure } = &mut mapped {
+                                failure.kind = errors::stream_failure_kind(status, failure.kind);
+                            }
                             if matches!(
                                 mapped,
                                 ModelStreamEvent::Response { .. } | ModelStreamEvent::Error { .. }
@@ -252,7 +277,8 @@ impl AnthropicMessagesClient {
             }
             if !saw_terminal_event {
                 yield Ok(ModelStreamEvent::Error {
-                    failure: ModelFailure::other(
+                    failure: ModelFailure::new(
+                        errors::stream_failure_kind(status, ModelFailureKind::StreamDisconnected),
                         "anthropic messages stream ended without a terminal event",
                     ),
                 });
