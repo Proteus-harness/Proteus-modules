@@ -45,11 +45,13 @@ function isJson(value, seen = new Set()) {
 // Unlike LLMResponse.reduce, keep one mutable content copy and no event log.
 // Provider metadata is retained separately from visible text and tool inputs.
 export class NativeResponseCollector {
+    #seenText = false;
+    #seenReasoning = false;
+
     constructor(messageId) {
         this.messageId = messageId;
         this.parts = [];
         this.blocks = new Map();
-        this.visibleKinds = new Set();
         this.usage = undefined;
         this.reason = undefined;
         this.providerMetadata = undefined;
@@ -93,8 +95,10 @@ export class NativeResponseCollector {
         // Canonical text/reasoning projection separates distinct visible blocks.
         // Do not expose signed/redacted provider metadata as readable reasoning.
         if (!block.visible) {
-            if (this.visibleKinds.has(type)) delta = '\n' + delta;
-            this.visibleKinds.add(type);
+            const seen = type === 'text' ? this.#seenText : this.#seenReasoning;
+            if (seen) delta = '\n' + delta;
+            if (type === 'text') this.#seenText = true;
+            else this.#seenReasoning = true;
             block.visible = true;
         }
         return type === 'text'
