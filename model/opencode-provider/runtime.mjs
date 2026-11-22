@@ -1,10 +1,12 @@
 import { Effect, Layer } from '../../workflow/opencode-runtime/node_modules/effect/dist/index.js';
 import { LayerNode } from '../../workflow/opencode-runtime/node_modules/@opencode/util/dist/effect/layer-node.js';
+import { FSUtil } from '../../workflow/opencode-runtime/node_modules/@opencode/util/dist/fs-util.js';
 import * as ModelsDev from '../../workflow/opencode-runtime/node_modules/@opencode/core/dist/models-dev.js';
 import * as KV from '../../workflow/opencode-runtime/node_modules/@opencode/core/dist/kv.js';
 import * as Bus from '../../workflow/opencode-runtime/node_modules/@opencode/core/dist/bus.js';
 import { mergeOverlay } from '../../workflow/opencode-runtime/node_modules/@opencode/core/dist/provider.js';
 import { resolveModel } from '../../workflow/opencode-runtime/node_modules/@opencode/core/dist/model-resolver.js';
+import { hasPackageCatalogSeed, readPackageCatalogSeed } from './catalog-seed.mjs';
 
 const CACHE_MS = 300_000;
 // ModelsDev's native KV and event bus both acquire the complete session database.
@@ -72,17 +74,24 @@ export function catalogEntry(model) {
         hidden: !model.enabled || model.status === 'deprecated', reasoning_efforts: efforts,
         default_reasoning_effort: efforts.includes(model.settings?.reasoningEffort) ? model.settings.reasoningEffort : null };
 }
-export function createNativeRuntime(config, { loadSnapshots, now = Date.now, cacheMs = CACHE_MS } = {}) {
-    const providerID = config.provider;
-    const load = loadSnapshots ?? (signal => Effect.runPromise(Effect.scoped(Effect.gen(function* () {
-        const service = yield* ModelsDev.Service;
-        // Own the refresh lifetime: no background fiber remains after this lookup.
-        if (!config.models_file) yield* service.refresh(false);
-        return yield* service.get();
-    }).pipe(Effect.provide(LayerNode.compile(ModelsDev.configured({
-        fetch: false, ...(config.models_file ? { file: config.models_file } : {}),
-        ...(config.models_url ? { url: config.models_url, snapshot: false } : {}),
-    }), { replacements: catalogStateReplacements() })))), { signal }));
+// Private path token: only the in-memory scoped FSUtil below can open it.
+const seedFile = 'proteus:opencode:packaged-model-catalog';
+async function loadPackageSnapshots(provider, signal) {
+    const catalog = await readPackageCatalogSeed(provider, signal);
+    const seedFS = FSUtil.node.replace(Layer.succeed(FSUtil.Service, FSUtil.Service.of({
+        readJson(path) {
+            return path === seedFile ? Effect.succeed(catalog) : Effect.die(new Error('Unexpected catalog seed path'));
+        },
+    })));
+    return Effect.runPromise(Effect.scoped(Effect.gen(function* () {
+        return yield* (yield* ModelsDev.Service).get();
+    }).pipe(Effect.provide(LayerNode.compile(
+        ModelsDev.configured({ file: seedFile, fetch: false, snapshot: false }),
+        { replacements: [...catalogStateReplacements(), seedFS] },
+    )))), { signal });
+}
+
+function snapshotReader(providerID, load, now, cacheMs, requiredCache = false) {
     let cache, pending;
     async function snapshot(signal) {
         signal?.throwIfAborted();
@@ -98,7 +107,11 @@ export function createNativeRuntime(config, { loadSnapshots, now = Date.now, cac
                     if (!model.id?.trim() || ids.has(model.id)) throw new Error('Invalid OpenCode model catalog identity');
                     ids.add(model.id);
                 }
-                if (!controller.signal.aborted && pending === flight) cache = cacheable(value) ? { at: now(), value } : undefined;
+                if (!controller.signal.aborted && pending === flight) {
+                    const fits = cacheable(value);
+                    if (requiredCache && !fits) throw new Error('OpenCode packaged model catalog exceeds the retention budget');
+                    cache = fits ? { at: now(), value } : undefined;
+                }
                 return value;
             }).finally(() => { flight.done = true; if (pending === flight) pending = undefined; });
         }
@@ -115,18 +128,61 @@ export function createNativeRuntime(config, { loadSnapshots, now = Date.now, cac
             if (--flight.readers === 0 && !flight.done) flight.controller.abort(new Error('Catalog readers canceled'));
         }
     }
+    return snapshot;
+}
+
+export function createNativeRuntime(config, { loadSnapshots, now = Date.now, cacheMs = CACHE_MS } = {}) {
+    const providerID = config.provider;
+    const load = loadSnapshots ?? (signal => Effect.runPromise(Effect.scoped(Effect.gen(function* () {
+        const service = yield* ModelsDev.Service;
+        // Own the refresh lifetime: no background fiber remains after this lookup.
+        if (!config.models_file) yield* service.refresh(false);
+        return yield* service.get();
+    }).pipe(Effect.provide(LayerNode.compile(ModelsDev.configured({
+        fetch: false, ...(config.models_file ? { file: config.models_file } : {}),
+        ...(config.models_url ? { url: config.models_url, snapshot: false } : {}),
+    }), { replacements: catalogStateReplacements() })))), { signal }));
+    const snapshot = snapshotReader(providerID, load, now, cacheMs);
+    // A covered exact model always resolves from this package, regardless of
+    // previous RPC order, which Worker is alive, or a later remote catalog miss.
+    const seed = !loadSnapshots && hasPackageCatalogSeed(config) ?
+        snapshotReader(providerID, signal => loadPackageSnapshots(providerID, signal), now, Infinity, true) : null;
+    const eligible = (model, id) => model.id === id && model.providerID === providerID && supportsChat(model);
+    async function modelSnapshot(id, signal) {
+        if (seed && id !== undefined) {
+            const local = await seed(signal);
+            if (local.models.some(model => eligible(model, id))) return local;
+        }
+        return snapshot(signal);
+    }
     async function info(id, signal) {
-        const snap = await snapshot(signal), model = snap.models.find(model => model.id === id);
+        const snap = await modelSnapshot(id, signal), model = snap.models.find(model => model.id === id);
         if (!model || model.providerID !== providerID) throw new Error('OpenCode model unavailable: ' + id);
         if (!supportsChat(model)) throw new Error('OpenCode model does not support canonical chat: ' + id);
         return { ...model, package: model.package ?? snap.info.package,
             settings: mergeOverlay(snap.info.settings, model.settings) };
     }
     return {
-        async catalog(signal) { return { models: (await snapshot(signal)).models
-            .filter(model => model.providerID === providerID && supportsChat(model)).map(catalogEntry) }; },
+        async catalog(signal) {
+            const models = (await snapshot(signal)).models
+                .filter(model => model.providerID === providerID && supportsChat(model)).map(catalogEntry);
+            if (seed && models.length) {
+                const local = new Map((await seed(signal)).models.map(model => [model.id, model]));
+                for (const entry of models) {
+                    const effective = local.get(entry.id);
+                    // Keep live discovery, ordering, labels and visibility. Core
+                    // validates effort here, so these two fields match describe/resolve.
+                    if (effective && eligible(effective, entry.id)) {
+                        const { reasoning_efforts, default_reasoning_effort } = catalogEntry(effective);
+                        entry.reasoning_efforts = reasoning_efforts;
+                        entry.default_reasoning_effort = default_reasoning_effort;
+                    }
+                }
+            }
+            return { models };
+        },
         async describe(id, signal) { return descriptor(await info(id, signal)); },
-        async environment(signal) { return (await snapshot(signal)).environment; },
+        async environment(signal, id) { return (await modelSnapshot(id, signal)).environment; },
         info,
         async resolve(id, effort, credential, signal) {
             const modelInfo = await info(id, signal);

@@ -52,6 +52,12 @@ def main():
             target = runtime / relative / name
             target.parent.mkdir(parents=True, exist_ok=True)
             shutil.copy2(path, target)
+    seed_relative = Path("model/opencode-provider/catalog-seeds")
+    seeds = runtime / seed_relative
+    seeds.mkdir(parents=True, exist_ok=True)
+    for provider in ("opencode-go", "opencode"):
+        filename = f"{provider}.a177c5468699a3ce48b27bc417847a0804af1564.json"
+        shutil.copy2(modules / seed_relative / filename, seeds / filename)
     binary = args.prefix.resolve() / "bin/proteus-opencode-module"
     binary.parent.mkdir(parents=True, exist_ok=True)
     binary.write_text('''#!/usr/bin/env python3

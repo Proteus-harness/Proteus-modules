@@ -52,10 +52,10 @@ export function modelExport(binding, dependencies = {}) {
         throw new Error('Invalid OpenCode model configuration');
     const runtime = dependencies.runtime ?? createNativeRuntime(config);
     const quota = config.provider === 'opencode-go' ? (dependencies.quota ?? createGoQuotaReader()) : null;
-    async function credential(signal) {
+    async function credential(signal, modelID) {
         return (dependencies.credential ?? createCredentialReader({ providerID: config.provider,
             databasePath: config.database_path, apiKey: config.api_key,
-            envNames: config.api_key === undefined ? await runtime.environment(signal) : [] }))(signal);
+            envNames: config.api_key === undefined ? await runtime.environment(signal, modelID) : [] }))(signal);
     }
     const stream = dependencies.stream ?? (async (request, signal, accept) => {
         await Effect.runPromise(Stream.runForEach(LLMClient.stream(request), event => Effect.promise(() => accept(event))).pipe(
@@ -79,7 +79,7 @@ export function modelExport(binding, dependencies = {}) {
                 const r = params.request;
                 if (r.operation !== undefined && r.operation !== 'Complete')
                     throw new Error('OpenCode provider bridge does not support native model compaction');
-                const resolved = await runtime.resolve(r.model.model, r.reasoning.effort, await credential(signal), signal);
+                const resolved = await runtime.resolve(r.model.model, r.reasoning.effort, await credential(signal, r.model.model), signal);
                 const request = await toNativeRequest(r, resolved.model, { signal, modelInfo: resolved.modelInfo });
                 await stream(request, signal, async event => {
                     if (['text-start', 'text-delta', 'reasoning-start', 'reasoning-delta', 'tool-input-start', 'tool-call'].includes(event.type)) started = true;
