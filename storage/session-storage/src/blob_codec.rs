@@ -1,5 +1,5 @@
 //! Lossless content-defined chunks shared by large journal payloads.
-use crate::io::{MAX_PAYLOAD_BYTES, atomic_write, bounded_read, sha256_hex};
+use crate::io::{MAX_PAYLOAD_BYTES, atomic_write, bounded_read, bounded_read_into, sha256_hex};
 use anyhow::{Result, ensure};
 use serde::{Deserialize, Serialize};
 use std::{
@@ -179,22 +179,22 @@ fn unpack_checked<'a>(
     }
     let mut bytes = Vec::with_capacity(manifest.bytes);
     for chunk in manifest.chunks {
+        let start = bytes.len();
         ensure!(
             chunk.bytes > 0
                 && chunk.bytes <= MAX_CHUNK
-                && chunk.bytes <= manifest.bytes.saturating_sub(bytes.len()),
+                && chunk.bytes <= manifest.bytes.saturating_sub(start),
             "shared blob chunk exceeds declared payload"
         );
-        let content = bounded_read(&chunk_path(session, &chunk.sha256)?, MAX_CHUNK)?;
+        let path = chunk_path(session, &chunk.sha256)?;
+        bytes.resize(start + chunk.bytes, 0);
+        let content = &mut bytes[start..];
+        let count = bounded_read_into(&path, MAX_CHUNK, content)?;
+        ensure!(count == chunk.bytes, "shared blob chunk size mismatch");
         ensure!(
-            content.len() == chunk.bytes,
-            "shared blob chunk size mismatch"
-        );
-        ensure!(
-            sha256_hex(&content) == chunk.sha256,
+            sha256_hex(content) == chunk.sha256,
             "shared blob chunk hash mismatch"
         );
-        bytes.extend_from_slice(&content);
     }
     ensure!(bytes.len() == manifest.bytes, "shared blob size mismatch");
     ensure!(

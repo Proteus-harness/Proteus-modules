@@ -120,6 +120,44 @@ pub(crate) fn bounded_file_eq(path: &Path, expected: &[u8], maximum: usize) -> R
     Ok(remaining == Some(&[]))
 }
 
+/// Fill the caller's buffer, then count any trailing bytes through EOF or
+/// maximum + 1. Preserve late I/O and limit errors before the caller checks size.
+pub(crate) fn bounded_read_into(path: &Path, maximum: usize, output: &mut [u8]) -> Result<usize> {
+    read_bounded_into(open_regular(path)?, maximum, output)
+}
+
+fn read_bounded_into(reader: impl Read, maximum: usize, output: &mut [u8]) -> Result<usize> {
+    let mut reader = reader.take(maximum as u64 + 1);
+    let mut read = |buffer: &mut [u8]| loop {
+        match reader.read(buffer) {
+            Err(error) if error.kind() == std::io::ErrorKind::Interrupted => {}
+            result => break result,
+        }
+    };
+    let mut total = 0;
+    while total < output.len() {
+        let count = read(&mut output[total..])?;
+        if count == 0 {
+            break;
+        }
+        total += count;
+    }
+    // On an exact fill, check for EOF without allocating a discard buffer.
+    if total == output.len() && read(&mut [0])? != 0 {
+        total += 1;
+        let mut trailing = [0; 8 * 1024];
+        loop {
+            let count = read(&mut trailing)?;
+            if count == 0 {
+                break;
+            }
+            total += count;
+        }
+    }
+    ensure!(total <= maximum, "storage object exceeds {maximum} bytes");
+    Ok(total)
+}
+
 pub(crate) fn bounded_read(path: &Path, maximum: usize) -> Result<Vec<u8>> {
     open_bounded(path, maximum, None)
 }
