@@ -1,3 +1,5 @@
+use std::borrow::Cow;
+
 use crate::{budget::truncate_to_tokens, summary::SUMMARY_PREFIX};
 use proteus_contracts::domain::{CompactionUserMessageReplacement, new_message_id};
 use proteus_contracts::model_standard::{
@@ -192,13 +194,35 @@ pub(crate) fn replacement_messages(
     replacement
 }
 
-pub(crate) fn message_text(message: &CanonicalMessage) -> Option<String> {
-    let pieces = message
+fn message_text_pieces(
+    message: &CanonicalMessage,
+) -> impl Iterator<Item = std::borrow::Cow<'_, str>> + '_ {
+    message
         .parts
         .iter()
         .filter_map(|part| part_text(&part.payload))
         .filter(|text| !text.is_empty())
-        .collect::<Vec<_>>();
+        .map(Into::into)
+}
+
+fn joined_message_len(mut lengths: impl Iterator<Item = usize>) -> Option<usize> {
+    let first = lengths.next()?;
+    // Visit every piece just as the owned renderer does before joining.
+    let length = lengths
+        .fold(Some(first), |total, len| {
+            total.and_then(|total| total.checked_add(1)?.checked_add(len))
+        })
+        .expect("attempt to join into collection with len > usize::MAX");
+    assert!(length <= isize::MAX as usize, "capacity overflow");
+    Some(length)
+}
+
+pub(crate) fn message_text_len(message: &CanonicalMessage) -> Option<usize> {
+    joined_message_len(message_text_pieces(message).map(|text| text.len()))
+}
+
+pub(crate) fn message_text(message: &CanonicalMessage) -> Option<String> {
+    let pieces = message_text_pieces(message).collect::<Vec<_>>();
     if pieces.is_empty() {
         None
     } else {
@@ -206,23 +230,25 @@ pub(crate) fn message_text(message: &CanonicalMessage) -> Option<String> {
     }
 }
 
-pub(crate) fn part_text(part: &ContentPart) -> Option<String> {
+pub(crate) fn part_text(part: &ContentPart) -> Option<Cow<'_, str>> {
     match part {
-        ContentPart::Text { text } => Some(text.clone()),
-        ContentPart::Context { chunk } => Some(chunk.content.clone()),
+        ContentPart::Text { text } => Some(Cow::Borrowed(text.as_str())),
+        ContentPart::Context { chunk } => Some(Cow::Borrowed(chunk.content.as_str())),
         ContentPart::FileRef { path, content } => content
             .as_ref()
-            .map(|content| format!("{}:\n{content}", path.display())),
-        ContentPart::ToolCall { call } => Some(format!("tool call {} {}", call.name, call.args)),
-        ContentPart::ToolResult { result } => Some(result.text_or_status()),
-        ContentPart::Patch { patch } => Some(patch.content.clone()),
-        ContentPart::ReasoningSummary { text } => Some(text.clone()),
+            .map(|content| Cow::Owned(format!("{}:\n{content}", path.display()))),
+        ContentPart::ToolCall { call } => {
+            Some(Cow::Owned(format!("tool call {} {}", call.name, call.args)))
+        }
+        ContentPart::ToolResult { result } => Some(Cow::Owned(result.text_or_status())),
+        ContentPart::Patch { patch } => Some(Cow::Borrowed(patch.content.as_str())),
+        ContentPart::ReasoningSummary { text } => Some(Cow::Borrowed(text.as_str())),
         ContentPart::Reasoning { .. } => None,
-        ContentPart::HostedToolActivity { activity } => Some(format!(
+        ContentPart::HostedToolActivity { activity } => Some(Cow::Owned(format!(
             "provider-hosted tool {}: {}",
             activity.kind().as_str(),
             serde_json::to_string(activity).unwrap_or_else(|_| "<unavailable>".to_owned())
-        )),
+        ))),
         // The cited assistant text is already present in the adjacent Text
         // part; annotations do not add model-visible prose to summarize.
         ContentPart::Citation { .. } => None,

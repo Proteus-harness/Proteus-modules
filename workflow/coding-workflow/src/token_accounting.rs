@@ -220,14 +220,9 @@ pub(crate) fn effective_token_estimate(
     messages: &[CanonicalMessage],
     last_usage: Option<&LastModelUsage>,
 ) -> Option<u32> {
-    let char_estimate = estimate_message_tokens(messages);
-    let Some(last) = last_usage else {
-        return char_estimate;
+    let Some(last) = last_usage.filter(|last| last.message_count <= messages.len()) else {
+        return estimate_message_tokens(messages);
     };
-    if last.message_count > messages.len() {
-        // История сжалась после замера (компакция) — usage устарел.
-        return char_estimate;
-    }
     let known = last
         .usage
         .input_tokens
@@ -236,19 +231,20 @@ pub(crate) fn effective_token_estimate(
         .iter()
         .flat_map(|message| &message.parts)
         .any(|part| matches!(part.payload, ContentPart::Opaque { .. }));
+    // With an opaque checkpoint and valid prior usage, only the uncovered
+    // tail needs an estimate. The whole-history fallback would be discarded.
+    let char_estimate = if has_opaque {
+        None
+    } else {
+        estimate_message_tokens(messages)
+    };
     let delta = if has_opaque && last.message_count == messages.len() {
         0
     } else {
         estimate_message_tokens(&messages[last.message_count..]).unwrap_or(0)
     };
     let usage_based = known.saturating_add(delta);
-    if has_opaque {
-        // The prior provider usage already covers the checkpoint. Only the new
-        // tail is additional input; a ciphertext fallback must not charge it again.
-        Some(usage_based)
-    } else {
-        Some(char_estimate.unwrap_or(0).max(usage_based))
-    }
+    Some(char_estimate.map_or(usage_based, |estimate| estimate.max(usage_based)))
 }
 
 pub(crate) fn estimate_message_tokens(messages: &[CanonicalMessage]) -> Option<u32> {

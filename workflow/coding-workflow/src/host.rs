@@ -214,7 +214,7 @@ fn request_from_state_with_instruction_blocks_and_options(
         let compacted = compact_messages(
             input,
             host,
-            &request,
+            &mut request,
             reason,
             options.last_usage,
             options.context_hint,
@@ -288,7 +288,7 @@ pub(super) fn execute_or_handle_tool(
 fn compact_messages(
     input: &WorkflowModuleInput,
     host: &WorkflowModuleHostMut<'_>,
-    request: &CanonicalModelRequest,
+    request: &mut CanonicalModelRequest,
     reason: &str,
     last_usage: Option<&LastModelUsage>,
     context_hint: Option<u32>,
@@ -313,7 +313,10 @@ fn compact_messages(
     } else {
         [usage_estimate, context_hint].into_iter().flatten().max()
     };
+    // The caller replaces these messages with the preparation output.
+    let messages = std::mem::take(&mut request.messages);
     let mut preparation_request = request.clone();
+    preparation_request.messages = messages;
     let source = if observed {
         ContextTokenEstimateSource::Observed
     } else {
@@ -333,7 +336,7 @@ fn compact_messages(
     let output = result.output;
     proteus_contracts::contracts::validate_context_preparation_output(&compaction_input, &output)
         .map_err(|error| ProcessModuleError::new(error.to_string()))?;
-    if output.messages.is_empty() && !request.messages.is_empty() {
+    if output.messages.is_empty() && !compaction_input.messages.is_empty() {
         return Err(ProcessModuleError::new(
             "compactor returned empty messages for non-empty history",
         ));

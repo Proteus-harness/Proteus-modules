@@ -199,10 +199,14 @@ export async function workflow({ task, runtime, history }, { hostCall, signal, c
             results.delete(msg.toolCallId);
         };
         const piHistory = piMessages(history, model);
+        const tail = piHistory.slice(-1);
+        // Reuse the private projection for loop state, keeping the tail separate.
+        for (let i = piHistory.length - 1; i > 0; i--) piHistory[i] = piHistory[i - 1];
+        piHistory[0] = { role: "system", content: prompt, timestamp: 0 };
         await runAgentLoop(
-            piHistory.slice(-1),
+            tail,
             {
-                messages: [{ role: "system", content: prompt, timestamp: 0 }, ...piHistory.slice(0, -1)],
+                messages: piHistory,
                 tools,
             },
             {

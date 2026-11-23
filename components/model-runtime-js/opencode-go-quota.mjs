@@ -1,6 +1,7 @@
 // OpenCode API mapping follows packages/core/src/usage-limits.ts at
 // anomalyco/opencode 1fa50dd28cc860768fd89180cf40b2fb912b2813.
 import { createHash } from "node:crypto";
+import { isArrayBuffer, isUint8Array } from "node:util/types";
 
 const USAGE_URL = "https://opencode.ai/zen/go/v1/usage";
 const BUDGETS_URL = "https://opencode.ai/console/api/policies/current-budgets";
@@ -89,6 +90,21 @@ function budgetBucket(id, name, used, limit, reset) {
     }] };
 }
 
+function quotaBytes(chunks) {
+    const chunk = chunks.length === 1 ? chunks[0] : undefined;
+    // Use only ordinary fixed Fetch byte views. Keep concat for unusual shapes.
+    if (isUint8Array(chunk) && Object.getPrototypeOf(chunk) === Uint8Array.prototype
+        && !Object.hasOwn(chunk, "buffer") && !Object.hasOwn(chunk, "length")
+        && !Object.hasOwn(chunk, "byteOffset") && !Object.hasOwn(chunk, "byteLength")) {
+        const backing = chunk.buffer;
+        if (isArrayBuffer(backing) && Object.getPrototypeOf(backing) === ArrayBuffer.prototype
+            && !Object.hasOwn(backing, "byteLength") && !Object.hasOwn(backing, "resizable")
+            && !Object.hasOwn(backing, "detached") && !backing.resizable && !backing.detached)
+            return Buffer.from(backing, chunk.byteOffset, chunk.byteLength);
+    }
+    return Buffer.concat(chunks);
+}
+
 async function jsonGet(url, apiKey, signal) {
     let response;
     try {
@@ -115,7 +131,7 @@ async function jsonGet(url, apiKey, signal) {
                 chunks.push(value);
             }
         } finally { await reader.cancel().catch(() => {}); }
-        return JSON.parse(Buffer.concat(chunks).toString("utf8"));
+        return JSON.parse(quotaBytes(chunks).toString("utf8"));
     } catch { signal.throwIfAborted(); throw new Error("Invalid OpenCode quota JSON"); }
 }
 

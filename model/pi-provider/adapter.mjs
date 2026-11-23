@@ -8,7 +8,7 @@ import {
     isRetryableAssistantError,
 } from "../../tool/pi-tools/node_modules/@earendil-works/pi-ai/dist/index.js";
 import { DEFAULT_AGENT_IDENTITY } from "../../tool/pi-tools/node_modules/@earendil-works/pi-agent-core/dist/agent-loop.js";
-import { piMessages } from "../../components/pi-runtime-js/messages.mjs";
+import { piMessage } from "../../components/pi-runtime-js/messages.mjs";
 
 // Node's module entry point does not run the native CLI's proxy bootstrap.
 import undici from "../../tool/pi-tools/node_modules/undici/index.js";
@@ -43,10 +43,14 @@ function descriptor(model) {
 async function context(request, model) {
     const history = [];
     const names = new Map();
+    let rowNames;
     for (const m of request.messages) {
         for (const p of m.parts)
             if (p.payload.ToolCall) names.set(p.payload.ToolCall.call.id, p.payload.ToolCall.call.name);
-        const native = piMessages([m], model)[0];
+        // Keep the projector's per-row named calls separate from the full prescan above.
+        rowNames ??= new Map();
+        const native = piMessage(m, model, rowNames);
+        if (rowNames.size) rowNames.clear();
         if (native.role === "toolResult") native.toolName = names.get(native.toolCallId) ?? native.toolName;
         if (native.role === "user") {
             for (let i = 0; i < m.parts.length; i++) {

@@ -151,7 +151,7 @@ fn run_loop(
         let should_run_tools =
             response.finish_reason == FinishReason::ToolCalls && !response.tool_calls.is_empty();
         let model_requests_follow_up = response.end_turn == Some(false);
-        let assistant_message = response_output_message("codex_loop", &response)?.clone();
+        let assistant_message = response_output_message("codex_loop", &response)?;
         if let Some(usage) = response.usage.clone() {
             context_hint = None;
             last_usage = Some(LastModelUsage {
@@ -172,7 +172,7 @@ fn run_loop(
             continue;
         }
 
-        let text = message_text(&assistant_message);
+        let text = message_text(assistant_message);
         let metadata = output_metadata_with_extra(
             module_id,
             input,

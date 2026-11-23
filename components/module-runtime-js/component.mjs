@@ -18,10 +18,13 @@ export async function runComponent(factory) {
     const pending = new Map();
     const canceledCallbacks = new Set();
     let generation;
+    let hostIdPattern;
     let sequence = 0;
     let ready = false;
     const hostId = id => {
-        if (typeof id !== "string" || !new RegExp(`^h:${generation}:[1-9]\\d*$`).test(id)) throw new Error("Invalid invocation id");
+        if (typeof id !== "string" || !(hostIdPattern ??= new RegExp(`^h:${generation}:[1-9]\\d*$`)).test(id)) {
+            throw new Error("Invalid invocation id");
+        }
     };
     const keyOf = ref => `${ref.slot}/${ref.module_id}`;
     function hostCall(invocationId, signal, method, params) {

@@ -38,14 +38,16 @@ function validateConfig(config) {
 }
 
 function textParts(message) {
-    return message.parts.flatMap(({ payload }) => {
-        if (payload.Text) return [payload.Text.text];
-        if (payload.Context) return [payload.Context.chunk.content ?? ""];
-        if (payload.FileRef) return [payload.FileRef.content ?? `[File: ${payload.FileRef.path}]`];
-        if (payload.Reasoning || payload.ReasoningSummary) return [(payload.Reasoning ?? payload.ReasoningSummary).text];
-        if (payload.Opaque || payload.ToolCall || payload.ToolResult || payload.Image) return [];
-        throw new Error(`Unsupported OpenCode compaction part ${Object.keys(payload).join(",")}`);
-    }).join("\n");
+    const fragments = [];
+    message.parts.forEach(({ payload }) => {
+        if (payload.Text) fragments.push(payload.Text.text);
+        else if (payload.Context) fragments.push(payload.Context.chunk.content ?? "");
+        else if (payload.FileRef) fragments.push(payload.FileRef.content ?? `[File: ${payload.FileRef.path}]`);
+        else if (payload.Reasoning || payload.ReasoningSummary) fragments.push((payload.Reasoning ?? payload.ReasoningSummary).text);
+        else if (!(payload.Opaque || payload.ToolCall || payload.ToolResult || payload.Image))
+            throw new Error(`Unsupported OpenCode compaction part ${Object.keys(payload).join(",")}`);
+    });
+    return fragments.join("\n");
 }
 
 function nativeResultContent(result) {
@@ -105,35 +107,44 @@ export async function nativeContext(input, messages, config = {}) {
         cost: { input: 0, output: 0, cache: { read: 0, write: 0 } },
         ...((limits.native_compaction ?? ((providerID === "openai" || providerID === "openai-codex") && /^gpt-/.test(modelID))) ? { compaction: { type: "native" } } : {}),
     };
-    const results = new Map(messages.flatMap(message => message.parts.flatMap(({ payload }) =>
-        payload.ToolResult ? [[payload.ToolResult.result.call_id, payload.ToolResult.result]] : [])));
+    const results = new Map();
+    messages.forEach(message => {
+        message.parts.forEach(({ payload }) => {
+            if (payload.ToolResult) results.set(payload.ToolResult.result.call_id, payload.ToolResult.result);
+        });
+    });
     const native = [];
     for (const message of messages) {
         const previous = message.metadata?.opencode_compaction;
         if (previous) { native.push({ ...previous, id: message.id, type: "compaction", status: "completed" }); continue; }
         const common = { id: message.id, metadata: message.metadata ?? undefined };
         if (message.role === "User") {
-            const files = message.parts.flatMap(({ payload }) => {
-                if (!payload.Image) return [];
+            const files = [];
+            message.parts.forEach(({ payload }) => {
+                if (!payload.Image) return;
                 const image = payload.Image.image;
                 if (typeof image.data !== "string") throw new Error("OpenCode compaction cannot read a non-inline image through a model callback");
-                return [{ mime: image.mime_type, data: image.data, source: { type: "inline" } }];
+                files.push({ mime: image.mime_type, data: image.data, source: { type: "inline" } });
             });
             native.push({ ...common, type: "user", text: textParts(message), files });
         } else if (message.role === "System" || message.role === "Developer") {
             native.push({ ...common, type: "system", text: textParts(message) });
         } else if (message.role === "Assistant") {
-            const content = message.parts.flatMap(({ payload }) => {
-                if (payload.Text) return [{ type: "text", text: payload.Text.text }];
-                if (payload.Reasoning || payload.ReasoningSummary) return [{ type: "reasoning", text: (payload.Reasoning ?? payload.ReasoningSummary).text }];
-                if (payload.Opaque) return [];
+            const content = [];
+            message.parts.forEach(({ payload }) => {
+                if (payload.Text) { content.push({ type: "text", text: payload.Text.text }); return; }
+                if (payload.Reasoning || payload.ReasoningSummary) {
+                    content.push({ type: "reasoning", text: (payload.Reasoning ?? payload.ReasoningSummary).text });
+                    return;
+                }
+                if (payload.Opaque) return;
                 if (!payload.ToolCall) throw new Error("Unsupported assistant part in OpenCode compaction");
                 const call = payload.ToolCall.call, result = results.get(call.id);
-                const content = result ? nativeResultContent(result) : [];
-                return [{ type: "tool", id: call.id, name: call.name,
-                    state: result ? result.ok ? { status: "completed", input: call.args, content } :
-                        { status: "error", input: call.args, content, error: { message: result.error ?? result.output } } :
-                        { status: "pending", input: call.args } }];
+                const toolContent = result ? nativeResultContent(result) : [];
+                content.push({ type: "tool", id: call.id, name: call.name,
+                    state: result ? result.ok ? { status: "completed", input: call.args, content: toolContent } :
+                        { status: "error", input: call.args, content: toolContent, error: { message: result.error ?? result.output } } :
+                        { status: "pending", input: call.args } });
             });
             native.push({ ...common, type: "assistant", model: message.metadata?.opencode_model ?? ref, content,
                 ...(message.metadata?.opencode_tokens ? { tokens: message.metadata.opencode_tokens } : {}) });
@@ -166,7 +177,8 @@ function canonicalPrompt(message) {
         throw new Error(`Unsupported upstream compaction prompt content ${part.type}`);
     });
     const canonicalMessage = canonical(({ user: "User", assistant: "Assistant", tool: "Tool", system: "System" })[message.role], parts[0] ?? { Text: { text: "" } }, "runtime");
-    canonicalMessage.parts = parts.map(payload => ({ part_id: randomUUID(), provenance: "runtime", scope: "conversation", payload }));
+    canonicalMessage.parts = parts.map((payload, index) => index === 0 ? canonicalMessage.parts[0]
+        : { part_id: randomUUID(), provenance: "runtime", scope: "conversation", payload });
     return canonicalMessage;
 }
 

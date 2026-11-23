@@ -21,7 +21,7 @@ pub(crate) fn normalize_missing_tool_outputs(messages: &mut Vec<CanonicalMessage
         .iter()
         .flat_map(|message| &message.parts)
         .filter_map(|part| match &part.payload {
-            ContentPart::ToolResult { result } => Some(result.call_id.clone()),
+            ContentPart::ToolResult { result } => Some(&result.call_id),
             _ => None,
         })
         .collect::<HashSet<_>>();

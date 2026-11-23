@@ -13,10 +13,18 @@ const keyName = value => typeof value === "string" && /^[A-Za-z_][A-Za-z0-9_]*$/
 export async function readJson(path) {
   const file = await open(path, constants.O_RDONLY | constants.O_NONBLOCK);
   try {
-    if (!(await file.stat()).isFile()) throw new Error("configuration must be a regular file");
-    const buffer = Buffer.alloc(MAX_CONFIG_BYTES + 1);
+    const stat = await file.stat();
+    if (!stat.isFile()) throw new Error("configuration must be a regular file");
+    const ceiling = MAX_CONFIG_BYTES + 1;
+    // Size only hints at capacity; enforce the limit on bytes actually read.
+    let buffer = Buffer.alloc(Math.min(ceiling, Math.max(4 * 1024, stat.size + 1)));
     let length = 0;
-    while (length < buffer.length) {
+    while (length < ceiling) {
+      if (length === buffer.length) {
+        const next = Buffer.alloc(Math.min(ceiling, buffer.length * 2 + 1));
+        buffer.copy(next);
+        buffer = next;
+      }
       const { bytesRead } = await file.read(buffer, length, buffer.length - length);
       if (!bytesRead) break;
       length += bytesRead;

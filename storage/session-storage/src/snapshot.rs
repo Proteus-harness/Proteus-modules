@@ -361,7 +361,17 @@ pub(crate) fn preview(messages: &[CanonicalMessage]) -> Option<String> {
             ContentPart::Text { text }
             | ContentPart::ReasoningSummary { text }
             | ContentPart::Reasoning { text, .. } => excerpt(text),
-            ContentPart::ToolResult { result } => excerpt(&result.text_or_status()),
+            ContentPart::ToolResult { result } => {
+                let text = result
+                    .error
+                    .as_deref()
+                    .filter(|text| !text.is_empty())
+                    .or_else(|| (!result.output.is_empty()).then_some(result.output.as_str()));
+                match text {
+                    Some(text) => excerpt(text),
+                    None => excerpt(&result.text_or_status()),
+                }
+            }
             _ => None,
         })
     };

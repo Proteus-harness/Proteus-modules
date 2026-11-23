@@ -62,9 +62,10 @@ def main():
     binary.parent.mkdir(parents=True, exist_ok=True)
     binary.write_text('''#!/usr/bin/env python3
 import os
-from pathlib import Path
-root = Path(__file__).resolve().parent.parent / "share/opencode-runtime/workflow/opencode-runtime"
-os.execv(str(root / "node_modules/node-linux-x64/bin/node"), ["node", str(root / "worker.mjs")])
+prefix = os.path.dirname(os.path.dirname(os.path.realpath(__file__, strict=True)))
+root = os.path.join(prefix, "share/opencode-runtime/workflow/opencode-runtime")
+os.execv(os.path.join(root, "node_modules/node-linux-x64/bin/node"),
+         ["node", os.path.join(root, "worker.mjs")])
 ''')
     binary.chmod(0o755)
     write_module_manifest(args.prefix, source)

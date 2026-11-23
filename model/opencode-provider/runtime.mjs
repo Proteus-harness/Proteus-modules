@@ -5,18 +5,32 @@ import * as ModelsDev from '../../workflow/opencode-runtime/node_modules/@openco
 import * as KV from '../../workflow/opencode-runtime/node_modules/@opencode/core/dist/kv.js';
 import * as Bus from '../../workflow/opencode-runtime/node_modules/@opencode/core/dist/bus.js';
 import { mergeOverlay } from '../../workflow/opencode-runtime/node_modules/@opencode/core/dist/provider.js';
-import { resolveModel } from '../../workflow/opencode-runtime/node_modules/@opencode/core/dist/model-resolver.js';
 import { hasPackageCatalogSeed, readPackageCatalogSeed } from './catalog-seed.mjs';
 
+let nativeResolveModel, loadingNativeResolveModel;
+function loadNativeResolveModel() {
+    return loadingNativeResolveModel ??= import('../../workflow/opencode-runtime/node_modules/@opencode/core/dist/model-resolver.js')
+        .then(({ resolveModel }) => {
+            if (typeof resolveModel !== 'function') throw new Error('Invalid OpenCode model resolver');
+            return nativeResolveModel = resolveModel;
+        })
+        .finally(() => { loadingNativeResolveModel = undefined; });
+}
+
 const CACHE_MS = 300_000;
+// Exact @opencode/core 2.0.22 key for the default public source.
+const NATIVE_CATALOG_KEY = 'models-dev:catalog';
 // ModelsDev's native KV and event bus both acquire the complete session database.
 // A metadata lookup owns only transient catalog state and has no external subscribers.
-export function catalogStateReplacements() {
+export function catalogStateReplacements(onNativeCatalogWrite) {
     const kv = Layer.sync(KV.Service, () => {
         const values = new Map();
         return KV.Service.of({
             get: key => Effect.sync(() => values.get(key)),
-            set: (key, value) => Effect.sync(() => { values.set(key, value); }),
+            set: (key, value) => Effect.sync(() => {
+                values.set(key, value);
+                if (onNativeCatalogWrite && key === NATIVE_CATALOG_KEY) onNativeCatalogWrite();
+            }),
             remove: key => Effect.sync(() => { values.delete(key); }),
             scan: options => Effect.sync(() => {
                 const limit = Number.isNaN(options.limit) ? 100 : Math.min(Math.max(Math.floor(options.limit ?? 100), 1), 1000);
@@ -91,7 +105,7 @@ async function loadPackageSnapshots(provider, signal) {
     )))), { signal });
 }
 
-function snapshotReader(providerID, load, now, cacheMs, requiredCache = false) {
+function snapshotReader(providerID, load, now, cacheMs, requiredCache = false, retainedSeed) {
     let cache, pending;
     async function snapshot(signal) {
         signal?.throwIfAborted();
@@ -99,7 +113,11 @@ function snapshotReader(providerID, load, now, cacheMs, requiredCache = false) {
         if (!pending || pending.controller.signal.aborted) {
             const controller = new AbortController(), flight = { controller, readers: 0, done: false };
             pending = flight;
-            flight.promise = Promise.resolve().then(() => load(controller.signal)).then(snapshots => {
+            // A later or in-flight seed normalization cannot change this live flight.
+            const resident = retainedSeed?.();
+            flight.promise = Promise.resolve().then(() =>
+                resident ? load(controller.signal, resident) : load(controller.signal),
+            ).then(snapshots => {
                 const value = snapshots.find(item => item.info.id === providerID);
                 if (!value) throw new Error('OpenCode provider is absent from the model catalog: ' + providerID);
                 const ids = new Set();
@@ -128,25 +146,37 @@ function snapshotReader(providerID, load, now, cacheMs, requiredCache = false) {
             if (--flight.readers === 0 && !flight.done) flight.controller.abort(new Error('Catalog readers canceled'));
         }
     }
+    snapshot.retained = () => cache?.value;
     return snapshot;
 }
 
 export function createNativeRuntime(config, { loadSnapshots, now = Date.now, cacheMs = CACHE_MS } = {}) {
     const providerID = config.provider;
-    const load = loadSnapshots ?? (signal => Effect.runPromise(Effect.scoped(Effect.gen(function* () {
-        const service = yield* ModelsDev.Service;
-        // Own the refresh lifetime: no background fiber remains after this lookup.
-        if (!config.models_file) yield* service.refresh(false);
-        return yield* service.get();
-    }).pipe(Effect.provide(LayerNode.compile(ModelsDev.configured({
-        fetch: false, ...(config.models_file ? { file: config.models_file } : {}),
-        ...(config.models_url ? { url: config.models_url, snapshot: false } : {}),
-    }), { replacements: catalogStateReplacements() })))), { signal }));
-    const snapshot = snapshotReader(providerID, load, now, cacheMs);
     // A covered exact model always resolves from this package, regardless of
     // previous RPC order, which Worker is alive, or a later remote catalog miss.
     const seed = !loadSnapshots && hasPackageCatalogSeed(config) ?
         snapshotReader(providerID, signal => loadPackageSnapshots(providerID, signal), now, Infinity, true) : null;
+    const retainedSeed = config.models_file === undefined && config.models_url === undefined ? seed?.retained : undefined;
+    const load = loadSnapshots ?? ((signal, resident) => {
+        let nativeCatalogWritten = false;
+        const onNativeCatalogWrite = resident ? () => { nativeCatalogWritten = true; } : undefined;
+        return Effect.runPromise(Effect.scoped(Effect.gen(function* () {
+            const service = yield* ModelsDev.Service;
+            // Own the refresh lifetime: no background fiber remains after this lookup.
+            if (!config.models_file) yield* service.refresh(false);
+            const snapshots = yield* service.get();
+            if (!resident || nativeCatalogWritten || snapshots.length) return snapshots;
+            signal.throwIfAborted();
+            // No live write: reuse the same already-normalized bundled provider
+            // instead of populating the SDK's global all-provider bundled cache.
+            return [resident];
+        }).pipe(Effect.provide(LayerNode.compile(ModelsDev.configured({
+            fetch: false, ...(config.models_file ? { file: config.models_file } : {}),
+            ...(config.models_url ? { url: config.models_url, snapshot: false } : {}),
+            ...(resident ? { snapshot: false } : {}),
+        }), { replacements: catalogStateReplacements(onNativeCatalogWrite) })))), { signal });
+    });
+    const snapshot = snapshotReader(providerID, load, now, cacheMs, false, retainedSeed);
     const eligible = (model, id) => model.id === id && model.providerID === providerID && supportsChat(model);
     async function modelSnapshot(id, signal) {
         if (seed && id !== undefined) {
@@ -156,9 +186,14 @@ export function createNativeRuntime(config, { loadSnapshots, now = Date.now, cac
         return snapshot(signal);
     }
     async function info(id, signal) {
-        const snap = await modelSnapshot(id, signal), model = snap.models.find(model => model.id === id);
-        if (!model || model.providerID !== providerID) throw new Error('OpenCode model unavailable: ' + id);
-        if (!supportsChat(model)) throw new Error('OpenCode model does not support canonical chat: ' + id);
+        let snap = seed && id !== undefined ? await seed(signal) : undefined;
+        let model = snap?.models.find(model => eligible(model, id));
+        if (!model) {
+            snap = await snapshot(signal);
+            model = snap.models.find(model => model.id === id);
+            if (!model || model.providerID !== providerID) throw new Error('OpenCode model unavailable: ' + id);
+            if (!supportsChat(model)) throw new Error('OpenCode model does not support canonical chat: ' + id);
+        }
         return { ...model, package: model.package ?? snap.info.package,
             settings: mergeOverlay(snap.info.settings, model.settings) };
     }
@@ -188,6 +223,9 @@ export function createNativeRuntime(config, { loadSnapshots, now = Date.now, cac
             const modelInfo = await info(id, signal);
             if (effort != null && !modelInfo.variants.some(variant => variant.id === effort))
                 throw new Error('Unsupported OpenCode reasoning effort: ' + effort);
+            signal?.throwIfAborted();
+            const resolveModel = nativeResolveModel ?? await loadNativeResolveModel();
+            signal?.throwIfAborted();
             const model = await Effect.runPromise(resolveModel(modelInfo, effort ?? undefined, credential), { signal });
             return { model, modelInfo };
         },

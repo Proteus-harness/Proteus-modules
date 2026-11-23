@@ -25,7 +25,7 @@ export async function preparation(params, { hostCall, signal, catalogProvider })
         const common = {
             id: m.id,
             parentId: i ? messages[i - 1].id : null,
-            timestamp: new Date(0).toISOString(),
+            timestamp: "1970-01-01T00:00:00.000Z",
         };
         const prior = m.metadata?.pi_compaction;
         return prior
@@ -83,7 +83,7 @@ export async function preparation(params, { hostCall, signal, catalogProvider })
             action: "context_preparation",
             output: {
                 ...event.output,
-                messages: [compacted, ...messages.slice(cut)],
+                messages: messages.toSpliced(0, cut, compacted),
                 changed: true,
                 user_message_replacements: replacements,
                 summary: summary.summary,
