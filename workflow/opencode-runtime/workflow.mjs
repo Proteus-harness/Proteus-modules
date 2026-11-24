@@ -42,7 +42,7 @@ function withContext(messages, chunks) {
             payload: { Context: { chunk } },
         })),
     };
-    return [...messages.slice(0, anchor), msg, ...messages.slice(anchor)];
+    return messages.toSpliced(anchor, 0, msg);
 }
 
 function nativeEvents(reply) {

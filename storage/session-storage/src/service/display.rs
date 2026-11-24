@@ -31,21 +31,29 @@ impl State {
             BackendKind::Jsonl => DisplayWriter::for_jsonl(budget, source.extent()),
             BackendKind::Sqlite => DisplayWriter::new(budget),
         };
-        let mut line = Vec::new();
-        while let Some(record) = source.next_with_scratch(&mut line)? {
-            state.apply(session.session_id, &record)?;
-            if cut == Some(record.session_seq) {
-                source.remember_page_boundary(record.session_seq);
-                previous_boundary = Some((state.revision(), source.consumed_fingerprint()));
+        let mut apply = |record: &JournalRecord, boundary| -> Result<()> {
+            state.apply(session.session_id, record)?;
+            if let Some(hash) = boundary {
+                previous_boundary = Some((state.revision(), hash));
             }
             if record.entry.kind().is_display_record()
                 && let Some(writer) = &mut display
-                && writer.push(&record).is_err()
+                && writer.push(record).is_err()
             {
                 display = None;
             }
+            Ok(())
+        };
+        if !source.try_visit_display_rows(cut, &mut apply)? {
+            let mut line = Vec::new();
+            while let Some(record) = source.next_with_scratch(&mut line)? {
+                let boundary = (cut == Some(record.session_seq)).then(|| {
+                    source.remember_page_boundary(record.session_seq);
+                    source.consumed_fingerprint()
+                });
+                apply(&record, boundary)?;
+            }
         }
-        drop(line);
         if source.source_version()? != version {
             source.verify_fixed_prefix()?;
         }

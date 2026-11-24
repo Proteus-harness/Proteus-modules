@@ -1,19 +1,23 @@
-use crate::history::message_text;
+use crate::history::message_text_len;
 use proteus_contracts::{contracts::ContextPreparationInput, model_standard::CanonicalMessage};
 
 const DEFAULT_USER_MESSAGE_BUDGET_TOKENS: usize = 20_000;
 
 pub(crate) fn estimate_messages_tokens(messages: &[CanonicalMessage]) -> u32 {
-    let tokens = messages
-        .iter()
-        .filter_map(message_text)
-        .map(|text| estimate_text_tokens(&text))
-        .sum::<usize>();
+    estimate_message_text_lengths(messages.iter().filter_map(message_text_len))
+}
+
+fn estimate_message_text_lengths(lengths: impl Iterator<Item = usize>) -> u32 {
+    let tokens = lengths.map(estimate_text_bytes).sum::<usize>();
     u32::try_from(tokens.max(1)).unwrap_or(u32::MAX)
 }
 
+fn estimate_text_bytes(bytes: usize) -> usize {
+    bytes.saturating_add(3) / 4
+}
+
 pub(crate) fn estimate_text_tokens(text: &str) -> usize {
-    text.len().saturating_add(3) / 4
+    estimate_text_bytes(text.len())
 }
 
 pub(crate) fn truncate_to_tokens(text: &str, max_tokens: usize) -> String {
@@ -32,23 +36,8 @@ fn truncate_middle_with_token_budget(text: &str, max_tokens: usize) -> String {
     let left_budget = max_bytes / 2;
     let right_budget = max_bytes - left_budget;
     let tail_start = text.len().saturating_sub(right_budget);
-    let mut prefix_end = 0;
-    let mut suffix_start = text.len();
-    let mut suffix_started = false;
-    for (index, character) in text.char_indices() {
-        let character_end = index + character.len_utf8();
-        if character_end <= left_budget {
-            prefix_end = character_end;
-        } else if index >= tail_start {
-            if !suffix_started {
-                suffix_start = index;
-                suffix_started = true;
-            }
-        }
-    }
-    if suffix_start < prefix_end {
-        suffix_start = prefix_end;
-    }
+    let prefix_end = text.floor_char_boundary(left_budget);
+    let suffix_start = text.ceil_char_boundary(tail_start.max(prefix_end));
     let removed_bytes = text.len().saturating_sub(max_bytes);
     let marker_tokens = removed_bytes.saturating_add(3) / 4;
     format!(

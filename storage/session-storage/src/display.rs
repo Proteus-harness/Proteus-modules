@@ -203,18 +203,37 @@ pub(crate) struct DisplayRecords {
 
 impl DisplayRecords {
     fn next(&mut self, line: &mut Vec<u8>) -> Result<Option<(JournalRecord, usize)>> {
+        fn decode(line: &[u8]) -> Result<(JournalRecord, usize)> {
+            ensure!(line.ends_with(b"\n"), "incomplete display staging record");
+            let bytes = line.len() - 1;
+            Ok((serde_json::from_slice(line)?, bytes))
+        }
+
         line.clear();
+        // Complete records already in the private stage buffer need no copy.
+        match self.reader.fill_buf() {
+            Ok([]) => return Ok(None),
+            Ok(buffered) => {
+                if let Some(end) = memchr::memchr(b'\n', buffered) {
+                    let count = end + 1;
+                    let result = decode(&buffered[..count]);
+                    self.reader.consume(count);
+                    return result.map(Some);
+                }
+            }
+            // Keep the existing read_until retry behavior for interruptions.
+            Err(error) if error.kind() == io::ErrorKind::Interrupted => {}
+            Err(error) => return Err(error.into()),
+        }
         if self.reader.read_until(b'\n', line)? == 0 {
             return Ok(None);
         }
-        ensure!(line.ends_with(b"\n"), "incomplete display staging record");
-        let bytes = line.len() - 1;
-        let record = serde_json::from_slice(line)?;
+        let decoded = decode(line)?;
         if line.capacity() > MAX_REUSABLE_LINE_CAPACITY {
             // Large rows still release their temporary bytes before page assembly.
             *line = Vec::new();
         }
-        Ok(Some((record, bytes)))
+        Ok(Some(decoded))
     }
 
     pub fn page(
@@ -317,6 +336,15 @@ fn display_line_scratch_reuses_small_capacity_but_releases_a_large_row() {
     let mut reader = writer.finish().unwrap();
     reader.reader.rewind().unwrap();
     let mut scratch = Vec::new();
+    for expected in 1..=2 {
+        let (record, bytes) = reader.next(&mut scratch).unwrap().unwrap();
+        assert_eq!(record.session_seq, expected);
+        assert_eq!(bytes, serde_json::to_vec(&record).unwrap().len());
+        assert_eq!(scratch.capacity(), 0, "complete buffered row needs no copy");
+    }
+    // Force each row across a read boundary to exercise the unchanged fallback.
+    reader.reader = BufReader::with_capacity(64, reader.reader.into_inner());
+    reader.reader.rewind().unwrap();
     let mut small_capacity = None;
     for expected in 1..=4 {
         let (record, bytes) = reader.next(&mut scratch).unwrap().unwrap();

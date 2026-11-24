@@ -5,9 +5,18 @@ import { RequestExecutor } from '../../workflow/opencode-runtime/node_modules/@o
 import { createNativeRuntime } from './runtime.mjs';
 import { createCredentialReader } from './credentials.mjs';
 import { configSchema } from './config-schema.mjs';
-import { toNativeRequest } from './messages.mjs';
-import { NativeResponseCollector } from './response.mjs';
 import { createGoQuotaReader } from '../../components/model-runtime-js/opencode-go-quota.mjs';
+
+let streamParts, loadingStreamParts;
+function loadStreamParts() {
+    return loadingStreamParts ??= Promise.all([import('./messages.mjs'), import('./response.mjs')])
+        .then(parts => {
+            if (typeof parts[0].toNativeRequest !== 'function' || typeof parts[1].NativeResponseCollector !== 'function')
+                throw new Error('Invalid OpenCode stream projections');
+            return streamParts = parts;
+        })
+        .finally(() => { loadingStreamParts = undefined; });
+}
 
 export function modelFailure(error, { signal, started = false } = {}) {
     const reason = error?.reason ?? error;
@@ -57,6 +66,16 @@ export function modelExport(binding, dependencies = {}) {
             databasePath: config.database_path, apiKey: config.api_key,
             envNames: config.api_key === undefined ? await runtime.environment(signal, modelID) : [] }))(signal);
     }
+    async function quotaCredential(signal) {
+        // Keep explicit sources and injected adapters on the existing path.
+        if (config.api_key !== undefined || config.models_file !== undefined || config.models_url !== undefined ||
+            dependencies.runtime != null || dependencies.credential != null)
+            return credential(signal);
+        return createCredentialReader({
+            providerID: config.provider, databasePath: config.database_path,
+            resolveEnvNames: signal => runtime.environment(signal),
+        })(signal);
+    }
     const stream = dependencies.stream ?? (async (request, signal, accept) => {
         await Effect.runPromise(Stream.runForEach(LLMClient.stream(request), event => Effect.promise(() => accept(event))).pipe(
             Effect.provide(LLMClient.layer), Effect.provide(RequestExecutor.fetchLayer)), { signal });
@@ -68,17 +87,20 @@ export function modelExport(binding, dependencies = {}) {
             if (method === 'catalog') return runtime.catalog(signal);
             if (method === 'quota') {
                 if (!quota) throw new Error('OpenCode quota is unsupported for this provider');
-                return quota({ getAuth: async () => ({ auth: { apiKey: (await credential(signal)).key } }) }, signal);
+                return quota({ getAuth: async () => ({ auth: { apiKey: (await quotaCredential(signal)).key } }) }, signal);
             }
             if (method === 'describe') return runtime.describe(params.model.model, signal);
             if (method !== 'stream') throw new Error('Unsupported OpenCode model operation');
             let count = 0, started = false;
             const completedMessages = [];
-            const collector = new NativeResponseCollector(randomUUID());
             try {
                 const r = params.request;
                 if (r.operation !== undefined && r.operation !== 'Complete')
                     throw new Error('OpenCode provider bridge does not support native model compaction');
+                signal?.throwIfAborted();
+                const [{ toNativeRequest }, { NativeResponseCollector }] = streamParts ?? await loadStreamParts();
+                signal?.throwIfAborted();
+                const collector = new NativeResponseCollector(randomUUID());
                 const resolved = await runtime.resolve(r.model.model, r.reasoning.effort, await credential(signal, r.model.model), signal);
                 const request = await toNativeRequest(r, resolved.model, { signal, modelInfo: resolved.modelInfo });
                 await stream(request, signal, async event => {

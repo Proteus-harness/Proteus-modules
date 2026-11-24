@@ -177,21 +177,29 @@ fn row_to_item(row: &rusqlite::Row<'_>) -> rusqlite::Result<MemoryItem> {
 fn fts_match_expression(text: &str) -> String {
     // Keep whitespace-delimited spans as literal phrases. SQLite owns their
     // punctuation/diacritic tokenization; deleting separators would join words.
-    let tokens: Vec<String> = text
-        .split_whitespace()
-        .filter(|token| {
-            token
-                .chars()
-                .any(|c| c.is_alphanumeric() || c == '_' || c == '-')
-        })
-        .map(|token| {
-            // MATCH expressions are NUL-terminated. Keep NUL as a separator,
-            // and double quotes inside the FTS literal instead of dropping them.
-            let literal = token.replace('\0', " ").replace('"', "\"\"");
-            format!("\"{literal}\"*")
-        })
-        .collect();
-    tokens.join(" AND ")
+    let mut expression = String::new();
+    let tokens = text.split_whitespace().filter(|token| {
+        token
+            .chars()
+            .any(|c| c.is_alphanumeric() || c == '_' || c == '-')
+    });
+    for token in tokens {
+        if !expression.is_empty() {
+            expression.push_str(" AND ");
+        }
+        expression.push('"');
+        // NUL would terminate MATCH; keep the separator and double each quote.
+        // Both matches are ASCII, so the unescaped slices end on UTF-8 boundaries.
+        let mut start = 0;
+        for (index, special) in token.match_indices(['\0', '"']) {
+            expression.push_str(&token[start..index]);
+            expression.push_str(if special == "\0" { " " } else { "\"\"" });
+            start = index + 1;
+        }
+        expression.push_str(&token[start..]);
+        expression.push_str("\"*");
+    }
+    expression
 }
 
 pub fn register_modules(registry: &mut dyn ModuleRegistry) -> Result<(), ProcessModuleError> {

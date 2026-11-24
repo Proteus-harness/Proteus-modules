@@ -4,13 +4,28 @@ import { toLLMMessages } from "@opencode/core/session/runner/to-llm-message";
 const KEY = "opencode/synthetic";
 const PROJECTED = "opencode/instruction_projection";
 
+function collectInstructionEvents(message, events) {
+    if (message.metadata?.[PROJECTED]) {
+        events.push(message.metadata[PROJECTED]);
+        return;
+    }
+    for (const event of message.metadata?.[KEY] ?? []) events.push(event);
+    message.parts.forEach(part => {
+        const records = part.payload.ToolResult?.result.metadata?.[KEY];
+        // Match the one-level flatMap of ToolResult records, including sparse arrays.
+        if (Array.isArray(records)) {
+            for (let i = 0, length = records.length; i < length; i++)
+                if (i in records) events.push(records[i]);
+        } else if (records != null) events.push(records);
+    });
+}
+
 // Canonical metadata is the only persisted instruction state. Native
 // SessionInstructions uses these same synthetic records for path deduplication.
 export function instructionEvents(messages = []) {
-    return messages.flatMap(message => {
-        if (message.metadata?.[PROJECTED]) return [message.metadata[PROJECTED]];
-        return [...(message.metadata?.[KEY] ?? []), ...message.parts.flatMap(part => part.payload.ToolResult?.result.metadata?.[KEY] ?? [])];
-    });
+    const events = [];
+    messages.forEach(message => collectInstructionEvents(message, events));
+    return events;
 }
 
 function identity(value) {
@@ -25,9 +40,12 @@ export function projectInstructions(messages, model) {
     const source = messages.filter(message => !message.metadata?.[PROJECTED]);
     const seen = new Set();
     const result = [];
+    const events = [];
     for (const message of source) {
         result.push(message);
-        for (const [index, event] of instructionEvents([message]).entries()) {
+        events.length = 0;
+        collectInstructionEvents(message, events);
+        for (const [index, event] of events.entries()) {
             const paths = event.metadata?.instruction?.paths ?? [];
             if (paths.every(path => seen.has(path))) continue;
             for (const path of paths) seen.add(path);

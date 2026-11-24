@@ -30,6 +30,10 @@ impl CollectedModules {
             hooks: HashMap::new(),
         }
     }
+
+    pub(crate) fn release_registration_config(&mut self) {
+        self.module_config = Value::Null;
+    }
 }
 
 impl Default for CollectedModules {

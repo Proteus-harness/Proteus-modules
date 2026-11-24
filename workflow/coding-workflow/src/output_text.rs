@@ -4,15 +4,22 @@ use proteus_contracts::{
 };
 
 pub(crate) fn message_text(message: &CanonicalMessage) -> String {
-    let text = message
-        .parts
-        .iter()
-        .filter_map(|part| match &part.payload {
-            ContentPart::Text { text } => Some(text.as_str()),
-            _ => None,
-        })
-        .collect::<Vec<_>>()
-        .join("\n");
+    let mut text_parts = message.parts.iter().filter_map(|part| match &part.payload {
+        ContentPart::Text { text } => Some(text.as_str()),
+        _ => None,
+    });
+    let text = match text_parts.next() {
+        None => String::new(),
+        Some(first) => match text_parts.next() {
+            None => first.to_owned(),
+            Some(second) => {
+                let mut parts = Vec::new();
+                parts.extend([first, second]);
+                parts.extend(text_parts);
+                parts.join("\n")
+            }
+        },
+    };
     if text.is_empty() {
         "<empty model response>".to_owned()
     } else {

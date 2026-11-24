@@ -310,26 +310,27 @@ fn diagnostic_prompt(
     result: &ToolResult,
 ) -> String {
     let error = result.error.as_deref().unwrap_or("<none>");
-    let output = bounded_text(&result.output, MAX_DIAGNOSTIC_CHARS);
-    format!(
-        "Original task:\n{}\n\nProject kind: {}\nMarker: {}\nCommand: {}\nGit working tree: {}\nTool error: {}\n\nCommand output:\n{}",
+    let (output, suffix) = bounded_text(&result.output, MAX_DIAGNOSTIC_CHARS);
+    let mut prompt = format!(
+        "Original task:\n{}\n\nProject kind: {}\nMarker: {}\nCommand: {}\nGit working tree: {}\nTool error: {}\n\nCommand output:\n",
         input.task.text,
         project.kind,
         project.marker,
         project.command,
         git_state(git_dirty),
         error,
-        output,
-    )
+    );
+    prompt.reserve_exact(output.len() + suffix.len());
+    prompt.push_str(output);
+    prompt.push_str(suffix);
+    prompt
 }
 
-fn bounded_text(text: &str, max_chars: usize) -> String {
-    let mut chars = text.chars();
-    let mut bounded = chars.by_ref().take(max_chars).collect::<String>();
-    if chars.next().is_some() {
-        bounded.push_str("\n[diagnostics truncated]");
+fn bounded_text(text: &str, max_chars: usize) -> (&str, &'static str) {
+    match text.char_indices().nth(max_chars) {
+        Some((end, _)) => (&text[..end], "\n[diagnostics truncated]"),
+        None => (text, ""),
     }
-    bounded
 }
 
 struct CheckReport {
@@ -433,6 +434,9 @@ mod tests {
 
     #[test]
     fn diagnostic_bounding_preserves_utf8() {
-        assert_eq!(bounded_text("абвг", 3), "абв\n[diagnostics truncated]");
+        assert_eq!(
+            bounded_text("абвг", 3),
+            ("абв", "\n[diagnostics truncated]")
+        );
     }
 }

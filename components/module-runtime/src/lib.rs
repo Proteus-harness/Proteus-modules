@@ -51,6 +51,7 @@ pub fn main(
             let mut modules = CollectedModules::with_config(binding.module_config.clone());
             register(&mut modules, &binding)?;
             let config_schema = schema(&binding);
+            modules.release_registration_config();
             Ok(Box::new(ModuleExport::new(binding, modules, config_schema)))
         })
     })();

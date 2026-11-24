@@ -1,13 +1,23 @@
+use std::sync::Arc;
+
 use anyhow::{Result, bail};
 use proteus_module_sdk::{
+    Export,
     contracts::contracts::{
-        ProcessComponentExportInitialize, SessionStorageRequest, SessionStorageResponse,
+        PROCESS_SESSION_STORAGE_EXECUTE_METHOD, ProcessComponentExportInitialize,
+        ProcessComponentExportManifest, SESSION_STORAGE_DISPLAY_PROJECTION_FEATURE,
+        SessionStorageRequest, SessionStorageResponse,
     },
+    hosts::HostBridge,
     session_storage::{SessionStorageExport, SessionStorageModule},
 };
+use serde_json::Value;
 use session_storage::{BackendKind, StorageService};
 
-struct Backend(StorageService);
+mod display_reply;
+
+#[derive(Clone)]
+struct Backend(Arc<StorageService>);
 impl SessionStorageModule for Backend {
     fn supports_display_projection(&self) -> bool {
         true
@@ -17,7 +27,33 @@ impl SessionStorageModule for Backend {
         self.0.execute(request)
     }
 }
-fn load(binding: ProcessComponentExportInitialize) -> Result<Box<dyn proteus_module_sdk::Export>> {
+struct DisplayExport {
+    standard: SessionStorageExport<Backend>,
+    backend: Backend,
+    projection_negotiated: bool,
+}
+
+impl Export for DisplayExport {
+    fn manifest(&self) -> ProcessComponentExportManifest {
+        self.standard.manifest()
+    }
+
+    fn invoke(&self, method: &str, params: Value, host: &HostBridge) -> Result<Value> {
+        // Leave the existing SDK contract and errors in charge for every
+        // other request, including unnegotiated display requests.
+        if !self.projection_negotiated
+            || method != PROCESS_SESSION_STORAGE_EXECUTE_METHOD
+            || params.get("operation").and_then(Value::as_str) != Some("open_display_snapshot")
+        {
+            return self.standard.invoke(method, params, host);
+        }
+        let request: SessionStorageRequest = serde_json::from_value(params)?;
+        request.validate()?;
+        display_reply::into_value(self.backend.execute(request)?)
+    }
+}
+
+fn load(binding: ProcessComponentExportInitialize) -> Result<Box<dyn Export>> {
     if binding.slot != "session_storage" {
         bail!("unsupported storage slot {}", binding.slot);
     }
@@ -39,10 +75,18 @@ fn load(binding: ProcessComponentExportInitialize) -> Result<Box<dyn proteus_mod
     if config.is_some_and(|config| !config.is_empty()) {
         bail!("unknown session storage configuration fields");
     }
-    Ok(Box::new(SessionStorageExport::new(
-        binding,
-        Backend(StorageService::new(kind)),
-    )?))
+    let backend = Backend(Arc::new(StorageService::new(kind)));
+    let standard = SessionStorageExport::new(binding, backend.clone())?;
+    let projection_negotiated = standard
+        .manifest()
+        .module_features
+        .iter()
+        .any(|feature| feature == SESSION_STORAGE_DISPLAY_PROJECTION_FEATURE);
+    Ok(Box::new(DisplayExport {
+        standard,
+        backend,
+        projection_negotiated,
+    }))
 }
 fn main() {
     let arguments: Vec<_> = std::env::args_os().collect();

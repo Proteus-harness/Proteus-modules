@@ -68,7 +68,7 @@ pub(super) fn open(kind: BackendKind, path: &Path) -> Result<StorageSessionDescr
         )?,
         parent_session_id: identity.parent_session_id,
         workspace_path,
-        record_location: Some(kind.backend().description_path(&path)),
+        record_location: Some(journal),
         local_path: Some(path),
         created_at_ms: milliseconds(meta.created().unwrap_or(modified)),
         updated_at_ms: milliseconds(modified),

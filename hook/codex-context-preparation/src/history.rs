@@ -1,3 +1,5 @@
+use std::borrow::Cow;
+
 use crate::{budget::truncate_to_tokens, summary::SUMMARY_PREFIX};
 use proteus_contracts::domain::{CompactionUserMessageReplacement, new_message_id};
 use proteus_contracts::model_standard::{
@@ -11,15 +13,14 @@ pub(crate) struct HistoryParts {
     pub(crate) ephemeral_context: Vec<CanonicalMessage>,
     /// Messages shown to the summary model, including canonical context.
     pub(crate) summary_history: Vec<CanonicalMessage>,
-    /// Durable conversation items from which bounded real user messages are
-    /// selected for replacement history.
-    pub(crate) compactable_history: Vec<CanonicalMessage>,
+    /// Number of durable conversation items in the input history.
+    pub(crate) compactable_message_count: usize,
 }
 
 pub(crate) fn split_history(messages: &[CanonicalMessage]) -> HistoryParts {
     let mut ephemeral_context = Vec::new();
     let mut summary_history = Vec::new();
-    let mut compactable_history = Vec::new();
+    let mut compactable_message_count = 0;
 
     for message in messages {
         summary_history.push(message.clone());
@@ -36,14 +37,14 @@ pub(crate) fn split_history(messages: &[CanonicalMessage]) -> HistoryParts {
                 ephemeral_context.push(message.clone());
             }
         } else {
-            compactable_history.push(message.clone());
+            compactable_message_count += 1;
         }
     }
 
     HistoryParts {
         ephemeral_context,
         summary_history,
-        compactable_history,
+        compactable_message_count,
     }
 }
 
@@ -114,6 +115,9 @@ pub(crate) fn select_recent_user_messages(
         if remaining == 0 {
             break;
         }
+        if !is_real_user_message(message) {
+            continue;
+        }
         let text = message_text(message).unwrap_or_default();
         let tokens = crate::budget::estimate_text_tokens(&text);
         let has_images = message
@@ -165,11 +169,9 @@ pub(crate) fn select_recent_user_messages(
 
 pub(crate) fn replacement_messages(
     ephemeral_context: &[CanonicalMessage],
-    preserved_user_messages: &[CanonicalMessage],
+    mut replacement: Vec<CanonicalMessage>,
     summary: &str,
 ) -> Vec<CanonicalMessage> {
-    let mut replacement = preserved_user_messages.to_vec();
-
     // Upstream Codex keeps the compaction summary last. For mid-turn
     // compaction it re-injects canonical initial context immediately before
     // the last real user message; if no user survives the budget, context is
@@ -192,13 +194,35 @@ pub(crate) fn replacement_messages(
     replacement
 }
 
-pub(crate) fn message_text(message: &CanonicalMessage) -> Option<String> {
-    let pieces = message
+fn message_text_pieces(
+    message: &CanonicalMessage,
+) -> impl Iterator<Item = std::borrow::Cow<'_, str>> + '_ {
+    message
         .parts
         .iter()
         .filter_map(|part| part_text(&part.payload))
         .filter(|text| !text.is_empty())
-        .collect::<Vec<_>>();
+        .map(Into::into)
+}
+
+fn joined_message_len(mut lengths: impl Iterator<Item = usize>) -> Option<usize> {
+    let first = lengths.next()?;
+    // Visit every piece just as the owned renderer does before joining.
+    let length = lengths
+        .fold(Some(first), |total, len| {
+            total.and_then(|total| total.checked_add(1)?.checked_add(len))
+        })
+        .expect("attempt to join into collection with len > usize::MAX");
+    assert!(length <= isize::MAX as usize, "capacity overflow");
+    Some(length)
+}
+
+pub(crate) fn message_text_len(message: &CanonicalMessage) -> Option<usize> {
+    joined_message_len(message_text_pieces(message).map(|text| text.len()))
+}
+
+pub(crate) fn message_text(message: &CanonicalMessage) -> Option<String> {
+    let pieces = message_text_pieces(message).collect::<Vec<_>>();
     if pieces.is_empty() {
         None
     } else {
@@ -206,23 +230,25 @@ pub(crate) fn message_text(message: &CanonicalMessage) -> Option<String> {
     }
 }
 
-pub(crate) fn part_text(part: &ContentPart) -> Option<String> {
+pub(crate) fn part_text(part: &ContentPart) -> Option<Cow<'_, str>> {
     match part {
-        ContentPart::Text { text } => Some(text.clone()),
-        ContentPart::Context { chunk } => Some(chunk.content.clone()),
+        ContentPart::Text { text } => Some(Cow::Borrowed(text.as_str())),
+        ContentPart::Context { chunk } => Some(Cow::Borrowed(chunk.content.as_str())),
         ContentPart::FileRef { path, content } => content
             .as_ref()
-            .map(|content| format!("{}:\n{content}", path.display())),
-        ContentPart::ToolCall { call } => Some(format!("tool call {} {}", call.name, call.args)),
-        ContentPart::ToolResult { result } => Some(result.text_or_status()),
-        ContentPart::Patch { patch } => Some(patch.content.clone()),
-        ContentPart::ReasoningSummary { text } => Some(text.clone()),
+            .map(|content| Cow::Owned(format!("{}:\n{content}", path.display()))),
+        ContentPart::ToolCall { call } => {
+            Some(Cow::Owned(format!("tool call {} {}", call.name, call.args)))
+        }
+        ContentPart::ToolResult { result } => Some(Cow::Owned(result.text_or_status())),
+        ContentPart::Patch { patch } => Some(Cow::Borrowed(patch.content.as_str())),
+        ContentPart::ReasoningSummary { text } => Some(Cow::Borrowed(text.as_str())),
         ContentPart::Reasoning { .. } => None,
-        ContentPart::HostedToolActivity { activity } => Some(format!(
+        ContentPart::HostedToolActivity { activity } => Some(Cow::Owned(format!(
             "provider-hosted tool {}: {}",
             activity.kind().as_str(),
             serde_json::to_string(activity).unwrap_or_else(|_| "<unavailable>".to_owned())
-        )),
+        ))),
         // The cited assistant text is already present in the adjacent Text
         // part; annotations do not add model-visible prose to summarize.
         ContentPart::Citation { .. } => None,

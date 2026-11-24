@@ -1,5 +1,9 @@
 import { randomUUID } from 'node:crypto';
 
+const textEventTypes = ['text-start', 'text-delta', 'text-end'];
+const reasoningEventTypes = ['reasoning-start', 'reasoning-delta', 'reasoning-end'];
+const toolEventTypes = ['tool-input-start', 'tool-input-delta', 'tool-input-end', 'tool-call'];
+
 const finishReasons = {
     stop: 'Stop', length: 'Length', 'tool-calls': 'ToolCalls',
     'content-filter': 'ContentFilter', error: 'Error', unknown: 'Unknown',
@@ -47,6 +51,7 @@ function isJson(value, seen = new Set()) {
 export class NativeResponseCollector {
     #seenText = false;
     #seenReasoning = false;
+    #lastBlock;
 
     constructor(messageId) {
         this.messageId = messageId;
@@ -61,12 +66,16 @@ export class NativeResponseCollector {
 
     block(event, type) {
         if (typeof event.id !== 'string' || !event.id) throw malformed('Native content block lacks an id');
-        const key = `${type}:${event.id}`;
-        let block = this.blocks.get(key);
-        if (!block) {
-            block = { type, id: event.id, text: '', partId: randomUUID() };
-            this.blocks.set(key, block);
-            this.parts.push(block);
+        let block = this.#lastBlock;
+        if (!block || block.type !== type || block.id !== event.id) {
+            const key = `${type}:${event.id}`;
+            block = this.blocks.get(key);
+            if (!block) {
+                block = { type, id: event.id, text: '', partId: randomUUID() };
+                this.blocks.set(key, block);
+                this.parts.push(block);
+            }
+            this.#lastBlock = block;
         }
         if (event.providerMetadata !== undefined) block.providerMetadata = event.providerMetadata;
         return block;
@@ -135,15 +144,15 @@ export class NativeResponseCollector {
         if (this.failure) throw this.failure;
         if (this.response) throw malformed('Native events continued after finish');
         try {
-            if (['text-start', 'text-delta', 'text-end'].includes(event.type)) return this.text(event, 'text');
-            if (['reasoning-start', 'reasoning-delta', 'reasoning-end'].includes(event.type)) return this.text(event, 'reasoning');
+            if (textEventTypes.includes(event.type)) return this.text(event, 'text');
+            if (reasoningEventTypes.includes(event.type)) return this.text(event, 'reasoning');
             if (event.type === 'provider-error' || event.type === 'error') {
                 const error = malformed('Native model provider reported an error', 'OPENCODE_PROVIDER_ERROR');
                 error.classification = event.classification;
                 throw error;
             }
             if (event.type === 'tool-input-error') throw malformed('Native model tool input could not be decoded');
-            if (['tool-input-start', 'tool-input-delta', 'tool-input-end', 'tool-call'].includes(event.type)) return this.tool(event);
+            if (toolEventTypes.includes(event.type)) return this.tool(event);
             if (event.type === 'step-start') return [];
             if (event.type !== 'step-finish' && event.type !== 'finish')
                 throw malformed('Unsupported native model output: ' + event.type);

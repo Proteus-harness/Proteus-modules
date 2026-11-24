@@ -43,6 +43,7 @@ pub(super) fn read_cache(
         Ok(value) => value,
         Err(_) => return Ok(SessionStorageResponse::Metadata { document: None }),
     };
+    drop(bytes);
     if cache.source.session != session
         || source
             .as_ref()

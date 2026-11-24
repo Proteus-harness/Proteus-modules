@@ -10,9 +10,7 @@ use serde_json::json;
 
 use crate::{
     budget::{estimate_messages_tokens, resolve_trigger_tokens, user_message_budget_tokens},
-    history::{
-        collect_user_messages, replacement_messages, select_recent_user_messages, split_history,
-    },
+    history::{replacement_messages, select_recent_user_messages, split_history},
     recovery::complete_summary_with_recovery,
 };
 
@@ -84,7 +82,7 @@ pub(crate) fn compact(
     }
 
     let history = split_history(&input.messages);
-    if history.compactable_history.is_empty() {
+    if history.compactable_message_count == 0 {
         return Ok(unchanged(unchanged_with_diagnostics(
             input.messages,
             token_estimate,
@@ -105,13 +103,14 @@ pub(crate) fn compact(
         );
     }
 
-    let user_messages = collect_user_messages(&history.compactable_history);
+    // Filter newest-first so exhausted budgets never classify or clone older users.
     let preserved_user_messages =
-        select_recent_user_messages(&user_messages, user_message_budget_tokens());
+        select_recent_user_messages(&input.messages, user_message_budget_tokens());
     let summary = complete_summary_with_recovery(&input, config, history.summary_history, host)?;
+    let retained_count = preserved_user_messages.messages.len();
     let replacement = replacement_messages(
         &history.ephemeral_context,
-        &preserved_user_messages.messages,
+        preserved_user_messages.messages,
         &summary,
     );
     let output_token_estimate = estimate_messages_tokens(&replacement);
@@ -123,8 +122,8 @@ pub(crate) fn compact(
     output.trigger_tokens = Some(trigger_tokens);
     output.summary_source = Some("model".to_owned());
     output.metadata = json!({
-        "compacted_messages": history.compactable_history.len(),
-        "preserved_user_messages": preserved_user_messages.messages.len(),
+        "compacted_messages": history.compactable_message_count,
+        "preserved_user_messages": retained_count,
         "ephemeral_context_messages": history.ephemeral_context.len(),
     });
     Ok(output)

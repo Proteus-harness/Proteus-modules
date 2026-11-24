@@ -12,13 +12,13 @@ function unsupported(message) {
 
 function nativeExtras(message, index, type) {
     const extra = message.metadata?.opencode_native?.parts?.[index];
-    if (!extra) return {};
+    if (!extra) return undefined;
     if (extra.type !== type) unsupported('Native history part type does not match canonical content');
     // Only restore schema fields, never spread an arbitrary provider blob into
     // a canonical block. Text and tool arguments have one authoritative copy.
-    const result = {};
+    let result;
     for (const key of ['providerMetadata', 'metadata', 'cache', 'encrypted', 'namespace', 'providerExecuted'])
-        if (extra[key] !== undefined) result[key] = extra[key];
+        if (extra[key] !== undefined) (result ??= {})[key] = extra[key];
     return result;
 }
 
@@ -61,6 +61,14 @@ function toolDefinition(tool) {
     };
 }
 
+function toolCallNames(messages) {
+    const names = new Map();
+    for (const message of messages)
+        for (const part of message.parts)
+            if (part.payload.ToolCall) names.set(part.payload.ToolCall.call.id, part.payload.ToolCall.call.name);
+    return names;
+}
+
 export async function toNativeRequest(request, model, { signal, modelInfo } = {}) {
     signal?.throwIfAborted();
     if (request.response_format !== 'Text') unsupported('OpenCode model slot currently requires Text response format');
@@ -81,32 +89,39 @@ export async function toNativeRequest(request, model, { signal, modelInfo } = {}
         'x-session-affinity': sessionID, 'X-Session-Id': sessionID,
         'x-opencode-client': 'proteus',
     } : undefined;
-    const names = new Map();
-    for (const message of request.messages)
-        for (const part of message.parts)
-            if (part.payload.ToolCall) names.set(part.payload.ToolCall.call.id, part.payload.ToolCall.call.name);
+    let names;
 
     const messages = [];
     for (const message of request.messages) {
         signal?.throwIfAborted();
+        if (!Array.isArray(message.parts)) unsupported('Invalid canonical message parts');
         const role = { System: 'system', Developer: 'system', User: 'user', Assistant: 'assistant', Tool: 'tool' }[message.role];
         if (!role) unsupported('Unsupported canonical message role');
         const content = [];
         for (let index = 0; index < message.parts.length; index++) {
             const payload = message.parts[index].payload;
+            const toolCall = payload.ToolCall;
+            if (toolCall && toolCall.call == null) unsupported('Invalid canonical tool call');
             let native;
             if (payload.Text) native = { type: 'text', text: payload.Text.text };
             else if (payload.Context) native = { type: 'text', text: contextText(payload.Context.chunk) };
             else if (payload.FileRef && payload.FileRef.content != null)
                 native = { type: 'text', text: payload.FileRef.content };
-            else if (payload.Image) native = await imagePart(payload.Image.image, signal);
-            else if (payload.Reasoning) native = {
+            else if (payload.Image) {
+                const image = payload.Image.image;
+                signal?.throwIfAborted();
+                if (image.path) {
+                    // Keep the old whole-history check before any file read.
+                    names ??= toolCallNames(request.messages);
+                }
+                native = await imagePart(image, signal);
+            } else if (payload.Reasoning) native = {
                 type: 'reasoning', text: payload.Reasoning.text,
                 ...(payload.Reasoning.signature != null ? { encrypted: payload.Reasoning.signature } : {}),
             };
             else if (payload.ReasoningSummary) native = { type: 'reasoning', text: payload.ReasoningSummary.text };
-            else if (payload.ToolCall) {
-                const call = payload.ToolCall.call;
+            else if (toolCall) {
+                const call = toolCall.call;
                 if (call.surface !== 'function')
                     unsupported('Native OpenCode history requires decoded function calls');
                 // Core may retain original provider JSON alongside decoded or
@@ -114,11 +129,14 @@ export async function toNativeRequest(request, model, { signal, modelInfo } = {}
                 native = { type: 'tool-call', id: call.id, name: call.name, input: call.args };
             } else if (payload.ToolResult) {
                 const result = payload.ToolResult.result;
+                // Preserve future matches and the last name for a repeated ID.
+                names ??= toolCallNames(request.messages);
                 const name = names.get(result.call_id) ?? message.name;
                 if (!name) unsupported('Tool result has no matching tool name');
                 native = { type: 'tool-result', id: result.call_id, name, result: toolResult(result) };
             } else unsupported('Unsupported canonical model content: ' + Object.keys(payload).join(','));
-            content.push({ ...nativeExtras(message, index, native.type), ...native });
+            const extra = nativeExtras(message, index, native.type);
+            content.push(extra === undefined ? native : { ...extra, ...native });
         }
         const header = message.metadata?.opencode_native?.header;
         messages.push({ id: message.id, role, content,

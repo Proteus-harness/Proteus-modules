@@ -31,7 +31,7 @@ pub(crate) fn compact(
     estimates: &ModelInputEstimate,
     host: &mut dyn HookModuleHost,
 ) -> Result<ContextPreparationOutput, ProcessModuleError> {
-    let users = collect_user_messages(&history.compactable_history);
+    let users = collect_user_messages(&input.messages);
     let retained = select_recent_users(&users, 64_000);
     let request = request(&input, history.summary_history, estimates)?;
     let checkpoint = complete_checkpoint(request, config, host)?;
@@ -62,7 +62,7 @@ pub(crate) fn compact(
     output.trigger_tokens = Some(trigger_tokens);
     output.summary_source = Some("model".to_owned());
     output.metadata = json!({
-        "compacted_messages": history.compactable_history.len(),
+        "compacted_messages": history.compactable_message_count,
         "preserved_user_messages": retained_count,
         "ephemeral_context_messages": history.ephemeral_context.len(),
         "remote_compaction": true,

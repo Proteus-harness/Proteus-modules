@@ -87,7 +87,7 @@ impl State {
                 previous_boundary = Some((state.revision(), source.consumed_fingerprint()));
             }
             while let Some(record) = source.next()? {
-                state.apply(session.session_id, &record)?;
+                state.apply_validated(session.session_id, &record)?;
                 if cut == Some(record.session_seq) {
                     source.remember_page_boundary(record.session_seq);
                     previous_boundary = Some((state.revision(), source.consumed_fingerprint()));

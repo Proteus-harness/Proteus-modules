@@ -193,17 +193,20 @@ impl TurnScaffold {
                 .or_insert_with(|| WorkflowToolResultBinding::new(call.clone()));
         }
         // Conversation order, independent of HashMap iteration and completion order.
-        let bindings = self
-            .persistent_messages
-            .iter()
-            .flat_map(|message| &message.parts)
-            .filter_map(|part| match &part.payload {
-                proteus_contracts::model_standard::ContentPart::ToolCall { call } => {
-                    self.result_bindings.get(&call.id).cloned()
-                }
-                _ => None,
-            })
-            .collect::<Vec<_>>();
+        let bindings = if self.result_bindings.is_empty() {
+            Vec::new()
+        } else {
+            self.persistent_messages
+                .iter()
+                .flat_map(|message| &message.parts)
+                .filter_map(|part| match &part.payload {
+                    proteus_contracts::model_standard::ContentPart::ToolCall { call } => {
+                        self.result_bindings.get(&call.id).cloned()
+                    }
+                    _ => None,
+                })
+                .collect::<Vec<_>>()
+        };
         let checkpoint = WorkflowHistoryCheckpoint {
             history,
             tool_results: bindings,

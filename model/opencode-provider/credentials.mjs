@@ -32,7 +32,9 @@ function decodeCredential(value) {
 }
 
 /** Native precedence: saved active/latest credential first, provider environment second. */
-export function createCredentialReader({ providerID, databasePath, apiKey, envNames = [], environment = process.env }) {
+export function createCredentialReader({
+    providerID, databasePath, apiKey, envNames: staticEnvNames = [], resolveEnvNames, environment = process.env,
+}) {
     if (typeof providerID !== "string" || !providerID.trim()) throw new Error("OpenCode provider id is required");
     if (apiKey !== undefined && (typeof apiKey !== "string" || !apiKey.trim()))
         throw new Error("OpenCode explicit API key must be nonempty text");
@@ -59,6 +61,14 @@ export function createCredentialReader({ providerID, databasePath, apiKey, envNa
             finally { db?.close(); }
             signal?.throwIfAborted();
             if (row) return decodeCredential(row.value);
+        }
+        // Only an absent DB/row may consult the slower provider metadata source.
+        let envNames = staticEnvNames;
+        if (resolveEnvNames !== undefined) {
+            signal?.throwIfAborted();
+            const resolved = await resolveEnvNames(signal);
+            signal?.throwIfAborted();
+            envNames = resolved === undefined ? [] : resolved;
         }
         for (const name of envNames) {
             const key = environment[name];

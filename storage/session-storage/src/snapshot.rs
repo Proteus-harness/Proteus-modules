@@ -12,10 +12,15 @@ pub(crate) struct Fold {
 }
 impl Fold {
     pub fn apply(&mut self, id: SessionId, record: &JournalRecord) -> Result<()> {
-        self.apply_projected::<true>(id, record)
+        self.apply_projected::<true, true>(id, record)
     }
 
-    fn apply_projected<const MODEL_CONTEXT: bool>(
+    /// Validate every journal fact without constructing unused query projections.
+    pub fn apply_validated(&mut self, id: SessionId, record: &JournalRecord) -> Result<()> {
+        self.apply_projected::<false, false>(id, record)
+    }
+
+    fn apply_projected<const MODEL_CONTEXT: bool, const USAGE: bool>(
         &mut self,
         id: SessionId,
         record: &JournalRecord,
@@ -28,7 +33,9 @@ impl Fold {
         if MODEL_CONTEXT {
             self.model_context.apply(record);
         }
-        self.usage.apply(record);
+        if USAGE {
+            self.usage.apply(record);
+        }
         self.session_seq = record.session_seq;
         Ok(())
     }
@@ -152,16 +159,16 @@ impl SnapshotState {
         Ok(state.revision() == prefix.revision)
     }
     pub fn fold(&mut self) -> Result<Fold> {
-        Ok(self.fold_with_terminal::<true>(false)?.0)
+        Ok(self.fold_with_terminal::<true, true>(false)?.0)
     }
 
     /// Usage has no dependency on the separate model-context projection.
     /// Both paths still validate the same complete fixed canonical prefix.
     pub fn fold_usage(&mut self) -> Result<UsageProjection> {
-        Ok(self.fold_with_terminal::<false>(false)?.0.usage)
+        Ok(self.fold_with_terminal::<false, true>(false)?.0.usage)
     }
 
-    fn fold_with_terminal<const MODEL_CONTEXT: bool>(
+    fn fold_with_terminal<const MODEL_CONTEXT: bool, const USAGE: bool>(
         &mut self,
         capture: bool,
     ) -> Result<(Fold, Option<JournalRecord>)> {
@@ -172,7 +179,10 @@ impl SnapshotState {
         let mut state = Fold::default();
         let mut terminal = None;
         while let Some(record) = self.source.next()? {
-            state.apply_projected::<MODEL_CONTEXT>(self.identity.session.session_id, &record)?;
+            state.apply_projected::<MODEL_CONTEXT, USAGE>(
+                self.identity.session.session_id,
+                &record,
+            )?;
             if capture && record.session_seq == self.identity.revision.session_seq {
                 terminal = Some(record);
             }
@@ -201,7 +211,8 @@ impl SnapshotState {
             let capture = limit > 0
                 && before.is_some()
                 && self.identity.revision.session_seq.checked_sub(1) == Some(after);
-            terminal = self.fold_with_terminal::<true>(capture)?.1;
+            // Canonical pages need full verification, not the derived views.
+            terminal = self.fold_with_terminal::<false, false>(capture)?.1;
         }
         // Failed pages leave no reusable cursor. Cover repositioning as well
         // as streaming with the same source-version check.
@@ -361,7 +372,17 @@ pub(crate) fn preview(messages: &[CanonicalMessage]) -> Option<String> {
             ContentPart::Text { text }
             | ContentPart::ReasoningSummary { text }
             | ContentPart::Reasoning { text, .. } => excerpt(text),
-            ContentPart::ToolResult { result } => excerpt(&result.text_or_status()),
+            ContentPart::ToolResult { result } => {
+                let text = result
+                    .error
+                    .as_deref()
+                    .filter(|text| !text.is_empty())
+                    .or_else(|| (!result.output.is_empty()).then_some(result.output.as_str()));
+                match text {
+                    Some(text) => excerpt(text),
+                    None => excerpt(&result.text_or_status()),
+                }
+            }
             _ => None,
         })
     };

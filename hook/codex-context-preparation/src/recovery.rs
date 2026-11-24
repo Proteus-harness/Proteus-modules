@@ -6,7 +6,7 @@ use proteus_contracts::{
     process_module::{HookModuleHost, ProcessModuleError},
 };
 use rand::Rng;
-use std::time::Duration;
+use std::{collections::HashSet, time::Duration};
 
 pub(crate) fn complete_summary_with_recovery(
     input: &ContextPreparationInput,
@@ -79,32 +79,35 @@ pub(crate) fn wait_for_retry(
 /// granularity to keep unrelated calls in the same assistant item intact.
 fn remove_first_message_and_counterpart(history: &mut Vec<CanonicalMessage>) {
     let removed = history.remove(0);
-    let mut call_ids = removed.tool_call_id.into_iter().collect::<Vec<_>>();
-    call_ids.extend(removed.parts.iter().filter_map(part_call_id));
-    if call_ids.is_empty() {
+    let mut call_ids = removed
+        .tool_call_id
+        .as_deref()
+        .into_iter()
+        .chain(removed.parts.iter().filter_map(part_call_id));
+    let Some(first_id) = call_ids.next() else {
         return;
+    };
+    let mut additional_ids = None;
+    for id in call_ids.filter(|id| *id != first_id) {
+        additional_ids.get_or_insert_with(HashSet::new).insert(id);
     }
+    let is_counterpart =
+        |id: &str| id == first_id || additional_ids.as_ref().is_some_and(|ids| ids.contains(id));
     history.retain_mut(|message| {
-        let standalone_counterpart = message
-            .tool_call_id
-            .as_ref()
-            .is_some_and(|id| call_ids.iter().any(|removed_id| removed_id == id));
-        if standalone_counterpart {
+        if message.tool_call_id.as_deref().is_some_and(&is_counterpart) {
             return false;
         }
-        message.parts.retain(|part| {
-            !part_call_id(part)
-                .as_ref()
-                .is_some_and(|id| call_ids.iter().any(|removed_id| removed_id == id))
-        });
+        message
+            .parts
+            .retain(|part| !part_call_id(part).is_some_and(&is_counterpart));
         !message.parts.is_empty()
     });
 }
 
-fn part_call_id(part: &proteus_contracts::model_standard::CanonicalPart) -> Option<String> {
+fn part_call_id(part: &proteus_contracts::model_standard::CanonicalPart) -> Option<&str> {
     match &part.payload {
-        ContentPart::ToolCall { call } => Some(call.id.clone()),
-        ContentPart::ToolResult { result } => Some(result.call_id.clone()),
+        ContentPart::ToolCall { call } => Some(call.id.as_str()),
+        ContentPart::ToolResult { result } => Some(result.call_id.as_str()),
         _ => None,
     }
 }

@@ -233,15 +233,30 @@ fn run_rg_limited(
 }
 
 fn read_rg_matches(
-    reader: impl BufRead,
+    mut reader: impl BufRead,
     query: &SearchQuery,
 ) -> std::io::Result<(Vec<ContextChunk>, bool)> {
     let mut chunks = Vec::new();
     if query.max_results == 0 {
         return Ok((chunks, false));
     }
-    for line in reader.lines() {
-        let line = line?;
+    let mut line = String::new();
+    loop {
+        // Limit scratch retained between reads, not the line being read.
+        if line.capacity() > 8 * 1024 {
+            line = String::new();
+        } else {
+            line.clear();
+        }
+        if reader.read_line(&mut line)? == 0 {
+            break;
+        }
+        if line.ends_with('\n') {
+            line.pop();
+            if line.ends_with('\r') {
+                line.pop();
+            }
+        }
         let Some(chunk) = parse_rg_match(&line) else {
             continue;
         };
