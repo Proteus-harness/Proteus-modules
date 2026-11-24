@@ -86,9 +86,17 @@ pub(crate) struct SnapshotState {
     verified: bool,
     verified_version: Option<crate::backend::SourceVersion>,
     page_after: Option<u64>,
-    pending: Option<JournalRecord>,
+    pending: Option<PendingPageRecord>,
     pub(crate) display: Option<crate::display::DisplayRecords>,
 }
+struct PendingPageRecord {
+    record: JournalRecord,
+    // Terminal capture has no pre-count; its first page still measures it.
+    // A budget-deferred
+    // record keeps only its own successful exact count until it is consumed.
+    encoded_bytes: Option<usize>,
+}
+
 impl SnapshotState {
     pub fn new(
         identity: StorageSnapshot,
@@ -154,7 +162,8 @@ impl SnapshotState {
             if record.session_seq > prefix.revision.session_seq {
                 continue;
             }
-            state.apply(self.identity.session.session_id, &record)?;
+            // The comparison needs the verified revision, not model context or usage.
+            state.apply_validated(self.identity.session.session_id, &record)?;
         }
         Ok(state.revision() == prefix.revision)
     }
@@ -223,7 +232,10 @@ impl SnapshotState {
         // page checks after independently authenticating the pinned bytes.
         // Blob-bearing JSONL, changed or unknown sources keep the normal scan.
         if terminal.is_some() && before == page_version && self.source.confirm_verified_data()? {
-            self.pending = terminal;
+            self.pending = terminal.map(|record| PendingPageRecord {
+                record,
+                encoded_bytes: None,
+            });
         } else if !continuing {
             if terminal.is_some() && before != page_version {
                 self.source.verify_fixed_prefix()?;
@@ -235,23 +247,29 @@ impl SnapshotState {
         let mut records = Vec::new();
         let mut bytes = 0_usize;
         while records.len() < limit as usize {
-            let record = match self.pending.take() {
-                Some(record) => record,
+            let (record, known_bytes) = match self.pending.take() {
+                Some(pending) => (pending.record, pending.encoded_bytes),
                 None => match self.source.next()? {
-                    Some(record) => record,
+                    Some(record) => (record, None),
                     None => break,
                 },
             };
             if record.session_seq <= after {
                 continue;
             }
-            let record_bytes = crate::codec::encoded_bytes(&record)?;
+            let record_bytes = match known_bytes {
+                Some(bytes) => bytes,
+                None => crate::codec::encoded_bytes(&record)?,
+            };
             ensure!(
                 record_bytes <= SESSION_STORAGE_MAX_RECORD_BYTES,
                 "canonical record exceeds maximum"
             );
             if !records.is_empty() && bytes + record_bytes > SESSION_STORAGE_PAGE_BYTE_BUDGET {
-                self.pending = Some(record);
+                self.pending = Some(PendingPageRecord {
+                    record,
+                    encoded_bytes: Some(record_bytes),
+                });
                 break;
             }
             bytes += record_bytes;

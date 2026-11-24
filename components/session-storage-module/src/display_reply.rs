@@ -1,19 +1,64 @@
-//! Preserve the SDK's Value wire shape while moving owned display text into it.
+//! Move owned storage payloads into the SDK's existing Value wire shape.
 use anyhow::{Context, Result, ensure};
 use proteus_module_sdk::contracts::{
-    contracts::SessionStorageResponse, model_standard::ContentPart,
+    contracts::SessionStorageResponse,
+    model_standard::{CanonicalMessage, ContentPart},
+    storage::journal::JournalEntry,
 };
 use serde_json::Value;
 use std::mem;
 
 pub(super) fn into_value(mut response: SessionStorageResponse) -> Result<Value> {
-    let SessionStorageResponse::DisplaySnapshot {
-        projection: Some(projection),
-    } = &mut response
-    else {
-        return Ok(serde_json::to_value(response)?);
+    let messages = match &mut response {
+        SessionStorageResponse::Metadata {
+            document: Some(document),
+        } => {
+            // ReadCache already hydrated this Value and checked its source.
+            // Serialize the small envelope, not a second copy of the tree.
+            let payload = mem::take(&mut document.value);
+            let mut result = serde_json::to_value(response)?;
+            let slot = result
+                .get_mut("document")
+                .and_then(|value| value.get_mut("value"))
+                .context("serialized cache document omitted its value slot")?;
+            ensure!(slot.is_null(), "serialized cache value slot changed");
+            *slot = payload;
+            return Ok(result);
+        }
+        SessionStorageResponse::DisplaySnapshot {
+            projection: Some(projection),
+        } => mem::take(&mut projection.state.conversation.messages),
+        SessionStorageResponse::Records { page } => {
+            let records = mem::take(&mut page.records);
+            let mut result = serde_json::to_value(response)?;
+            let output = result
+                .get_mut("page")
+                .and_then(|value| value.get_mut("records"))
+                .and_then(Value::as_array_mut)
+                .context("serialized display page omitted its records array")?;
+            output.reserve_exact(records.len());
+            for mut record in records {
+                if let JournalEntry::HistoryMutated(mutation) = &mut record.entry {
+                    let messages = mem::take(&mut mutation.messages);
+                    let mut value = serde_json::to_value(record)?;
+                    let output_messages = value
+                        .get_mut("entry")
+                        .and_then(|value| value.get_mut("payload"))
+                        .and_then(|value| value.get_mut("messages"))
+                        .and_then(Value::as_array_mut)
+                        .context(
+                            "serialized display history mutation omitted its messages array",
+                        )?;
+                    move_messages(output_messages, messages)?;
+                    output.push(value);
+                } else {
+                    output.push(serde_json::to_value(record)?);
+                }
+            }
+            return Ok(result);
+        }
+        _ => return Ok(serde_json::to_value(response)?),
     };
-    let messages = mem::take(&mut projection.state.conversation.messages);
     let mut result = serde_json::to_value(response)?;
     let serialized_messages = result
         .get_mut("projection")
@@ -22,6 +67,14 @@ pub(super) fn into_value(mut response: SessionStorageResponse) -> Result<Value> 
         .and_then(|value| value.get_mut("messages"))
         .and_then(Value::as_array_mut)
         .context("serialized display snapshot omitted its messages array")?;
+    move_messages(serialized_messages, messages)?;
+    Ok(result)
+}
+
+fn move_messages(
+    serialized_messages: &mut Vec<Value>,
+    messages: Vec<CanonicalMessage>,
+) -> Result<()> {
     serialized_messages.reserve_exact(messages.len());
 
     // Use the pinned DTO serializer to emit every key and its position. Only
@@ -57,5 +110,5 @@ pub(super) fn into_value(mut response: SessionStorageResponse) -> Result<Value> 
         serialized_messages.push(value);
     }
 
-    Ok(result)
+    Ok(())
 }

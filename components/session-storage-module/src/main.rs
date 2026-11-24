@@ -27,25 +27,30 @@ impl SessionStorageModule for Backend {
         self.0.execute(request)
     }
 }
-struct DisplayExport {
+struct StorageExport {
     standard: SessionStorageExport<Backend>,
     backend: Backend,
     projection_negotiated: bool,
 }
 
-impl Export for DisplayExport {
+impl Export for StorageExport {
     fn manifest(&self) -> ProcessComponentExportManifest {
         self.standard.manifest()
     }
 
     fn invoke(&self, method: &str, params: Value, host: &HostBridge) -> Result<Value> {
-        // Leave the existing SDK contract and errors in charge for every
-        // other request, including unnegotiated display requests.
-        if !self.projection_negotiated
-            || method != PROCESS_SESSION_STORAGE_EXECUTE_METHOD
-            || params.get("operation").and_then(Value::as_str) != Some("open_display_snapshot")
-        {
+        if method != PROCESS_SESSION_STORAGE_EXECUTE_METHOD {
             return self.standard.invoke(method, params, host);
+        }
+        match params.get("operation").and_then(Value::as_str) {
+            // Canonical records and disposable caches do not require
+            // projection negotiation.
+            Some("read_records" | "read_cache") => {}
+            Some("open_display_snapshot" | "read_display_records")
+                if self.projection_negotiated => {}
+            // Leave the SDK in charge of all other operations and errors,
+            // including unnegotiated display requests.
+            _ => return self.standard.invoke(method, params, host),
         }
         let request: SessionStorageRequest = serde_json::from_value(params)?;
         request.validate()?;
@@ -82,7 +87,7 @@ fn load(binding: ProcessComponentExportInitialize) -> Result<Box<dyn Export>> {
         .module_features
         .iter()
         .any(|feature| feature == SESSION_STORAGE_DISPLAY_PROJECTION_FEATURE);
-    Ok(Box::new(DisplayExport {
+    Ok(Box::new(StorageExport {
         standard,
         backend,
         projection_negotiated,
