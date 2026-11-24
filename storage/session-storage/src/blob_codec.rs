@@ -73,9 +73,42 @@ fn chunk_len(bytes: &[u8]) -> usize {
     end
 }
 
+/// A digest that belongs to this exact borrowed payload. Callers cannot
+/// attach a digest copied from a different buffer or mutate these bytes.
+pub(crate) struct BlobIdentity<'a> {
+    bytes: &'a [u8],
+    sha256: String,
+}
+
+impl<'a> BlobIdentity<'a> {
+    pub(crate) fn new(bytes: &'a [u8]) -> Result<Self> {
+        ensure!(bytes.len() <= MAX_PAYLOAD_BYTES, "blob exceeds maximum");
+        Ok(Self {
+            bytes,
+            sha256: sha256_hex(bytes),
+        })
+    }
+
+    pub(crate) fn sha256(&self) -> &str {
+        &self.sha256
+    }
+
+    pub(crate) fn into_sha256(self) -> String {
+        self.sha256
+    }
+
+    pub(crate) fn pack(&self, session: &Path) -> Result<Vec<u8>> {
+        pack_inner(session, self.bytes, Some(&self.sha256))
+    }
+}
+
 /// Write all shared chunks before publishing the returned manifest. Journal
 /// references continue to identify the hash and size of the original bytes.
 pub fn pack(session: &Path, bytes: &[u8]) -> Result<Vec<u8>> {
+    pack_inner(session, bytes, None)
+}
+
+fn pack_inner(session: &Path, bytes: &[u8], known_sha256: Option<&str>) -> Result<Vec<u8>> {
     ensure!(bytes.len() <= MAX_PAYLOAD_BYTES, "blob exceeds maximum");
     if bytes.len() < MIN_CHUNK {
         return Ok(bytes.to_vec());
@@ -89,7 +122,7 @@ pub fn pack(session: &Path, bytes: &[u8]) -> Result<Vec<u8>> {
     }
     let manifest = Manifest {
         bytes: bytes.len(),
-        sha256: sha256_hex(bytes),
+        sha256: known_sha256.map_or_else(|| sha256_hex(bytes), str::to_owned),
         chunks,
     };
     let mut packed = MAGIC.to_vec();

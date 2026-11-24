@@ -14,6 +14,9 @@ pub(crate) struct DisplayWriter {
     writer: BufWriter<File>,
     budget: u64,
     remaining: u64,
+    // These are capacity hints from bytes successfully staged, not an index
+    // of record identities or trusted read sizes.
+    large_lines: Vec<(u64, usize)>,
 }
 
 const LARGE_JSONL_STAGE_MIN_SOURCE_BYTES: u64 = 1024 * 1024;
@@ -46,17 +49,24 @@ impl DisplayWriter {
             writer,
             budget,
             remaining: budget,
+            large_lines: Vec::new(),
         })
     }
 
     pub fn push(&mut self, record: &JournalRecord) -> Result<()> {
         let before = self.remaining;
         serde_json::to_writer(&mut *self, record)?;
+        let record_bytes = before - self.remaining;
         ensure!(
-            before - self.remaining <= SESSION_STORAGE_MAX_RECORD_BYTES as u64,
+            record_bytes <= SESSION_STORAGE_MAX_RECORD_BYTES as u64,
             "display record exceeds maximum"
         );
         self.write_all(b"\n")?;
+        // The aggregate staging budget caps the number of these hints.
+        if record_bytes > SESSION_STORAGE_PAGE_BYTE_BUDGET as u64 {
+            self.large_lines
+                .push((self.budget - before, record_bytes as usize + 1));
+        }
         Ok(())
     }
 
@@ -66,6 +76,12 @@ impl DisplayWriter {
             bytes: self.budget - self.remaining,
             after: None,
             pending: None,
+            large_lines: (!self.large_lines.is_empty()).then(|| {
+                Box::new(LargeStageLines {
+                    lengths: self.large_lines,
+                    offset: Some(0),
+                })
+            }),
         })
     }
 }
@@ -188,10 +204,17 @@ fn display_writer_keeps_stage_bytes_budget_and_failed_flush_fallback() {
             writer: BufWriter::with_capacity(capacity, File::open(file.path()).unwrap()),
             budget: MAX_STAGING_BYTES,
             remaining: MAX_STAGING_BYTES,
+            large_lines: Vec::new(),
         };
         let projection = failing.push(&record).ok().and_then(|()| failing.finish());
         assert!(projection.is_none());
     }
+}
+
+struct LargeStageLines {
+    lengths: Vec<(u64, usize)>,
+    // Reset on rewind and disabled after an ambiguous partial read error.
+    offset: Option<u64>,
 }
 
 pub(crate) struct DisplayRecords {
@@ -199,9 +222,16 @@ pub(crate) struct DisplayRecords {
     pub(crate) bytes: u64,
     after: Option<u64>,
     pending: Option<(JournalRecord, usize)>,
+    large_lines: Option<Box<LargeStageLines>>,
 }
 
 impl DisplayRecords {
+    fn advance_large_line_offset(&mut self, bytes: usize) {
+        if let Some(lines) = &mut self.large_lines {
+            lines.offset = lines.offset.and_then(|start| start.checked_add(bytes as u64));
+        }
+    }
+
     fn next(&mut self, line: &mut Vec<u8>) -> Result<Option<(JournalRecord, usize)>> {
         fn decode(line: &[u8]) -> Result<(JournalRecord, usize)> {
             ensure!(line.ends_with(b"\n"), "incomplete display staging record");
@@ -218,6 +248,7 @@ impl DisplayRecords {
                     let count = end + 1;
                     let result = decode(&buffered[..count]);
                     self.reader.consume(count);
+                    self.advance_large_line_offset(count);
                     return result.map(Some);
                 }
             }
@@ -225,7 +256,30 @@ impl DisplayRecords {
             Err(error) if error.kind() == io::ErrorKind::Interrupted => {}
             Err(error) => return Err(error.into()),
         }
-        if self.reader.read_until(b'\n', line)? == 0 {
+        if let Some(lines) = &self.large_lines
+            && let Some(start) = lines.offset
+            && let Ok(index) = lines.lengths.binary_search_by_key(&start, |(offset, _)| *offset)
+        {
+            let bytes = lines.lengths[index].1;
+            // Skip the hint if allocation fails or the staged file is now
+            // shorter. Neither condition changes the ordinary read/error path.
+            if self.reader.get_ref().metadata().is_ok_and(|meta| {
+                start.checked_add(bytes as u64).is_some_and(|end| end <= meta.len())
+            }) {
+                let _ = line.try_reserve_exact(bytes);
+            }
+        }
+        let read = match self.reader.read_until(b'\n', line) {
+            Ok(read) => read,
+            Err(error) => {
+                if let Some(lines) = &mut self.large_lines {
+                    lines.offset = None;
+                }
+                return Err(error.into());
+            }
+        };
+        self.advance_large_line_offset(read);
+        if read == 0 {
             return Ok(None);
         }
         let decoded = decode(line)?;
@@ -249,6 +303,9 @@ impl DisplayRecords {
         if self.after != Some(after) {
             self.reader.rewind()?;
             self.pending = None;
+            if let Some(lines) = &mut self.large_lines {
+                lines.offset = Some(0);
+            }
         }
         self.after = None;
         let mut records = Vec::new();

@@ -101,7 +101,9 @@ impl State {
         let mut fold = Fold::default();
         let mut found = None;
         while let Some(record) = source.next()? {
-            fold.apply(session.session_id, &record)?;
+            // An ACK needs the validated revision and original record, not the
+            // model-context or usage views. Still validate the entire suffix.
+            fold.apply_validated(session.session_id, &record)?;
             if record.record_id == id {
                 found = Some(StorageCommitAck {
                     operation_id: id,

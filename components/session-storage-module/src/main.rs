@@ -43,9 +43,9 @@ impl Export for StorageExport {
             return self.standard.invoke(method, params, host);
         }
         match params.get("operation").and_then(Value::as_str) {
-            // Canonical records and disposable caches do not require
-            // projection negotiation.
-            Some("read_records" | "read_cache") => {}
+            // Canonical records, conversation and disposable caches do not
+            // require projection negotiation.
+            Some("read_records" | "read_conversation" | "read_cache") => {}
             Some("open_display_snapshot" | "read_display_records")
                 if self.projection_negotiated => {}
             // Leave the SDK in charge of all other operations and errors,

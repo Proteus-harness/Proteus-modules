@@ -1,6 +1,10 @@
 //! A disposable catalog index over a previously validated journal and blobs.
 use super::*;
-use std::{collections::BTreeMap, fs::OpenOptions, io::Write};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    fs::OpenOptions,
+    io::Write,
+};
 
 const FILE: &str = ".storage-catalog-v1.json";
 const MAX_BYTES: usize = 4 * 1024 * 1024;
@@ -27,21 +31,32 @@ struct Envelope {
 }
 
 pub(in crate::service) fn blob_stamps(dir: &Path) -> Option<BlobStamps> {
-    let root = dir.join("blobs");
     let mut stamps = BTreeMap::new();
+    walk_blob_stamps(dir, |name, stamp| {
+        stamps.insert(name.to_owned(), stamp);
+        stamps.len()
+    })?;
+    Some(stamps)
+}
+
+// The observer returns the number of distinct paths seen, not the number of
+// directory entries. A changing directory can report a name more than once.
+fn walk_blob_stamps(dir: &Path, mut observe: impl FnMut(&Path, FileStamp) -> usize) -> Option<()> {
+    let root = dir.join("blobs");
+    let mut observed = 0;
     let mut pending = vec![(PathBuf::new(), 0)];
-    while let Some((relative, depth)) = pending.pop() {
+    while let Some((mut relative, depth)) = pending.pop() {
         let mut path = root.join(&relative);
         let entries = match std::fs::read_dir(&path) {
             Ok(entries) => entries,
             Err(error) if depth == 0 && error.kind() == std::io::ErrorKind::NotFound => {
-                return Some(BTreeMap::new());
+                return Some(());
             }
             Err(_) => return None,
         };
         for entry in entries {
             let entry = entry.ok()?;
-            if stamps.len() >= MAX_BLOBS {
+            if observed >= MAX_BLOBS {
                 return None;
             }
             let leaf = entry.file_name();
@@ -49,16 +64,66 @@ pub(in crate::service) fn blob_stamps(dir: &Path) -> Option<BlobStamps> {
             path.push(&leaf);
             let meta = std::fs::symlink_metadata(&path).ok()?;
             path.pop();
-            let name = relative.join(leaf);
+            // The comparator borrows this reusable relative name; only the
+            // collecting observer needs a separate allocation for each path.
+            relative.push(leaf);
             if meta.is_dir() && depth < 16 {
-                pending.push((name.clone(), depth + 1));
+                pending.push((relative.clone(), depth + 1));
             } else if !meta.is_file() {
                 return None;
             }
-            stamps.insert(name, file_stamp(&meta).ok()?);
+            observed = observe(&relative, file_stamp(&meta).ok()?);
+            relative.pop();
         }
     }
-    Some(stamps)
+    Some(())
+}
+
+struct BlobStampMatch<'a> {
+    // Index keys are already sorted under the same Path ordering. Borrow
+    // their stamps and keep only the outcome of the last observation.
+    paths: Vec<(&'a PathBuf, &'a FileStamp, Option<bool>)>,
+    seen_expected: usize,
+    unexpected: BTreeSet<PathBuf>,
+}
+
+impl<'a> BlobStampMatch<'a> {
+    fn new(expected: &'a BlobStamps) -> Self {
+        Self {
+            paths: expected.iter().map(|(p, s)| (p, s, None)).collect(),
+            seen_expected: 0,
+            unexpected: BTreeSet::new(),
+        }
+    }
+
+    fn observe(&mut self, name: &Path, stamp: FileStamp) -> usize {
+        match self
+            .paths
+            .binary_search_by(|(p, _, _)| p.as_path().cmp(name))
+        {
+            Ok(index) => {
+                let (_, expected, last) = &mut self.paths[index];
+                self.seen_expected += usize::from(last.is_none());
+                *last = Some(**expected == stamp);
+            }
+            Err(_) => {
+                // Keep distinct unexpected paths too, so the walk hits the
+                // same cap at the same entry even for an invalid catalog.
+                self.unexpected.insert(name.to_owned());
+            }
+        }
+        self.seen_expected + self.unexpected.len()
+    }
+
+    fn matches(&self) -> bool {
+        self.unexpected.is_empty() && self.paths.iter().all(|(_, _, last)| *last == Some(true))
+    }
+}
+
+fn matches_blob_stamps(dir: &Path, expected: &BlobStamps) -> Option<bool> {
+    let mut seen = BlobStampMatch::new(expected);
+    walk_blob_stamps(dir, |name, stamp| seen.observe(name, stamp))?;
+    Some(seen.matches())
 }
 
 /// Keep only a fixed-size proof in the in-process catalog, including for
@@ -127,7 +192,7 @@ pub(super) fn load(
     if checksum != digest
         || index.summary.descriptor.session != descriptor.session
         || &index.stamps != stamps
-        || blob_stamps(dir)? != index.blobs
+        || !matches_blob_stamps(dir, &index.blobs)?
         || source_stamp(dir, journal_kind(descriptor)?)
             .ok()?
             .as_slice()

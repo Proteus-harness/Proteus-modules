@@ -1,6 +1,6 @@
 //! Schema-21 JSONL encoding. Kept byte-format compatible with existing sessions.
 use crate::{
-    io::{MAX_PAYLOAD_BYTES, atomic_write, bounded_read, sha256_hex},
+    io::{MAX_PAYLOAD_BYTES, atomic_write, bounded_read},
     types::*,
 };
 use anyhow::{Context, Result, bail, ensure};
@@ -70,8 +70,8 @@ pub(crate) fn encode(
     let payload = if bytes.len() < blob_threshold {
         StoredPayload::Inline { value }
     } else {
-        let hash = sha256_hex(&bytes);
-        let name = PathBuf::from(format!("{hash}.json"));
+        let identity = crate::blob_codec::BlobIdentity::new(&bytes)?;
+        let name = PathBuf::from(format!("{}.json", identity.sha256()));
         let relative_path = Path::new("blobs").join(&name);
         let path = session.join(&relative_path);
         let stored = if path.try_exists()? {
@@ -82,14 +82,14 @@ pub(crate) fn encode(
             );
             stored
         } else {
-            let stored = crate::blob_codec::pack(session, &bytes)?;
+            let stored = identity.pack(session)?;
             atomic_write(&path, &stored)?;
             stored
         };
         blobs = crate::blob_codec::chunk_files(&stored)?;
         blobs.push(name);
         StoredPayload::Blob {
-            sha256: hash,
+            sha256: identity.into_sha256(),
             bytes: bytes.len() as u64,
             relative_path,
         }
