@@ -28,6 +28,8 @@ pub(crate) struct SourceVersion {
     pub changed: (i64, i64),
 }
 
+type DisplayRowVisitor<'a> = dyn FnMut(&JournalRecord, Option<String>) -> Result<()> + 'a;
+
 pub(crate) trait RecordSnapshot: Send {
     /// None means the backend transaction already pins an immutable view.
     fn source_version(&self) -> Result<Option<SourceVersion>> {
@@ -57,6 +59,15 @@ pub(crate) trait RecordSnapshot: Send {
     /// part of the snapshot identity and is not needed by every backend.
     fn next_with_scratch(&mut self, _line: &mut Vec<u8>) -> Result<Option<JournalRecord>> {
         self.next()
+    }
+    /// Opt in to a backend-specific validation stream. False means that
+    /// no rows or cursor state have been touched and the caller must replay.
+    fn try_visit_display_rows(
+        &mut self,
+        _cut: Option<u64>,
+        _visit: &mut DisplayRowVisitor<'_>,
+    ) -> Result<bool> {
+        Ok(false)
     }
     fn fingerprint(&self) -> &str;
     /// Digest of bytes consumed by `next`. A complete validated replay seeds the writer head.

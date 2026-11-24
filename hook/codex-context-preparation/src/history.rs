@@ -13,15 +13,14 @@ pub(crate) struct HistoryParts {
     pub(crate) ephemeral_context: Vec<CanonicalMessage>,
     /// Messages shown to the summary model, including canonical context.
     pub(crate) summary_history: Vec<CanonicalMessage>,
-    /// Durable conversation items from which bounded real user messages are
-    /// selected for replacement history.
-    pub(crate) compactable_history: Vec<CanonicalMessage>,
+    /// Number of durable conversation items in the input history.
+    pub(crate) compactable_message_count: usize,
 }
 
 pub(crate) fn split_history(messages: &[CanonicalMessage]) -> HistoryParts {
     let mut ephemeral_context = Vec::new();
     let mut summary_history = Vec::new();
-    let mut compactable_history = Vec::new();
+    let mut compactable_message_count = 0;
 
     for message in messages {
         summary_history.push(message.clone());
@@ -38,14 +37,14 @@ pub(crate) fn split_history(messages: &[CanonicalMessage]) -> HistoryParts {
                 ephemeral_context.push(message.clone());
             }
         } else {
-            compactable_history.push(message.clone());
+            compactable_message_count += 1;
         }
     }
 
     HistoryParts {
         ephemeral_context,
         summary_history,
-        compactable_history,
+        compactable_message_count,
     }
 }
 
@@ -116,6 +115,9 @@ pub(crate) fn select_recent_user_messages(
         if remaining == 0 {
             break;
         }
+        if !is_real_user_message(message) {
+            continue;
+        }
         let text = message_text(message).unwrap_or_default();
         let tokens = crate::budget::estimate_text_tokens(&text);
         let has_images = message
@@ -167,11 +169,9 @@ pub(crate) fn select_recent_user_messages(
 
 pub(crate) fn replacement_messages(
     ephemeral_context: &[CanonicalMessage],
-    preserved_user_messages: &[CanonicalMessage],
+    mut replacement: Vec<CanonicalMessage>,
     summary: &str,
 ) -> Vec<CanonicalMessage> {
-    let mut replacement = preserved_user_messages.to_vec();
-
     // Upstream Codex keeps the compaction summary last. For mid-turn
     // compaction it re-injects canonical initial context immediately before
     // the last real user message; if no user survives the budget, context is

@@ -22,7 +22,10 @@ use crate::{
     fake::FakeModelClient,
 };
 
+use crate::adapters::openai::go::Go;
+
 struct ProviderModule {
+    go: Option<Arc<Go>>,
     runtime: tokio::runtime::Runtime,
     streaming: Arc<dyn Model>,
     complete: Arc<dyn Model>,
@@ -41,16 +44,33 @@ pub fn register_model(registry: &mut dyn ModuleRegistry, id: &str) -> ProcessMod
         .enable_all()
         .build()
         .map_err(error)?;
-    let (streaming, complete) = {
+    let go = (implementation == "opencode_go")
+        .then(Go::new)
+        .transpose()
+        .map_err(error)?;
+    let (streaming, complete): (Arc<dyn Model>, Arc<dyn Model>) = {
         let _guard = runtime.enter();
-        (
-            build(implementation, registry.module_config(), true)?,
-            build(implementation, registry.module_config(), false)?,
-        )
+        match &go {
+            Some(g) => (
+                Arc::new(
+                    g.transport(registry.module_config().clone(), true)
+                        .map_err(error)?,
+                ),
+                Arc::new(
+                    g.transport(registry.module_config().clone(), false)
+                        .map_err(error)?,
+                ),
+            ),
+            None => (
+                build(implementation, registry.module_config(), true)?,
+                build(implementation, registry.module_config(), false)?,
+            ),
+        }
     };
     registry.register_model(
         id.to_owned(),
         Box::new(ProviderModule {
+            go,
             runtime,
             streaming,
             complete,
@@ -100,6 +120,11 @@ impl ModelModule for ProviderModule {
     }
 
     fn describe(&self, model: ModelRef) -> ProcessModuleResult<ProcessModelDescriptor> {
+        if let Some(go) = &self.go
+            && !go.contains(&model.model)
+        {
+            self.runtime.block_on(go.catalog()).map_err(error)?;
+        }
         Ok(ProcessModelDescriptor {
             adapter_id: self.streaming.id().into_owned(),
             capabilities: self.streaming.capabilities(&model).map_err(error)?,

@@ -1,5 +1,5 @@
 //! Lossless content-defined chunks shared by large journal payloads.
-use crate::io::{MAX_PAYLOAD_BYTES, atomic_write, bounded_read, bounded_read_into, sha256_hex};
+use crate::io::{MAX_PAYLOAD_BYTES, atomic_write, bounded_file_eq, bounded_read_into, sha256_hex};
 use anyhow::{Result, ensure};
 use serde::{Deserialize, Serialize};
 use std::{
@@ -106,7 +106,7 @@ fn store_chunk(session: &Path, bytes: &[u8]) -> Result<Chunk> {
     let path = chunk_path(session, &sha256)?;
     if path.try_exists()? {
         ensure!(
-            bounded_read(&path, MAX_CHUNK)? == bytes,
+            bounded_file_eq(&path, bytes, MAX_CHUNK)?,
             "shared blob collision"
         );
     } else {

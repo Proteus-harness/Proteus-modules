@@ -7,6 +7,11 @@ use std::path::PathBuf;
 mod record;
 
 const FILE: &str = "journal.sqlite";
+// Exact schema text of the built-in writer (SQLite drops IF NOT EXISTS).
+// Anything else, including hand-built compatible tables, uses the seek reader.
+const WRITER_JOURNAL_SCHEMA: &str = "CREATE TABLE journal (
+                sequence INTEGER PRIMARY KEY CHECK(sequence>0), record_id TEXT UNIQUE NOT NULL, payload BLOB NOT NULL
+            )";
 
 #[derive(Default)]
 pub(crate) struct Sqlite {
@@ -300,6 +305,38 @@ impl RecordSnapshot for SqliteSnapshot {
         self.after = sequence;
         Ok(Some(record))
     }
+    fn try_visit_display_rows(
+        &mut self,
+        cut: Option<u64>,
+        visit: &mut DisplayRowVisitor<'_>,
+    ) -> Result<bool> {
+        let Some(conn) = &self.conn else {
+            return Ok(false);
+        };
+        if conn.is_autocommit() || self.after != 0 || !writer_journal_for_display(conn) {
+            return Ok(false);
+        }
+
+        // The exact writer table has one integral row per sequence. Match the
+        // seek reader's positive range; sequence gaps still fail in the fold.
+        let mut stmt = conn.prepare(
+            "SELECT sequence,payload FROM journal WHERE sequence>0 AND sequence<=?1 ORDER BY sequence",
+        )?;
+        let mut rows = stmt.query([i64::try_from(self.end)?])?;
+        while let Some(row) = rows.next()? {
+            let sequence = u64::try_from(row.get::<_, i64>(0)?)?;
+            let bytes = payload_bytes(row, 1)?;
+            self.current_hash.update(bytes);
+            let record = decode_record(self.id, sequence, bytes)?;
+            self.after = record.session_seq;
+            let boundary = (cut == Some(self.after))
+                .then(|| crate::io::digest_hex(self.current_hash.clone().finish()));
+            visit(&record, boundary)?;
+        }
+        let actual = crate::io::digest_hex(self.current_hash.clone().finish());
+        ensure!(actual == self.fingerprint, "SQLite snapshot prefix changed");
+        Ok(true)
+    }
     fn consumed_fingerprint(&self) -> String {
         crate::io::digest_hex(self.current_hash.clone().finish())
     }
@@ -335,10 +372,19 @@ impl RecordSnapshot for SqliteSnapshot {
                 "SQLite journal prefix has a sequence gap"
             );
         }
-        Ok(Some(
-            crate::io::digest_hex(hash.finish()),
-        ))
+        Ok(Some(crate::io::digest_hex(hash.finish())))
     }
+}
+
+fn writer_journal_for_display(conn: &Connection) -> bool {
+    conn.query_row(
+        "SELECT EXISTS(SELECT 1 FROM main.sqlite_schema
+                       WHERE type='table' AND name='journal' AND rootpage>0 AND sql=?1)
+             AND NOT EXISTS(SELECT 1 FROM temp.sqlite_schema WHERE name='journal')",
+        [WRITER_JOURNAL_SCHEMA],
+        |row| row.get(0),
+    )
+    .unwrap_or(false)
 }
 
 fn decode_record(id: SessionId, sequence: u64, bytes: &[u8]) -> Result<JournalRecord> {

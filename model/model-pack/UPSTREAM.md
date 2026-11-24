@@ -158,3 +158,23 @@ Browser/device OAuth, refresh и сетевой contract проверяются 
 Process regression проверяет tool loop, journal, cold resume и workflow replay.
 Эти проверки не доказывают доступ конкретного аккаунта к live backend; первый
 настоящий вход и model request требуют аккаунта владельца.
+
+## OpenCode Go
+
+Реализация opencode_go обслуживает model/v14 через официальный совместимый
+endpoint Responses в https://opencode.ai/inference/go/openai/v1. Привязку
+к сессии передают заголовки OpenCode. Поток ответов и вызовов инструментов
+обрабатывает существующий Rust-адаптер Responses. Ключ выбирается из настроек
+подключения, затем из SQLite-базы OpenCode v2 (активная или последняя запись),
+затем из OPENCODE_API_KEY. Запись OAuth требует отдельного механизма refresh.
+
+Каталог текстовых моделей и их возможностей берётся из публичного
+https://opencode.ai/inference/go/v1/models. Встроенный catalog-seed.json —
+выбранные поля ответа этого API от 24 ноября 2026 для автономного первого
+describe. Квоты и бюджеты используют те же API учётной записи, что и
+components/model-runtime-js/opencode-go-quota.mjs. Настройки models_file и
+models_url для каталога ModelsDev обслуживает прежний JS-адаптер.
+
+Документация API: https://opencode.ai/docs/console/go/. Для сверки заголовков
+и протоколов использованы исходники oc, ревизия 5f906f289ebe19bbcfff0296228a1d134870dd5c,
+crates/oc-adapters/src/provider/context.rs и provider/protocol.rs.

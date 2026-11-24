@@ -2,7 +2,7 @@
 //! compact_remote_v2.rs and compact_remote_v2_images.rs (Apache-2.0).
 use proteus_contracts::model_standard::input_estimates::ModelInputEstimate;
 use proteus_contracts::{
-    domain::{CompactionUserMessageReplacement, ToolContent, new_message_id},
+    domain::{CompactionUserMessageReplacement, ToolContent},
     model_standard::{CanonicalMessage, CanonicalPart, ContentPart, PartProvenance, PartScope},
 };
 
@@ -156,9 +156,11 @@ pub(crate) fn select_recent_users(
         if parts.is_empty() {
             continue;
         }
-        let mut replacement = message.clone();
-        replacement.id = new_message_id();
-        replacement.parts = parts;
+        let mut replacement = CanonicalMessage::from_parts(message.role.clone(), parts);
+        replacement.phase = message.phase;
+        replacement.name = message.name.clone();
+        replacement.tool_call_id = message.tool_call_id.clone();
+        replacement.metadata = message.metadata.clone();
         selected
             .replacements
             .push(CompactionUserMessageReplacement {
