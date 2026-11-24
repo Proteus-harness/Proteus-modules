@@ -12,8 +12,13 @@ pub fn config_schema(config: &Value) -> ModuleConfigSchema {
         .and_then(Value::as_str)
         .unwrap_or("");
     let mut fields = vec![Field::new("implementation","Способ подключения","Способ подключения провайдера. Модель задаётся отдельно. После сохранения форма обновится для выбранного подключения.",Kind::choices(&[
-        ("openai","OpenAI API"),("openai_compatible","OpenAI-совместимый API"),("openai_codex","Подписка ChatGPT"),("anthropic","Anthropic API"),("fake","Тестовая модель"),
+        ("openai","OpenAI API"),("openai_compatible","OpenAI-совместимый API"),("openai_codex","Подписка ChatGPT"),("anthropic","Anthropic API"),("opencode_go","OpenCode Go (Rust)"),("fake","Тестовая модель"),
     ])).required()];
+    if implementation == "opencode_go" {
+        fields.push(Field::new("api_key", "Ключ API", "Явный ключ OpenCode Go для этого подключения.", Kind::String { multiline: false, secret: true }));
+        fields.push(Field::new("database_path", "База OpenCode", "Путь к SQLite-базе сохранённых ключей OpenCode.", Kind::text()).advanced());
+        return sections::group(fields);
+    }
     if implementation == "fake" {
         fields.push(
             Field::new(

@@ -16,6 +16,7 @@ fn provider(implementation: &str, config: Value) -> ProviderModule {
         build(implementation, &config, true).unwrap()
     };
     ProviderModule {
+        go: None,
         runtime,
         streaming: client.clone(),
         complete: client,

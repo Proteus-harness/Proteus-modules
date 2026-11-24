@@ -108,5 +108,31 @@
       ],
       "credential_file_key": "auth_file"
     }
+  },
+  {
+    "id": "opencode-go-rust",
+    "title": "OpenCode Go (Rust)",
+    "description": "Подписка OpenCode Go. Использует сохранённый ключ OpenCode; при необходимости задайте явный ключ этого подключения.",
+    "module_id": "opencode-go",
+    "module_config": {
+      "implementation": "opencode_go"
+    },
+    "env_allowlist": [
+      "PATH",
+      "HOME",
+      "XDG_CONFIG_HOME",
+      "XDG_DATA_HOME",
+      "XDG_STATE_HOME",
+      "XDG_CACHE_HOME",
+      "HTTP_PROXY",
+      "HTTPS_PROXY",
+      "ALL_PROXY",
+      "NO_PROXY",
+      "http_proxy",
+      "https_proxy",
+      "all_proxy",
+      "no_proxy",
+      "OPENCODE_API_KEY"
+    ]
   }
 ]

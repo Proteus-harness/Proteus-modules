@@ -7,6 +7,8 @@ publish = false
 [dependencies]
 proteus-contracts = { workspace = true }
 anyhow = "1"
+chrono = { version = "0.4", default-features = false, features = ["std"] }
+rusqlite = { version = "=0.41.0", default-features = false, features = ["bundled", "cache"] }
 base64 = "0.22"
 clap = { version = "4", features = ["derive"] }
 async-trait = "0.1"

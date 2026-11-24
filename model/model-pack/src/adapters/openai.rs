@@ -39,6 +39,7 @@ mod codex_tests;
 #[cfg(test)]
 mod compaction_tests;
 mod errors;
+pub(crate) mod go;
 mod hosted_tools;
 mod http_retry;
 #[cfg(test)]
@@ -79,6 +80,7 @@ pub struct OpenAiResponsesClient {
     api_identity: api_identity::ApiIdentity,
     secret_config: Value,
     codex_auth: Option<CodexAuth>,
+    go: Option<Arc<go::Go>>,
     catalog_cache: Arc<codex_catalog::CatalogCache>,
     quota_cache: Arc<codex_quota::QuotaCache>,
     quota_url: Option<String>,
@@ -169,6 +171,7 @@ impl OpenAiResponsesClient {
             api_identity: api_identity::ApiIdentity::from_config(&config)?,
             secret_config: config,
             codex_auth: None,
+            go: None,
             catalog_cache: Arc::default(),
             quota_cache: Arc::default(),
             quota_url: None,
@@ -230,14 +233,23 @@ impl Model for OpenAiResponsesClient {
     }
 
     async fn quota(&self) -> Result<Option<proteus_contracts::contracts::ModelQuotaSnapshot>> {
+        if let Some(go) = &self.go {
+            return Ok(Some(go.quota(&self.secret_config).await?));
+        }
         self.codex_quota().await
     }
 
     async fn catalog(&self) -> Result<Option<proteus_contracts::contracts::ModelCatalog>> {
+        if let Some(go) = &self.go {
+            return Ok(Some(go.catalog().await?));
+        }
         self.codex_catalog().await
     }
 
     fn id(&self) -> std::borrow::Cow<'static, str> {
+        if self.go.is_some() {
+            return "opencode".into();
+        }
         if self.codex_auth.is_some() {
             "openai.codex_subscription".into()
         } else {
@@ -245,7 +257,10 @@ impl Model for OpenAiResponsesClient {
         }
     }
 
-    fn capabilities(&self, _model: &ModelRef) -> anyhow::Result<ModelCapabilities> {
+    fn capabilities(&self, model: &ModelRef) -> anyhow::Result<ModelCapabilities> {
+        if let Some(go) = &self.go {
+            return go.capabilities(&model.model);
+        }
         Ok(self.model_profile.capabilities(self.max_input_tokens))
     }
 

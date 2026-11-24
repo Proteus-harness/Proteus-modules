@@ -108,6 +108,9 @@ impl OpenAiResponsesClient {
     ) -> Result<Value> {
         let mut body =
             to_openai_request_with_cache(request, &self.prompt_cache, &self.model_profile)?;
+        if let Some(go) = &self.go {
+            go.filter_sampling(&request.model.model, &mut body)?;
+        }
         if stream {
             body["stream"] = json!(true);
         }
@@ -132,7 +135,19 @@ impl OpenAiResponsesClient {
         request: &CanonicalModelRequest,
     ) -> Result<HeaderMap> {
         if self.codex_auth.is_none() {
-            return self.api_identity.headers(request);
+            let mut headers = self.api_identity.headers(request)?;
+            if self.go.is_some() {
+                let session = headers["x-opencode-session"].clone();
+                for name in [
+                    "x-opencode-session-id",
+                    "x-session-affinity",
+                    "x-session-id",
+                ] {
+                    headers.insert(name, session.clone());
+                }
+                headers.insert("x-opencode-client", HeaderValue::from_static("proteus"));
+            }
+            return Ok(headers);
         }
         let mut headers = HeaderMap::new();
         // ChatGPT cache affinity uses the conversation identity independently
@@ -159,8 +174,14 @@ impl OpenAiResponsesClient {
     ) -> Result<reqwest::Response> {
         let url = format!("{}/responses", self.base_url);
         let Some(auth) = &self.codex_auth else {
-            let key =
-                read_secret_from_config(&self.secret_config, "OPENAI_API_KEY", "openai_api_key")?;
+            let key = match &self.go {
+                Some(go) => go.key(&self.secret_config)?,
+                None => read_secret_from_config(
+                    &self.secret_config,
+                    "OPENAI_API_KEY",
+                    "openai_api_key",
+                )?,
+            };
             let mut bearer = HeaderValue::from_str(&format!("Bearer {key}"))?;
             bearer.set_sensitive(true);
             let mut headers = HeaderMap::new();
