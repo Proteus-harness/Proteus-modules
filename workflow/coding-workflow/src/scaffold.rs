@@ -105,7 +105,7 @@ impl TurnScaffold {
         .ok_or_else(|| ProcessModuleError::new("workflow input has no current user anchor"))?;
         if current_user_message.role != MessageRole::User
             || (input.runtime.continuation.is_none()
-                && message_text(current_user_message) != input.task.text)
+                && !message_text_matches(current_user_message, &input.task.text))
         {
             return Err(ProcessModuleError::new(
                 "workflow input has no current task user message",
@@ -320,9 +320,9 @@ impl TurnScaffold {
                         "workflow history replacement boundary is beyond persistent history",
                     ));
                 }
-                let mut history_prefix = self.persistent_messages.clone();
-                let new_messages = history_prefix.split_off(replacement_len);
-                (Some(history_prefix), new_messages)
+                // Allocate the returned prefix for just the messages it keeps.
+                let (prefix, suffix) = self.persistent_messages.split_at(replacement_len);
+                (Some(prefix.to_vec()), suffix.to_vec())
             }
             None => {
                 let current_user_position =
@@ -348,14 +348,23 @@ impl TurnScaffold {
     }
 }
 
-fn message_text(message: &CanonicalMessage) -> String {
-    message
-        .parts
-        .iter()
-        .filter_map(|part| match &part.payload {
-            ContentPart::Text { text } => Some(text.as_str()),
-            _ => None,
-        })
-        .collect::<Vec<_>>()
-        .join("\n\n")
+fn message_text_matches(message: &CanonicalMessage, mut expected: &str) -> bool {
+    let mut first = true;
+    for part in &message.parts {
+        let ContentPart::Text { text } = &part.payload else {
+            continue;
+        };
+        if !first {
+            let Some(rest) = expected.strip_prefix("\n\n") else {
+                return false;
+            };
+            expected = rest;
+        }
+        let Some(rest) = expected.strip_prefix(text.as_str()) else {
+            return false;
+        };
+        expected = rest;
+        first = false;
+    }
+    expected.is_empty()
 }

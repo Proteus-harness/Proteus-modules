@@ -8,7 +8,7 @@ use serde_json::{Value, json};
 
 use super::{OpenAiPromptCacheConfig, model_profile::OpenAiModelProfile};
 use crate::{
-    adapters::context_render::{context_text, instruction_text},
+    adapters::context_render::{context_text_block, instruction_text},
     domain::{
         FileSearchHostedToolConfig, HostedToolConfig, ResponseFormat, ToolCall, ToolCallSurface,
         ToolChoice, ToolContent, ToolSpec, ToolSurface, WebSearchHostedToolConfig,
@@ -403,14 +403,14 @@ fn to_openai_input(
                         input.push(openai_text_message(message, text)?);
                     }
                 }
-                ContentPart::Context { chunk } => input.push(json!({
-                    "type": "message",
-                    "role": "user",
-                    "content": [{
-                        "type": "input_text",
-                        "text": context_text(chunk)
-                    }]
-                })),
+                ContentPart::Context { chunk } => {
+                    let mut message = json!({ "type": "message", "role": "user", "content": [] });
+                    *message
+                        .get_mut("content")
+                        .expect("context message has a content slot") =
+                        Value::Array(vec![context_text_block("input_text", chunk)]);
+                    input.push(message);
+                }
                 ContentPart::ToolCall { call } => {
                     tool_call_surfaces.insert(call.id.clone(), call.surface);
                     match call.surface {

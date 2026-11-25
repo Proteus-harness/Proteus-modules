@@ -162,6 +162,10 @@ export class NativeResponseCollector {
             if (!finishReasons[event.reason?.normalized]) throw malformed('Native model has no valid finish reason');
             this.reason = event.reason;
             this.response = this.buildResponse();
+            // The response owns the final parts; no more events can use the builder.
+            this.parts.length = 0;
+            this.blocks.clear();
+            this.#lastBlock = undefined;
             const events = [];
             if (this.response.usage) events.push({ Usage: { usage: this.response.usage } });
             events.push({ MessageCompleted: { message: this.response.messages[0] } });

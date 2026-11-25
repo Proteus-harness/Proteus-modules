@@ -1,4 +1,7 @@
-use std::path::{Component, Path, PathBuf};
+use std::{
+    borrow::Cow,
+    path::{Component, Path, PathBuf},
+};
 
 use anyhow::{Context, Result, anyhow, bail};
 
@@ -57,7 +60,8 @@ pub fn decode_workspace_path(encoded: &str) -> Result<PathBuf> {
         let mut path = PathBuf::from("/");
         for encoded_part in encoded.split('|') {
             let part = decode_workspace_component(encoded_part)?;
-            let mut components = Path::new(&part).components();
+            let part = part.as_ref();
+            let mut components = Path::new(part).components();
             if !matches!(components.next(), Some(Component::Normal(_)))
                 || components.next().is_some()
             {
@@ -99,10 +103,14 @@ pub(crate) fn workspace_path_from_session_dir(session_dir: &Path) -> Result<Path
     decode_workspace_path(encoded)
 }
 
+fn unescaped_workspace_char(ch: char) -> bool {
+    ch.is_alphanumeric() || matches!(ch, '-' | '_' | '.')
+}
+
 fn append_encoded_workspace_component(out: &mut String, input: &str) {
     const HEX: &[u8; 16] = b"0123456789ABCDEF";
     for ch in input.chars() {
-        if ch.is_alphanumeric() || matches!(ch, '-' | '_' | '.') {
+        if unescaped_workspace_char(ch) {
             out.push(ch);
         } else {
             let mut bytes = [0_u8; 4];
@@ -115,12 +123,18 @@ fn append_encoded_workspace_component(out: &mut String, input: &str) {
     }
 }
 
-fn decode_workspace_component(encoded: &str) -> Result<String> {
+fn decode_workspace_component(encoded: &str) -> Result<Cow<'_, str>> {
     if encoded.is_empty() {
         bail!("encoded workspace path contains an empty component");
     }
 
     let input = encoded.as_bytes();
+    // With no escapes, the input is already UTF-8. Use the encoder's
+    // predicate to validate canonical spelling without a temporary buffer.
+    if encoded.chars().all(unescaped_workspace_char) {
+        return Ok(Cow::Borrowed(encoded));
+    }
+
     let mut decoded = Vec::with_capacity(input.len());
     let mut index = 0;
     while index < input.len() {
@@ -147,7 +161,7 @@ fn decode_workspace_component(encoded: &str) -> Result<String> {
     if canonical != encoded {
         bail!("workspace component is not canonically encoded: {encoded:?}");
     }
-    Ok(decoded)
+    Ok(Cow::Owned(decoded))
 }
 
 fn decode_hex(byte: u8) -> Option<u8> {

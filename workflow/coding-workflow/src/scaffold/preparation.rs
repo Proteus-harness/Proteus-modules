@@ -73,7 +73,8 @@ impl TurnScaffold {
                     ));
                 }
                 self.retire_acknowledged_results(&ack.messages)?;
-                self.model_messages = merge_request_context(&self.model_messages, &ack.messages);
+                let model = std::mem::take(&mut self.model_messages);
+                self.model_messages = merge_request_context(model, &ack.messages);
                 self.persistent_messages = ack.messages;
                 self.compactions = ack.history.compactions;
                 self.history_replacement_len =
@@ -97,7 +98,7 @@ impl TurnScaffold {
 /// Keep request-only context at its next retained canonical anchor while
 /// adopting the host's accepted history, including newly delivered steering.
 fn merge_request_context(
-    model: &[CanonicalMessage],
+    model: Vec<CanonicalMessage>,
     canonical: &[CanonicalMessage],
 ) -> Vec<CanonicalMessage> {
     use proteus_contracts::model_standard::PartScope;
@@ -120,19 +121,20 @@ fn merge_request_context(
     let mut groups = std::collections::HashMap::<MessageId, Vec<CanonicalMessage>>::new();
     let mut trailing = Vec::new();
     let mut next_anchor = None;
+    let capacity = model.len().max(canonical.len());
     // Walking backwards finds each context's first retained non-request
     // message without rescanning its suffix or the full canonical history.
-    for message in model[first_context..].iter().rev() {
-        if ephemeral(message) {
+    for message in model.into_iter().skip(first_context).rev() {
+        if ephemeral(&message) {
             match next_anchor {
-                Some(id) => groups.entry(id).or_default().push(message.clone()),
-                None => trailing.push(message.clone()),
+                Some(id) => groups.entry(id).or_default().push(message),
+                None => trailing.push(message),
             }
         } else if accepted.contains(&message.id) {
             next_anchor = Some(message.id);
         }
     }
-    let mut merged = Vec::with_capacity(model.len().max(canonical.len()));
+    let mut merged = Vec::with_capacity(capacity);
     for message in canonical {
         merged.extend(
             groups

@@ -163,9 +163,9 @@ impl State {
     fn cached_summary(
         &mut self,
         dir: &Path,
-        descriptor: &StorageSessionDescriptor,
+        descriptor: StorageSessionDescriptor,
         stamps: &SourceStamp,
-    ) -> Option<StorageSessionSummary> {
+    ) -> std::result::Result<StorageSessionSummary, StorageSessionDescriptor> {
         if let Some(cached) = self.catalog.get(&descriptor.session)
             && &cached.stamps == stamps
             && self
@@ -173,16 +173,18 @@ impl State {
                 .get(&descriptor.session)
                 .is_some_and(|prefix| prefix.valid_at(dir, stamps))
         {
-            return Some(StorageSessionSummary {
-                descriptor: descriptor.clone(),
+            return Ok(StorageSessionSummary {
+                descriptor,
                 message_count: cached.summary.message_count,
                 preview: cached.summary.preview.clone(),
             });
         }
-        let (summary, prefix) = durable::load(dir, descriptor, stamps)?;
+        let Some((summary, prefix)) = durable::load(dir, &descriptor, stamps) else {
+            return Err(descriptor);
+        };
         self.remember_prefix(descriptor.session.clone(), prefix);
         self.remember_summary(stamps.clone(), summary.clone());
-        Some(summary)
+        Ok(summary)
     }
 
     fn remember_summary(&mut self, stamps: SourceStamp, summary: StorageSessionSummary) {
@@ -289,15 +291,18 @@ impl StorageService {
         audit: bool,
     ) -> Result<StorageSessionSummary> {
         let mut state = self.lock_state()?;
-        let descriptor = state.open(path)?;
+        let mut descriptor = state.open(path)?;
         // prime_catalog also accepts a journal path. Work only in the resolved directory.
         let dir = descriptor
             .local_path
             .clone()
             .context("session has no local path")?;
         let stamps = source_stamp(&dir, self.kind)?;
-        if !audit && let Some(hit) = state.cached_summary(&dir, &descriptor, &stamps) {
-            return Ok(hit);
+        if !audit {
+            descriptor = match state.cached_summary(&dir, descriptor, &stamps) {
+                Ok(hit) => return Ok(hit),
+                Err(descriptor) => descriptor,
+            };
         }
         let read = CatalogRead {
             descriptor,

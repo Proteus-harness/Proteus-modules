@@ -200,7 +200,10 @@ export function createNativeRuntime(config, { loadSnapshots, now = Date.now, cac
     return {
         async catalog(signal) {
             const models = (await snapshot(signal)).models
-                .filter(model => model.providerID === providerID && supportsChat(model)).map(catalogEntry);
+                .filter(model => model.providerID === providerID && supportsChat(model));
+            // Filter all rows before formatting, then reuse the private result vector.
+            for (let index = 0, count = models.length; index < count; index++)
+                models[index] = catalogEntry(models[index]);
             if (seed && models.length) {
                 const local = new Map((await seed(signal)).models.map(model => [model.id, model]));
                 for (const entry of models) {

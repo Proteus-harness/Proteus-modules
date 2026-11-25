@@ -11,7 +11,22 @@ function object(value, required, optional = []) {
 
 export async function runComponent(factory) {
     globalThis.console = new Console({ stdout: process.stderr, stderr: process.stderr });
-    const send = frame => process.stdout.write(`${JSON.stringify({ jsonrpc: "2.0", ...frame })}\n`);
+    function encodeFrame(frame, isHostCallback) {
+        try {
+            return `${JSON.stringify({ jsonrpc: "2.0", ...frame })}\n`;
+        } catch (error) {
+            try {
+                if (isHostCallback) {
+                    const id = frame.id;
+                    const waiter = pending.get(id);
+                    if (waiter && pending.delete(id)) waiter.cleanup();
+                }
+            } finally {
+                throw error;
+            }
+        }
+    }
+    const send = (frame, isHostCallback) => process.stdout.write(encodeFrame(frame, isHostCallback));
     const failure = (id, error, code = -32000) => send({ id, error: { code, message: String(error.message ?? error), ...(error.data === undefined ? {} : { data: error.data }) } });
     const exports = new Map();
     const active = new Map();
@@ -34,7 +49,7 @@ export async function runComponent(factory) {
             const canceled = () => { pending.delete(id); canceledCallbacks.add(id); reject(signal.reason); };
             signal.addEventListener("abort", canceled, { once: true });
             pending.set(id, { resolve, reject, cleanup: () => signal.removeEventListener("abort", canceled) });
-            send({ id, method, params: { invocation_id: invocationId, params } });
+            send({ id, method, params: { invocation_id: invocationId, params } }, true);
         });
     }
     async function initialize(request) {

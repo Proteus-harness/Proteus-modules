@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import { runAgentLoop, convertToLlm, buildSystemPrompt, estimateContextTokens, resolveModel, createCodingToolDefinitions, SETTINGS_DEFAULTS, retryDelayMs } from "./upstream.mjs";
 import { executionCall } from "./tool-arguments.mjs";
 import { canonical } from "../../components/module-runtime-js/canonical.mjs";
-import { assistant, finishedStream, piContent, piMessages } from "../../components/pi-runtime-js/messages.mjs";
+import { assistant, finishedStream, piContent, piMessage, piMessages } from "../../components/pi-runtime-js/messages.mjs";
 
 import { receiveModelResponse } from "../../components/module-runtime-js/model-stream.mjs";
 
@@ -11,6 +11,19 @@ function piRetryDelay(failure, attempt) {
     if (!policy.enabled || attempt > policy.maxRetries) return undefined;
     const advice = failure.kind?.retryable?.retry_delay_ms ?? 0;
     return Math.min(policy.maxAgentDelayMs, Math.max(retryDelayMs(policy, attempt), advice));
+}
+
+function initialLoopHistory(history, model, prompt) {
+    const names = new Map();
+    const prefixLength = Math.max(0, history.length - 1);
+    const initial = new Array(prefixLength + 1);
+    initial[0] = { role: "system", content: prompt, timestamp: 0 };
+    // Project straight into the two arrays handed to Pi. Tool results in the
+    // tail can still refer to names learned from earlier messages.
+    for (let index = 0; index < prefixLength; index++)
+        initial[index + 1] = piMessage(history[index], model, names);
+    const tail = history.length ? [piMessage(history[prefixLength], model, names)] : [];
+    return { initial, tail };
 }
 
 export async function workflow({ task, runtime, history }, { hostCall, signal, catalogProvider }) {
@@ -198,11 +211,7 @@ export async function workflow({ task, runtime, history }, { hostCall, signal, c
             pending.delete(msg.toolCallId);
             results.delete(msg.toolCallId);
         };
-        const piHistory = piMessages(history, model);
-        const tail = piHistory.slice(-1);
-        // Reuse the private projection for loop state, keeping the tail separate.
-        for (let i = piHistory.length - 1; i > 0; i--) piHistory[i] = piHistory[i - 1];
-        piHistory[0] = { role: "system", content: prompt, timestamp: 0 };
+        const { initial: piHistory, tail } = initialLoopHistory(history, model, prompt);
         await runAgentLoop(
             tail,
             {

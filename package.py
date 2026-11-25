@@ -117,6 +117,20 @@ def artifact_record(package, executable):
             "sha256": file_sha256(executable)}
 
 
+def cargo_lines(text):
+    """Split ordinary Cargo messages in batches without splitting a line."""
+    batch = 64 * 1024
+    start = 0
+    while len(text) - start > batch:
+        newline = text.find("\n", start + batch, start + 2 * batch)
+        if newline < 0:
+            break
+        end = newline + 1
+        yield from text[start:end].splitlines()
+        start = end
+    yield from text[start:].splitlines()
+
+
 def build(selected, profile="release", target_dir=None, env=None, root=ROOT, *, digests=None):
     command = ["cargo", "build", "--locked", "--profile", profile,
                "--message-format=json-render-diagnostics"]
@@ -132,7 +146,7 @@ def build(selected, profile="release", target_dir=None, env=None, root=ROOT, *, 
     finished = []
     targets = set()
     invalid = False
-    for line in result.stdout.splitlines():
+    for line in cargo_lines(result.stdout):
         try:
             record = json.loads(line)
         except ValueError:

@@ -39,10 +39,11 @@ export function projectInstructions(messages, model) {
     // Rebuild the derived projection so a repeated BeforeModel is idempotent.
     const source = messages.filter(message => !message.metadata?.[PROJECTED]);
     const seen = new Set();
-    const result = [];
+    let result;
     const events = [];
-    for (const message of source) {
-        result.push(message);
+    for (let i = 0; i < source.length; i++) {
+        const message = source[i];
+        if (result) result.push(message);
         events.length = 0;
         collectInstructionEvents(message, events);
         for (const [index, event] of events.entries()) {
@@ -51,7 +52,8 @@ export function projectInstructions(messages, model) {
             for (const path of paths) seen.add(path);
             const id = identity(`${message.id}:${index}:opencode-instructions`);
             const [native] = toLLMMessages([{ ...event, id }], { providerID: model.provider, id: model.model });
-            result.push({
+            // The filtered source is already a fresh result when nothing is inserted.
+            (result ??= source.slice(0, i + 1)).push({
                 id, role: "User", phase: null, name: null, tool_call_id: null,
                 parts: native.content.map((part, partIndex) => {
                     if (part.type !== "text") throw new Error("Unexpected native synthetic instruction content");
@@ -61,5 +63,5 @@ export function projectInstructions(messages, model) {
             });
         }
     }
-    return result;
+    return result ?? source;
 }

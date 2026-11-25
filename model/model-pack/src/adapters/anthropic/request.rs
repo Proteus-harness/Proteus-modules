@@ -3,7 +3,7 @@ use serde_json::{Value, json};
 
 use super::AnthropicPromptCacheConfig;
 use crate::{
-    adapters::context_render::{context_text, instruction_text},
+    adapters::context_render::{context_text_block, instruction_text},
     domain::{ToolCallSurface, ToolChoice, ToolContent, ToolSpec, ToolSurface},
     model_standard::{
         CanonicalMessage, CanonicalModelRequest, ContentPart, MessageRole, ModelOperation,
@@ -242,10 +242,7 @@ fn anthropic_content_blocks(message: &CanonicalMessage) -> Result<Vec<Value>> {
     for part in &message.parts {
         match &part.payload {
             ContentPart::Text { text } => blocks.push(json!({ "type": "text", "text": text })),
-            ContentPart::Context { chunk } => blocks.push(json!({
-                "type": "text",
-                "text": context_text(chunk)
-            })),
+            ContentPart::Context { chunk } => blocks.push(context_text_block("text", chunk)),
             ContentPart::ToolCall { call } => match call.surface {
                 ToolCallSurface::Function => blocks.push(json!({
                     "type": "tool_use",

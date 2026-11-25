@@ -48,7 +48,7 @@ fn context_follows_retained_anchors_and_preserves_each_groups_order() {
     accepted_b.metadata = json!({"accepted": true});
     let canonical = vec![steering.clone(), accepted_b.clone(), a.clone()];
     assert_eq!(
-        merge_request_context(&model, &canonical),
+        merge_request_context(model.clone(), &canonical),
         vec![
             steering,
             before_removed,
@@ -91,9 +91,9 @@ fn only_nonempty_all_request_messages_are_retained_as_context() {
         multi.clone(),
     ];
     let canonical = vec![mixed, empty, trace, named];
-    assert_eq!(merge_request_context(&model, &canonical), model);
+    assert_eq!(merge_request_context(model.clone(), &canonical), model);
     assert_eq!(
-        merge_request_context(&model, &[]),
+        merge_request_context(model, &[]),
         vec![first, second, third, fourth, multi]
     );
 }
@@ -102,10 +102,10 @@ fn only_nonempty_all_request_messages_are_retained_as_context() {
 fn no_context_and_empty_inputs_adopt_only_the_canonical_snapshot() {
     let old = vec![message("old"), message("removed")];
     let canonical = vec![message("new"), old[0].clone()];
-    assert_eq!(merge_request_context(&old, &canonical), canonical);
-    assert_eq!(merge_request_context(&[], &canonical), canonical);
-    assert!(merge_request_context(&old, &[]).is_empty());
-    assert!(merge_request_context(&[], &[]).is_empty());
+    assert_eq!(merge_request_context(old.clone(), &canonical), canonical);
+    assert_eq!(merge_request_context(Vec::new(), &canonical), canonical);
+    assert!(merge_request_context(old, &[]).is_empty());
+    assert!(merge_request_context(Vec::new(), &[]).is_empty());
 }
 
 // Pre-change scan is an independent oracle for anchor placement, not a
@@ -178,7 +178,7 @@ fn anchor_sweep_matches_scan_for_every_retained_subset_and_reordered_ack() {
             }
             canonical.insert(canonical.len() / 2, steering.clone());
             assert_eq!(
-                merge_request_context(&model, &canonical),
+                merge_request_context(model.clone(), &canonical),
                 reference_merge(&model, &canonical),
                 "mask={mask}, order={order}"
             );
@@ -203,8 +203,17 @@ fn grouped_ids_match_scan_even_for_repeated_ids_and_changed_model_order() {
     reordered.rotate_left(3);
     for model in [&model, &reordered] {
         assert_eq!(
-            merge_request_context(model, &canonical),
+            merge_request_context(model.to_vec(), &canonical),
             reference_merge(model, &canonical)
         );
     }
+}
+
+#[test]
+fn request_parts_keep_their_original_storage_across_ack() {
+    let request_context = context("borrowed by neither output nor ACK");
+    let original_parts = request_context.parts.as_ptr();
+    let anchor = message("kept");
+    let merged = merge_request_context(vec![request_context, anchor.clone()], &[anchor]);
+    assert_eq!(merged[0].parts.as_ptr(), original_parts);
 }

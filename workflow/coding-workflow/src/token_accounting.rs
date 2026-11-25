@@ -92,8 +92,15 @@ fn estimate_request_categories(request: &CanonicalModelRequest) -> Vec<TokenUsag
                         call.id.as_str().len() + call.name.len() + call.args.to_string().len();
                 }
                 ContentPart::ToolResult { result } => {
+                    // The report needs only the selected byte count; keep the
+                    // canonical compound and status rendering as the fallback.
+                    let text_bytes = match result.error.as_deref().filter(|s| !s.is_empty()) {
+                        Some(error) => error.len(),
+                        None if !result.output.is_empty() => result.output.len(),
+                        None => result.text_or_status().len(),
+                    };
                     bytes.tool_results += result.call_id.as_str().len()
-                        + result.text_or_status().len()
+                        + text_bytes
                         + result.metadata.to_string().len();
                 }
                 ContentPart::Patch { patch } => {
@@ -117,11 +124,7 @@ fn estimate_request_categories(request: &CanonicalModelRequest) -> Vec<TokenUsag
     bytes.tool_schemas = request
         .tools
         .iter()
-        .map(|tool| {
-            serde_json::to_string(tool)
-                .map(|json| json.len())
-                .unwrap_or(0)
-        })
+        .map(|tool| serialized_json_len(tool).unwrap_or(0))
         .sum::<usize>();
 
     [
@@ -145,6 +148,31 @@ fn estimate_request_categories(request: &CanonicalModelRequest) -> Vec<TokenUsag
             .then(|| TokenUsageCategory::new(name, tokens).with_source(TokenUsageSource::Estimated))
     })
     .collect()
+}
+
+fn serialized_json_len(value: &impl serde::Serialize) -> serde_json::Result<usize> {
+    let mut counter = JsonByteCounter(0);
+    serde_json::to_writer(&mut counter, value)?;
+    Ok(counter.0)
+}
+
+struct JsonByteCounter(usize);
+
+impl std::io::Write for JsonByteCounter {
+    fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+        // Match the representable length of to_string's Vec<u8>, not a
+        // saturating estimate or a serialization error that would be skipped.
+        self.0 = self
+            .0
+            .checked_add(bytes.len())
+            .filter(|length| *length <= isize::MAX as usize)
+            .expect("capacity overflow");
+        Ok(bytes.len())
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
 }
 
 #[derive(Default)]
@@ -231,35 +259,51 @@ pub(crate) fn effective_token_estimate(
         .iter()
         .flat_map(|message| &message.parts)
         .any(|part| matches!(part.payload, ContentPart::Opaque { .. }));
+    let (covered, uncovered) = messages.split_at(last.message_count);
     // With an opaque checkpoint and valid prior usage, only the uncovered
     // tail needs an estimate. The whole-history fallback would be discarded.
-    let char_estimate = if has_opaque {
-        None
-    } else {
-        estimate_message_tokens(messages)
-    };
-    let delta = if has_opaque && last.message_count == messages.len() {
-        0
-    } else {
-        estimate_message_tokens(&messages[last.message_count..]).unwrap_or(0)
-    };
-    let usage_based = known.saturating_add(delta);
-    Some(char_estimate.map_or(usage_based, |estimate| estimate.max(usage_based)))
+    if has_opaque {
+        let delta = if uncovered.is_empty() {
+            0
+        } else {
+            tokens_from_message_bytes(message_text_bytes(uncovered), uncovered.len())
+        };
+        return Some(known.saturating_add(delta));
+    }
+
+    // Floor and clamp the whole request and the tail independently. Reuse
+    // raw byte totals, not estimated tokens, because rounding is not additive.
+    let covered_bytes = message_text_bytes(covered);
+    let uncovered_bytes = message_text_bytes(uncovered);
+    let whole = tokens_from_message_bytes(
+        covered_bytes.saturating_add(uncovered_bytes),
+        messages.len(),
+    );
+    let delta = tokens_from_message_bytes(uncovered_bytes, uncovered.len());
+    Some(whole.max(known.saturating_add(delta)))
 }
 
 pub(crate) fn estimate_message_tokens(messages: &[CanonicalMessage]) -> Option<u32> {
-    let bytes = messages
+    Some(tokens_from_message_bytes(
+        message_text_bytes(messages),
+        messages.len(),
+    ))
+}
+
+fn message_text_bytes(messages: &[CanonicalMessage]) -> usize {
+    messages
         .iter()
         .flat_map(|message| &message.parts)
         .fold(0usize, |total, part| {
             total.saturating_add(part_text_len(&part.payload))
-        });
-    Some(
-        (bytes / 4)
-            .saturating_add(messages.len())
-            .max(1)
-            .min(u32::MAX as usize) as u32,
-    )
+        })
+}
+
+fn tokens_from_message_bytes(bytes: usize, message_count: usize) -> u32 {
+    (bytes / 4)
+        .saturating_add(message_count)
+        .max(1)
+        .min(u32::MAX as usize) as u32
 }
 
 fn part_text_len(part: &ContentPart) -> usize {

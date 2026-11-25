@@ -165,14 +165,14 @@ fn run_loop(
         },
     )?;
 
-    let final_message = response_output_message("review", &final_response)?.clone();
+    let final_message = response_output_message("review", &final_response)?;
     turn.model_messages
         .extend(final_response.messages.iter().cloned());
     turn.persistent_messages
         .extend(final_response.messages.iter().cloned());
     turn.checkpoint(host, &[])?;
     let text = output_text(
-        &final_message,
+        final_message,
         &turn.model_messages[turn.current_turn_messages_start..],
     );
     let metadata = output_metadata_with_extra(
