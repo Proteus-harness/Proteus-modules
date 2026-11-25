@@ -90,6 +90,14 @@ function nativeEvents(reply) {
     return events;
 }
 
+function replyText(reply) {
+    const fragments = [];
+    for (const message of reply.messages)
+        for (const part of message.parts)
+            if (part.payload.Text) fragments.push(part.payload.Text.text);
+    return fragments.join("\n");
+}
+
 export async function workflow({ task, history, runtime }, { hostCall, signal }) {
     let messages = [...history];
     let progress = runtime.continuation?.history ?? {
@@ -199,8 +207,7 @@ export async function workflow({ task, history, runtime }, { hostCall, signal })
             };
             // Reuse the native estimator for unmeasured content; a provider
             // usage observation is an anchor for the next preparation.
-            const projected = await nativeContext(input, messages);
-            const estimate = estimateContext(projected);
+            const estimate = estimateContext(await nativeContext(input, messages));
             input.token_estimate = lastUsage == null ? estimate : Math.max(estimate, lastUsage);
             await prepare(input);
             request.messages = withContext(messages, context.chunks);
@@ -223,6 +230,8 @@ export async function workflow({ task, history, runtime }, { hostCall, signal })
                 lastUsage = null;
                 continue;
             }
+            // The model reply no longer needs the sampling-only context vector.
+            request.messages = messages;
             recoverOverflow = true;
             await emit({ ModelResponseReceived: { finish_reason: reply.finish_reason } });
             const events = nativeEvents(reply);
@@ -240,9 +249,7 @@ export async function workflow({ task, history, runtime }, { hostCall, signal })
             messages.push(...reply.messages);
             progress.new_messages.push(...reply.messages);
             await checkpoint([...bindings.values()]);
-            text = reply.messages
-                .flatMap((m) => m.parts.flatMap((p) => (p.payload.Text ? [p.payload.Text.text] : [])))
-                .join("\n");
+            text = replyText(reply);
             lastUsage = reply.usage ? reply.usage.input_tokens + reply.usage.output_tokens : null;
             const results = new Map();
             const dispatch = toolBarrier(selection.tools, signal);

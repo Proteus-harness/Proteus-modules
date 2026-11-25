@@ -21,14 +21,16 @@ export async function preparation(params, { hostCall, signal, catalogProvider })
     const pi = piMessages(messages, model);
     const tokens = event.input.token_estimate ?? estimateContextTokens(pi).tokens;
     if (!shouldCompact(tokens, model.contextWindow, DEFAULT_COMPACTION_SETTINGS)) return unchanged;
-    const entries = messages.map((m, i) => {
+    // Reuse the private projection now that no estimator reads it.
+    const entries = pi;
+    messages.forEach((m, i) => {
         const common = {
             id: m.id,
             parentId: i ? messages[i - 1].id : null,
             timestamp: "1970-01-01T00:00:00.000Z",
         };
         const prior = m.metadata?.pi_compaction;
-        return prior
+        entries[i] = prior
             ? { ...common, ...prior, type: "compaction" }
             : { ...common, type: "message", message: pi[i] };
     });
@@ -73,9 +75,10 @@ export async function preparation(params, { hostCall, signal, catalogProvider })
     compacted.metadata = { pi_compaction: summary };
     const cut = messages.findIndex((m) => m.id === summary.firstKeptEntryId);
     if (cut < 0) throw new Error("Pi compaction retained an unknown entry");
-    const currentUser = messages.findLast((m) => m.role === "User");
+    const userIndex = messages.findLastIndex((m) => m.role === "User");
+    const currentUser = userIndex === -1 ? undefined : messages[userIndex];
     const replacements =
-        currentUser && messages.indexOf(currentUser) < cut
+        currentUser && (userIndex < cut || (cut > 0 && messages.lastIndexOf(currentUser, cut - 1) !== -1))
             ? [{ source_message_id: currentUser.id, replacement_message_id: compacted.id }]
             : [];
     return {

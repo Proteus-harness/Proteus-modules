@@ -35,15 +35,18 @@ export function toToolResult(callId, value, failure) {
     if (failure) {
         return { call_id: callId, ok: false, output: "", content: [], error: String(failure.message ?? failure), metadata: null };
     }
-    const content = value.content.map(block => {
-        if (block.type === "text") return { type: "text", text: block.text };
-        if (block.type === "image") return { type: "image", mime_type: block.mimeType, data: block.data };
-        throw new Error(`Unsupported Pi tool content type ${block.type}`);
+    const texts = [];
+    const content = [];
+    value.content.forEach(block => {
+        const type = block.type;
+        if (type === "text") texts.push(block.text);
+        else if (type === "image") content.push({ type: "image", mime_type: block.mimeType, data: block.data });
+        else throw new Error(`Unsupported Pi tool content type ${type}`);
     });
-    const output = value.content.filter(block => block.type === "text").map(block => block.text).join("\n");
+    const output = texts.join("\n");
     return {
         call_id: callId, ok: value.isError !== true, output,
-        content: content.filter(block => block.type !== "text"), error: value.isError ? output : null,
+        content, error: value.isError ? output : null,
         metadata: { "pi/details": value.details ?? null, "pi/structured_content": value.structuredContent ?? null },
     };
 }

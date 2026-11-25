@@ -4,6 +4,8 @@ import { readFile } from 'node:fs/promises';
 import { contextText } from '../../components/model-runtime-js/context.mjs';
 import { LLM, Media } from '../../workflow/opencode-runtime/node_modules/@opencode/ai/dist/index.js';
 
+const NATIVE_ROLES = { System: 'system', Developer: 'system', User: 'user', Assistant: 'assistant', Tool: 'tool' };
+
 function unsupported(message) {
     const error = new Error(message);
     error.code = 'OPENCODE_UNSUPPORTED_REQUEST';
@@ -95,7 +97,7 @@ export async function toNativeRequest(request, model, { signal, modelInfo } = {}
     for (const message of request.messages) {
         signal?.throwIfAborted();
         if (!Array.isArray(message.parts)) unsupported('Invalid canonical message parts');
-        const role = { System: 'system', Developer: 'system', User: 'user', Assistant: 'assistant', Tool: 'tool' }[message.role];
+        const role = NATIVE_ROLES[message.role];
         if (!role) unsupported('Unsupported canonical message role');
         const content = [];
         for (let index = 0; index < message.parts.length; index++) {

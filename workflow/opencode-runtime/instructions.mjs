@@ -39,11 +39,10 @@ export function projectInstructions(messages, model) {
     // Rebuild the derived projection so a repeated BeforeModel is idempotent.
     const source = messages.filter(message => !message.metadata?.[PROJECTED]);
     const seen = new Set();
-    let result;
+    let insertions;
     const events = [];
     for (let i = 0; i < source.length; i++) {
         const message = source[i];
-        if (result) result.push(message);
         events.length = 0;
         collectInstructionEvents(message, events);
         for (const [index, event] of events.entries()) {
@@ -52,16 +51,30 @@ export function projectInstructions(messages, model) {
             for (const path of paths) seen.add(path);
             const id = identity(`${message.id}:${index}:opencode-instructions`);
             const [native] = toLLMMessages([{ ...event, id }], { providerID: model.provider, id: model.model });
-            // The filtered source is already a fresh result when nothing is inserted.
-            (result ??= source.slice(0, i + 1)).push({
+            (insertions ??= []).push([i + 1, {
                 id, role: "User", phase: null, name: null, tool_call_id: null,
                 parts: native.content.map((part, partIndex) => {
                     if (part.type !== "text") throw new Error("Unexpected native synthetic instruction content");
                     return { part_id: identity(`${id}:${partIndex}`), provenance: "context_builder", scope: "request", payload: { Text: { text: part.text } } };
                 }),
                 metadata: { [PROJECTED]: event },
-            });
+            }]);
         }
     }
-    return result ?? source;
+    if (!insertions) return source;
+
+    // Expand the fresh filtered array from the tail so each range moves at most once.
+    let end = source.length;
+    let write = end + insertions.length;
+    source.length = write;
+    for (let i = insertions.length - 1; i >= 0; i--) {
+        const [after, projected] = insertions[i];
+        if (after < end) {
+            write -= end - after;
+            source.copyWithin(write, after, end);
+        }
+        source[--write] = projected;
+        end = after;
+    }
+    return source;
 }

@@ -38,6 +38,9 @@ function validateConfig(config) {
 }
 
 function textParts(message) {
+    const parts = message.parts;
+    const single = Array.isArray(parts) && parts.length === 1 ? parts[0]?.payload?.Text?.text : undefined;
+    if (typeof single === "string") return single;
     const fragments = [];
     message.parts.forEach(({ payload }) => {
         if (payload.Text) fragments.push(payload.Text.text);
@@ -51,14 +54,18 @@ function textParts(message) {
 }
 
 function nativeResultContent(result) {
-    return [{ type: "text", text: result.output }, ...(result.content ?? []).map(item => {
-        if (item.type === "text") return { type: "text", text: item.text };
-        if (item.type === "image" && typeof item.mime_type === "string" && /^image\//i.test(item.mime_type)
+    const content = [{ type: "text", text: result.output }];
+    (result.content ?? []).forEach(item => {
+        if (item.type === "text") {
+            content.push({ type: "text", text: item.text });
+        } else if (item.type === "image" && typeof item.mime_type === "string" && /^image\//i.test(item.mime_type)
             && typeof item.data === "string") {
-            return { type: "file", mime: item.mime_type, uri: `data:${item.mime_type};base64,${item.data}` };
+            content.push({ type: "file", mime: item.mime_type, uri: `data:${item.mime_type};base64,${item.data}` });
+        } else {
+            throw new Error("Unsupported canonical OpenCode tool-result content; only text and inline images are bridged");
         }
-        throw new Error("Unsupported canonical OpenCode tool-result content; only text and inline images are bridged");
-    })];
+    });
+    return content;
 }
 
 function canonicalToolResult(part) {
@@ -74,14 +81,14 @@ function canonicalToolResult(part) {
         // Only a leading text block can become output without reordering media.
         const leadingText = blocks[0]?.type === "text";
         output = leadingText ? blocks[0].text : "";
-        content = (leadingText ? blocks.slice(1) : blocks).map(item => {
-            if (item.type === "text") return { type: "text", text: item.text };
-            const match = item.type === "file" && /^data:([^;]+);base64,(.*)$/s.exec(item.uri);
-            if (!match || match[1] !== item.mime || !/^image\//i.test(item.mime)) {
-                throw new Error("Unsupported native OpenCode tool-result attachment; expected an inline image");
-            }
-            return { type: "image", mime_type: item.mime, data: match[2] };
-        });
+        if (leadingText && Array.isArray(blocks)) {
+            const end = blocks.length;
+            content = new Array(end - 1);
+            for (let i = 1; i < end; i++)
+                if (i in blocks) content[i - 1] = canonicalToolResultBlock(blocks[i]);
+        } else {
+            content = (leadingText ? blocks.slice(1) : blocks).map(canonicalToolResultBlock);
+        }
         if (failed) error = typeof value.error?.message === "string" ? value.error.message
             : typeof value.error === "string" ? value.error : JSON.stringify(value.error) ?? output;
     } else {
@@ -89,6 +96,15 @@ function canonicalToolResult(part) {
         error = failed ? JSON.stringify(value) : null;
     }
     return { ToolResult: { result: { call_id: part.id, ok: !failed, output, content, error, metadata: null } } };
+}
+
+function canonicalToolResultBlock(item) {
+    if (item.type === "text") return { type: "text", text: item.text };
+    const match = item.type === "file" && /^data:([^;]+);base64,(.*)$/s.exec(item.uri);
+    if (!match || match[1] !== item.mime || !/^image\//i.test(item.mime)) {
+        throw new Error("Unsupported native OpenCode tool-result attachment; expected an inline image");
+    }
+    return { type: "image", mime_type: item.mime, data: match[2] };
 }
 
 /** Canonical -> native durable message shapes. No private database or HTTP. */
@@ -177,8 +193,13 @@ function canonicalPrompt(message) {
         throw new Error(`Unsupported upstream compaction prompt content ${part.type}`);
     });
     const canonicalMessage = canonical(({ user: "User", assistant: "Assistant", tool: "Tool", system: "System" })[message.role], parts[0] ?? { Text: { text: "" } }, "runtime");
-    canonicalMessage.parts = parts.map((payload, index) => index === 0 ? canonicalMessage.parts[0]
-        : { part_id: randomUUID(), provenance: "runtime", scope: "conversation", payload });
+    // Reuse the private vector only after every payload has been validated.
+    for (let index = 0; index < parts.length; index++) {
+        if (!(index in parts)) continue;
+        parts[index] = index === 0 ? canonicalMessage.parts[0]
+            : { part_id: randomUUID(), provenance: "runtime", scope: "conversation", payload: parts[index] };
+    }
+    canonicalMessage.parts = parts;
     return canonicalMessage;
 }
 

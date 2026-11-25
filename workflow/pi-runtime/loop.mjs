@@ -26,6 +26,13 @@ function initialLoopHistory(history, model, prompt) {
     return { initial, tail };
 }
 
+function estimateHistoryTokens(messages, model, usageAnchor) {
+    const projected = piMessages(messages, model);
+    const anchor = usageAnchor ? messages.findIndex((m) => m.id === usageAnchor.id) : -1;
+    if (anchor >= 0) projected[anchor].usage.totalTokens = usageAnchor.tokens;
+    return estimateContextTokens(projected).tokens;
+}
+
 export async function workflow({ task, runtime, history }, { hostCall, signal, catalogProvider }) {
     let progress = runtime.continuation?.history ?? {
         new_messages: [],
@@ -133,10 +140,7 @@ export async function workflow({ task, runtime, history }, { hostCall, signal, c
                 client_metadata: {},
                 metadata: null,
             };
-            const projected = piMessages(messages, model);
-            const anchor = usageAnchor ? messages.findIndex((m) => m.id === usageAnchor.id) : -1;
-            if (anchor >= 0) projected[anchor].usage.totalTokens = usageAnchor.tokens;
-            const tokenEstimate = estimateContextTokens(projected).tokens;
+            const tokenEstimate = estimateHistoryTokens(messages, model, usageAnchor);
             const prepared = await hostCall("host.context.prepare", {
                 input: {
                     messages,
@@ -177,10 +181,12 @@ export async function workflow({ task, runtime, history }, { hostCall, signal, c
             if (answer.stopReason === "error")
                 throw new Error("Pi model stopped with " + reply.finish_reason);
             usageAnchor = { id: reply.messages.at(-1)?.id, tokens: answer.usage.totalTokens };
-            finalText = answer.content
-                .filter((c) => c.type === "text")
-                .map((c) => c.text)
-                .join("\n");
+            {
+                const fragments = [];
+                for (const part of answer.content)
+                    if (part.type === "text") fragments.push(part.text);
+                finalText = fragments.join("\n");
+            }
             messages.push(...reply.messages);
             progress.new_messages.push(...reply.messages);
             for (const call of reply.tool_calls)

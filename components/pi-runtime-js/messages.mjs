@@ -109,12 +109,26 @@ export function piMessage(message, model, names) {
     throw new Error("Unsupported Pi history role: " + message.role);
 }
 
+function answerContent(messages, model) {
+    const names = new Map();
+    if (messages.length === 1) {
+        const content = piMessage(messages[0], model, names).content;
+        return Array.isArray(content) ? content : [content];
+    }
+    const content = [];
+    for (const message of messages) {
+        const projected = piMessage(message, model, names).content;
+        if (Array.isArray(projected)) {
+            for (const part of projected) content.push(part);
+        } else content.push(projected);
+    }
+    return content;
+}
+
 export function assistant(response, model) {
-    const items = piMessages(response.messages, model);
-    const singleContent = items.length === 1 ? items[0]?.content : undefined;
     return {
         role: "assistant",
-        content: Array.isArray(singleContent) ? singleContent : items.flatMap((m) => m.content),
+        content: answerContent(response.messages, model),
         usage: usage(response.usage),
         api: model.api,
         provider: model.provider,

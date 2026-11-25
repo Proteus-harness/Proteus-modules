@@ -4,6 +4,7 @@ import { createGoQuotaReader } from "../../components/model-runtime-js/opencode-
 import { readFile } from "node:fs/promises";
 import { ModelRuntime } from "../../tool/pi-tools/node_modules/@earendil-works/pi-coding-agent/dist/core/model-runtime.js";
 import {
+    createInitialSystemMessage,
     normalizeContext,
     isRetryableAssistantError,
 } from "../../tool/pi-tools/node_modules/@earendil-works/pi-ai/dist/index.js";
@@ -74,11 +75,11 @@ async function context(request, model) {
             strict: t.surface.strict ? "require" : "prefer",
         },
     }));
-    return normalizeContext({
-        systemPrompt: request.instructions.map((i) => i.text).join("\n\n"),
-        tools,
-        messages: history,
-    });
+    const systemPrompt = request.instructions.map((i) => i.text).join("\n\n");
+    const initial = createInitialSystemMessage(systemPrompt, tools);
+    // The projected history is private; reuse it for Pi's optional leading message.
+    if (initial) history.unshift(initial);
+    return normalizeContext({ messages: history });
 }
 
 export function canonicalAnswer(message, id) {
