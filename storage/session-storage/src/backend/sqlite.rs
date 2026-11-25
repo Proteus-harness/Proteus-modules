@@ -276,6 +276,18 @@ struct SqliteSnapshot {
     current_hash: HashContext,
 }
 impl RecordSnapshot for SqliteSnapshot {
+    fn page_cursor(&self) -> super::PageCursor {
+        super::PageCursor {
+            position: self.after,
+            hash: self.current_hash.clone(),
+        }
+    }
+    fn restore_page_cursor(&mut self, cursor: super::PageCursor) -> Result<()> {
+        self.after = cursor.position;
+        self.current_hash = cursor.hash;
+        Ok(())
+    }
+
     fn reset(&mut self) -> Result<()> {
         self.after = 0;
         self.current_hash = HashContext::new(&SHA256);

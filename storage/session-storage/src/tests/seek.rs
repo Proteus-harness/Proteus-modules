@@ -87,6 +87,34 @@ fn corrupted_skipped_blob_is_not_hidden_by_a_seek() {
 }
 
 #[test]
+fn large_deferred_row_uses_pinned_source_and_retries_after_external_blob_repair() {
+    let mut f = Fixture::new(BackendKind::Jsonl);
+    f.append(vec![text("small")]);
+    f.append(vec![text(&"x".repeat(4 * 1024 * 1024))]);
+    f.append(vec![text("tail")]);
+    let head = f.snapshot();
+    let _other_reader = f.snapshot();
+    let first = read(&f, &head, 0, 10).unwrap();
+    assert_eq!(first.next_after_seq, Some(1));
+    let blobs = f.descriptor.local_path.as_ref().unwrap().join("blobs");
+    let path = std::fs::read_dir(blobs)
+        .unwrap()
+        .map(Result::unwrap)
+        .find(|entry| entry.file_type().unwrap().is_file())
+        .unwrap()
+        .path();
+    let payload = std::fs::read(&path).unwrap();
+    std::fs::remove_file(&path).unwrap();
+    assert!(read(&f, &head, 1, 10).is_err());
+    std::fs::write(path, payload).unwrap();
+    let next = read(&f, &head, 1, 10).unwrap();
+    assert_eq!(next.records.len(), 1);
+    assert_eq!(next.records[0].session_seq, 2);
+    assert_eq!(next.next_after_seq, Some(2));
+    assert_eq!(first, read(&f, &head, 0, 10).unwrap());
+}
+
+#[test]
 fn seeking_authenticates_both_sides_of_the_cut_without_trusting_source_stamps() {
     use crate::backend::JournalBackend;
     let mut f = Fixture::new(BackendKind::Jsonl);
@@ -249,6 +277,15 @@ fn jsonl_terminal_fold_discards_its_capture_on_append_during_validation() {
         append: Option<std::fs::File>,
     }
     impl RecordSnapshot for AppendAtEof {
+        fn page_cursor(&self) -> crate::backend::PageCursor {
+            self.inner.page_cursor()
+        }
+        fn restore_page_cursor(
+            &mut self,
+            cursor: crate::backend::PageCursor,
+        ) -> anyhow::Result<()> {
+            self.inner.restore_page_cursor(cursor)
+        }
         fn next(&mut self) -> anyhow::Result<Option<JournalRecord>> {
             let record = self.inner.next()?;
             if record.is_none()
@@ -306,7 +343,7 @@ fn jsonl_terminal_fold_discards_its_capture_on_append_during_validation() {
     )
     .unwrap();
     crate::diagnostics::reset();
-    assert_eq!(snapshot.page(1, 1).unwrap(), expected);
+    assert_eq!(snapshot.page(1, 1, true).unwrap(), expected);
     assert_eq!(
         crate::diagnostics::get().decoded,
         4,

@@ -197,9 +197,13 @@ impl State {
                 snapshot,
                 after_seq,
                 limit,
-            } => Ok(SessionStorageResponse::Records {
-                page: self.get_snapshot(&snapshot)?.page(after_seq, limit)?,
-            }),
+            } => {
+                let sole_snapshot = self.snapshots.len() == 1;
+                let page = self
+                    .get_snapshot(&snapshot)?
+                    .page(after_seq, limit, sole_snapshot)?;
+                Ok(SessionStorageResponse::Records { page })
+            }
             ReadDisplayRecords {
                 snapshot,
                 after_seq,

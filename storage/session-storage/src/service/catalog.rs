@@ -237,11 +237,10 @@ impl CatalogRead {
                 })?
             }
             BackendKind::Jsonl => {
-                let mut source = kind.backend().snapshot(dir, session)?;
-                let mut fold = Fold::default();
-                while let Some(record) = source.next()? {
-                    fold.apply(session, &record)?;
-                }
+                let (source, fold) =
+                    Jsonl::replay_snapshot(dir, session, None, |fold: &mut Fold, record, _| {
+                        fold.apply(session, record)
+                    })?;
                 let hint = crate::backend::PrefixHint {
                     extent: source.extent(),
                     fingerprint: source.fingerprint().to_owned(),

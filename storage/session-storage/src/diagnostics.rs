@@ -4,9 +4,10 @@
 pub(crate) struct Counters {
     pub decoded: u64,
     pub fingerprint_bytes: u64,
+    pub jsonl_replay_bytes: u64,
 }
 #[cfg(test)]
-thread_local! { static COUNTERS:std::cell::Cell<Counters>=std::cell::Cell::new(Counters { decoded:0,fingerprint_bytes:0 }); }
+thread_local! { static COUNTERS:std::cell::Cell<Counters> = std::cell::Cell::new(Counters::default()); }
 #[cfg(test)]
 pub(crate) fn reset() {
     COUNTERS.set(Counters::default());
@@ -26,6 +27,15 @@ pub(crate) fn fingerprint(bytes: usize) {
     #[cfg(test)]
     COUNTERS.set(Counters {
         fingerprint_bytes: COUNTERS.get().fingerprint_bytes + bytes as u64,
+        ..COUNTERS.get()
+    });
+    #[cfg(not(test))]
+    let _ = bytes;
+}
+pub(crate) fn replayed_jsonl(bytes: usize) {
+    #[cfg(test)]
+    COUNTERS.set(Counters {
+        jsonl_replay_bytes: COUNTERS.get().jsonl_replay_bytes + bytes as u64,
         ..COUNTERS.get()
     });
     #[cfg(not(test))]

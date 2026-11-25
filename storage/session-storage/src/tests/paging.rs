@@ -36,6 +36,36 @@ fn record_pages_obey_byte_budget_without_truncating_records() {
 }
 
 #[test]
+fn lone_snapshot_can_continue_an_oversized_boundary_without_another_decode() {
+    for kind in backends() {
+        let mut f = Fixture::new(kind);
+        f.append(vec![text("head")]);
+        f.append(vec![text(&"q".repeat(4 * 1024 * 1024))]);
+        let snapshot = f.snapshot();
+        let read = |after_seq, limit| {
+            let SessionStorageResponse::Records { page } = f
+                .service
+                .execute(SessionStorageRequest::ReadRecords {
+                    snapshot: snapshot.clone(),
+                    after_seq,
+                    limit,
+                })
+                .unwrap()
+            else {
+                panic!("expected page")
+            };
+            page
+        };
+        assert_eq!(read(0, 2).next_after_seq, Some(1));
+        crate::diagnostics::reset();
+        let next = read(1, 1);
+        assert_eq!(next.records[0].session_seq, 2);
+        assert_eq!(next.next_after_seq, None);
+        assert_eq!(crate::diagnostics::get().decoded, 0);
+    }
+}
+
+#[test]
 fn paged_reads_decode_once_per_monotonic_pass_and_support_retries_and_interleaving() {
     for kind in backends() {
         let mut f = Fixture::new(kind);

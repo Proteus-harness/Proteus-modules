@@ -1,5 +1,5 @@
 use super::*;
-use crate::backend::PrefixHint;
+use crate::backend::{PrefixHint, replay_records};
 
 #[derive(Clone)]
 pub(super) struct PrefixCache {
@@ -76,26 +76,29 @@ impl State {
             (source, cached.revision)
         } else {
             let blobs = catalog::durable::blob_stamps(&dir);
-            let mut source = self.kind.backend().snapshot(&dir, session.session_id)?;
-            let version = source.source_version()?;
             let cut = self
                 .prefixes
                 .get(&session)
                 .map(|cache| cache.revision.session_seq);
-            let mut state = Fold::default();
-            if cut == Some(0) {
-                previous_boundary = Some((state.revision(), source.consumed_fingerprint()));
-            }
-            while let Some(record) = source.next()? {
-                state.apply_validated(session.session_id, &record)?;
-                if cut == Some(record.session_seq) {
-                    source.remember_page_boundary(record.session_seq);
-                    previous_boundary = Some((state.revision(), source.consumed_fingerprint()));
+            let apply =
+                |(state, boundary): &mut (Fold, Option<_>), record: &JournalRecord, hash| {
+                    state.apply_validated(session.session_id, record)?;
+                    if let Some(hash) = hash {
+                        *boundary = Some((state.revision(), hash));
+                    }
+                    Ok(())
+                };
+            let (source, (state, boundary)) = match self.kind {
+                BackendKind::Jsonl => Jsonl::replay_snapshot(&dir, session.session_id, cut, apply)?,
+                BackendKind::Sqlite => {
+                    let mut source = self.kind.backend().snapshot(&dir, session.session_id)?;
+                    let fold = replay_records(source.as_mut(), cut, &apply)?;
+                    (source, fold)
                 }
-            }
-            if source.source_version()? != version {
-                source.verify_fixed_prefix()?;
-            }
+            };
+            previous_boundary = boundary.or_else(|| {
+                (cut == Some(0)).then(|| (StorageRevision::default(), crate::io::sha256_hex(b"")))
+            });
             let blobs =
                 blobs.filter(|blobs| catalog::durable::blob_stamps(&dir).as_ref() == Some(blobs));
             let prefix = PrefixCache {

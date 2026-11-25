@@ -30,7 +30,15 @@ pub(crate) struct SourceVersion {
 
 type DisplayRowVisitor<'a> = dyn FnMut(&JournalRecord, Option<String>) -> Result<()> + 'a;
 
+/// Physical position and incremental digest within one pinned snapshot.
+pub(crate) struct PageCursor {
+    position: u64,
+    hash: ring::digest::Context,
+}
+
 pub(crate) trait RecordSnapshot: Send {
+    fn page_cursor(&self) -> PageCursor;
+    fn restore_page_cursor(&mut self, cursor: PageCursor) -> Result<()>;
     /// None means the backend transaction already pins an immutable view.
     fn source_version(&self) -> Result<Option<SourceVersion>> {
         Ok(None)
@@ -88,4 +96,21 @@ pub(crate) trait JournalBackend: Send {
     fn recover(&mut self, dir: &Path, id: SessionId) -> Result<()>;
     fn append(&mut self, dir: &Path, record: &JournalRecord) -> Result<Append>;
     fn description_path(&self, dir: &Path) -> std::path::PathBuf;
+}
+
+pub(crate) fn replay_records<T: Default>(
+    source: &mut dyn RecordSnapshot,
+    cut: Option<u64>,
+    apply: &impl Fn(&mut T, &JournalRecord, Option<String>) -> Result<()>,
+) -> Result<T> {
+    let mut fold = T::default();
+    let mut line = Vec::new();
+    while let Some(record) = source.next_with_scratch(&mut line)? {
+        let boundary = (cut == Some(record.session_seq)).then(|| {
+            source.remember_page_boundary(record.session_seq);
+            source.consumed_fingerprint()
+        });
+        apply(&mut fold, &record, boundary)?;
+    }
+    Ok(fold)
 }

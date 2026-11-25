@@ -23,6 +23,54 @@ impl Jsonl {
             blob_threshold: codec::DEFAULT_BLOB_THRESHOLD,
         }
     }
+
+    pub(crate) fn replay_snapshot<T: Default>(
+        dir: &Path,
+        id: SessionId,
+        cut: Option<u64>,
+        apply: impl Fn(&mut T, &JournalRecord, Option<String>) -> Result<()>,
+    ) -> Result<(Box<dyn RecordSnapshot>, T)> {
+        ensure!(
+            !dir.join("journal.sqlite").try_exists()?,
+            "session contains a SQLite journal; select its storage implementation or explicitly migrate it"
+        );
+        let (mut source, version) = JsonlSnapshot::pin(dir, id, None)?;
+        let observed = if cfg!(unix) {
+            let fold = replay_records(&mut source, cut, &apply)?;
+            let fingerprint = source.consumed_fingerprint();
+            if source.source_version()? == version {
+                source.fingerprint = Some(fingerprint);
+                return Ok((Box::new(source), fold));
+            }
+            Some(fingerprint)
+        } else {
+            None
+        };
+
+        // Discard the first attempt if the inode changed. Re-authenticate
+        // the same pinned extent before replaying it, excluding any appends.
+        let version = source.source_version()?;
+        let fingerprint = source.hash_fixed_prefix()?;
+        ensure!(
+            observed.is_none_or(|observed| observed == fingerprint),
+            "journal complete prefix changed during snapshot capture"
+        );
+        source.fingerprint = Some(fingerprint);
+        source.reset()?;
+        source.fully_read = false;
+        source.has_external_payloads = false;
+        source.page_boundary = None;
+        let fold = replay_records(&mut source, cut, &apply)?;
+        let replayed_version = source.source_version()?;
+        if replayed_version != version {
+            source.verify_fixed_prefix()?;
+            ensure!(
+                source.source_version()? == replayed_version,
+                "journal changed during snapshot capture"
+            );
+        }
+        Ok((Box::new(source), fold))
+    }
 }
 
 impl JournalBackend for Jsonl {
@@ -111,7 +159,7 @@ struct JsonlSnapshot {
     dir: PathBuf,
     id: SessionId,
     length: u64,
-    fingerprint: String,
+    fingerprint: Option<String>,
     current_hash: HashContext,
     consumed: u64,
     has_external_payloads: bool,
@@ -121,17 +169,32 @@ struct JsonlSnapshot {
 }
 impl JsonlSnapshot {
     fn open(dir: &Path, id: SessionId, hint: Option<&PrefixHint>) -> Result<Self> {
+        let (mut source, _) = Self::pin(dir, id, hint)?;
+        if hint.is_none() {
+            source.fingerprint = Some(source.hash_fixed_prefix()?);
+        }
+        Ok(source)
+    }
+
+    fn pin(
+        dir: &Path,
+        id: SessionId,
+        hint: Option<&PrefixHint>,
+    ) -> Result<(Self, Option<SourceVersion>)> {
         let path = dir.join(codec::JOURNAL_FILE);
         let mut file = match File::open(&path) {
             Ok(file) => Some(file),
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
             Err(e) => return Err(e.into()),
         };
+        let mut version = None;
         let length = if let Some(file) = &mut file {
-            ensure!(file.metadata()?.is_file(), "journal is not a regular file");
+            let metadata = file.metadata()?;
+            ensure!(metadata.is_file(), "journal is not a regular file");
+            version = Some(version_from_metadata(&metadata)?);
             if let Some(hint) = hint {
                 ensure!(
-                    file.metadata()?.len() >= hint.extent,
+                    metadata.len() >= hint.extent,
                     "journal shortened below cached prefix"
                 );
                 hint.extent
@@ -141,88 +204,33 @@ impl JsonlSnapshot {
         } else {
             0
         };
-        let mut hash = HashContext::new(&SHA256);
-        if hint.is_none()
-            && let Some(file) = &mut file
-        {
-            file.seek(SeekFrom::Start(0))?;
-            let mut source = file.take(length);
-            let mut block = [0_u8; 64 * 1024];
-            loop {
-                let read = source.read(&mut block)?;
-                if read == 0 {
-                    break;
-                }
-                crate::diagnostics::fingerprint(read);
-                hash.update(&block[..read]);
-            }
-            ensure!(
-                source.limit() == 0,
-                "journal shortened during snapshot capture"
-            );
-            file.seek(SeekFrom::Start(0))?;
-        }
-        let fingerprint = if let Some(hint) = hint {
-            hint.fingerprint.clone()
-        } else {
-            crate::io::digest_hex(hash.finish())
-        };
         if let Some(file) = &mut file {
             file.seek(SeekFrom::Start(0))?;
         }
-        Ok(Self {
+        let source = Self {
             file: file.map(|f| BufReader::with_capacity(64 * 1024, f.take(length))),
             dir: dir.to_owned(),
             id,
             length,
-            fingerprint,
+            fingerprint: hint.map(|hint| hint.fingerprint.clone()),
             current_hash: HashContext::new(&SHA256),
             consumed: 0,
             has_external_payloads: false,
             fully_read: false,
             page_boundary: None,
-        })
-    }
-    fn position(&mut self, offset: u64, hash: HashContext) -> Result<()> {
-        if let Some(reader) = &mut self.file {
-            reader.get_mut().get_mut().seek(SeekFrom::Start(offset))?;
-            reader.consume(reader.buffer().len());
-            reader.get_mut().set_limit(self.length - offset);
-        }
-        self.consumed = offset;
-        self.current_hash = hash;
-        Ok(())
-    }
-}
-impl RecordSnapshot for JsonlSnapshot {
-    fn source_version(&self) -> Result<Option<SourceVersion>> {
-        let Some(reader) = &self.file else {
-            return Ok(None);
         };
-        let metadata = reader.get_ref().get_ref().metadata()?;
-        #[cfg(unix)]
-        let changed = {
-            use std::os::unix::fs::MetadataExt;
-            (metadata.ctime(), metadata.ctime_nsec())
-        };
-        #[cfg(not(unix))]
-        let changed = (0, 0);
-        Ok(Some(SourceVersion {
-            bytes: metadata.len(),
-            modified: metadata.modified()?,
-            changed,
-        }))
+        Ok((source, version))
     }
-    fn verify_fixed_prefix(&self) -> Result<()> {
+    fn hash_fixed_prefix(&self) -> Result<String> {
+        let mut hash = HashContext::new(&SHA256);
         let Some(reader) = &self.file else {
-            return Ok(());
+            return Ok(crate::io::digest_hex(hash.finish()));
         };
         let file = reader.get_ref().get_ref();
         ensure!(
             file.metadata()?.len() >= self.length,
             "journal shortened below snapshot prefix"
         );
-        let mut hash = HashContext::new(&SHA256);
         let mut offset = 0;
         let mut block = [0_u8; 64 * 1024];
         #[cfg(not(unix))]
@@ -247,16 +255,64 @@ impl RecordSnapshot for JsonlSnapshot {
                 hash.update(&block[..read]);
                 offset += read as u64;
             }
-            let actual = crate::io::digest_hex(hash.finish());
-            ensure!(
-                actual == self.fingerprint,
-                "journal complete prefix changed during snapshot read"
-            );
-            Ok(())
+            Ok(crate::io::digest_hex(hash.finish()))
         })();
         #[cfg(not(unix))]
         fallback.seek(SeekFrom::Start(saved_position))?;
         verification
+    }
+    fn position(&mut self, offset: u64, hash: HashContext) -> Result<()> {
+        if let Some(reader) = &mut self.file {
+            reader.get_mut().get_mut().seek(SeekFrom::Start(offset))?;
+            reader.consume(reader.buffer().len());
+            reader.get_mut().set_limit(self.length - offset);
+        }
+        self.consumed = offset;
+        self.current_hash = hash;
+        Ok(())
+    }
+}
+
+fn version_from_metadata(metadata: &std::fs::Metadata) -> Result<SourceVersion> {
+    #[cfg(unix)]
+    let changed = {
+        use std::os::unix::fs::MetadataExt;
+        (metadata.ctime(), metadata.ctime_nsec())
+    };
+    #[cfg(not(unix))]
+    let changed = (0, 0);
+    Ok(SourceVersion {
+        bytes: metadata.len(),
+        modified: metadata.modified()?,
+        changed,
+    })
+}
+
+impl RecordSnapshot for JsonlSnapshot {
+    fn page_cursor(&self) -> super::PageCursor {
+        super::PageCursor {
+            position: self.consumed,
+            hash: self.current_hash.clone(),
+        }
+    }
+    fn restore_page_cursor(&mut self, cursor: super::PageCursor) -> Result<()> {
+        self.position(cursor.position, cursor.hash)
+    }
+
+    fn source_version(&self) -> Result<Option<SourceVersion>> {
+        let Some(reader) = &self.file else {
+            return Ok(None);
+        };
+        Ok(Some(version_from_metadata(
+            &reader.get_ref().get_ref().metadata()?,
+        )?))
+    }
+    fn verify_fixed_prefix(&self) -> Result<()> {
+        ensure!(
+            self.hash_fixed_prefix()? == self.fingerprint(),
+            "journal complete prefix changed during snapshot read"
+        );
+        Ok(())
     }
     fn reset(&mut self) -> Result<()> {
         self.position(0, HashContext::new(&SHA256))
@@ -297,6 +353,7 @@ impl RecordSnapshot for JsonlSnapshot {
                 bail!("journal snapshot lost a complete line");
             };
             self.consumed += line.len() as u64;
+            crate::diagnostics::replayed_jsonl(line.len());
             self.current_hash.update(line);
             ensure!(
                 !payload.is_empty(),
@@ -335,11 +392,12 @@ impl RecordSnapshot for JsonlSnapshot {
                 self.consumed == self.length && reader.get_ref().limit() == 0,
                 "journal shortened during snapshot read"
             );
-            let actual = self.consumed_fingerprint();
-            ensure!(
-                actual == self.fingerprint,
-                "journal complete prefix changed during snapshot read"
-            );
+            if let Some(expected) = &self.fingerprint {
+                ensure!(
+                    self.consumed_fingerprint() == *expected,
+                    "journal complete prefix changed during snapshot read"
+                );
+            }
             self.fully_read = true;
             return Ok(None);
         }
@@ -361,7 +419,7 @@ impl RecordSnapshot for JsonlSnapshot {
         Ok(true)
     }
     fn fingerprint(&self) -> &str {
-        &self.fingerprint
+        self.fingerprint.as_deref().expect("sealed JSONL snapshot")
     }
     fn read_hash(&self) -> HashContext {
         self.current_hash.clone()

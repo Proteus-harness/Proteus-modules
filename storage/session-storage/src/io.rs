@@ -53,7 +53,17 @@ pub(crate) fn atomic_write(path: &Path, bytes: &[u8]) -> Result<()> {
 /// Read-only discovery never repairs an interrupted final JSONL line.
 pub(crate) fn complete_jsonl_offset(file: &mut File) -> Result<u64> {
     let len = file.metadata()?.len();
-    let mut end = len;
+    if len == 0 {
+        return Ok(0);
+    }
+    // A completed append ends at a newline. Only a torn tail needs a scan.
+    file.seek(SeekFrom::Start(len - 1))?;
+    let mut last = [0];
+    file.read_exact(&mut last)?;
+    if last == [b'\n'] {
+        return Ok(len);
+    }
+    let mut end = len - 1;
     let mut block = [0_u8; 8192];
     while end != 0 {
         let start = end.saturating_sub(block.len() as u64);

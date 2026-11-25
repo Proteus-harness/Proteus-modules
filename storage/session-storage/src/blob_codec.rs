@@ -4,6 +4,7 @@ use anyhow::{Result, ensure};
 use serde::{Deserialize, Serialize};
 use std::{
     borrow::Cow,
+    collections::{HashMap, hash_map::Entry},
     path::{Path, PathBuf},
 };
 
@@ -211,7 +212,10 @@ fn unpack_checked<'a>(
         );
     }
     let mut bytes = Vec::with_capacity(manifest.bytes);
-    for chunk in manifest.chunks {
+    // A chunk can occur many times in one payload. Index only ranges in our
+    // output; a later unpack verifies its files independently.
+    let mut verified = HashMap::new();
+    for chunk in &manifest.chunks {
         let start = bytes.len();
         ensure!(
             chunk.bytes > 0
@@ -219,6 +223,15 @@ fn unpack_checked<'a>(
                 && chunk.bytes <= manifest.bytes.saturating_sub(start),
             "shared blob chunk exceeds declared payload"
         );
+        let vacant = match verified.entry(chunk.sha256.as_str()) {
+            Entry::Occupied(entry) => {
+                let (offset, len): (usize, usize) = *entry.get();
+                ensure!(len == chunk.bytes, "shared blob chunk size mismatch");
+                bytes.extend_from_within(offset..offset + len);
+                continue;
+            }
+            Entry::Vacant(entry) => entry,
+        };
         let path = chunk_path(session, &chunk.sha256)?;
         bytes.resize(start + chunk.bytes, 0);
         let content = &mut bytes[start..];
@@ -228,6 +241,7 @@ fn unpack_checked<'a>(
             sha256_hex(content) == chunk.sha256,
             "shared blob chunk hash mismatch"
         );
+        vacant.insert((start, chunk.bytes));
     }
     ensure!(bytes.len() == manifest.bytes, "shared blob size mismatch");
     ensure!(
@@ -280,6 +294,29 @@ mod tests {
             remaining = &remaining[expected..];
         }
         assert!(remaining.is_empty());
+    }
+
+    #[test]
+    fn repeated_chunk_ranges_validate_lengths_and_are_local_to_one_unpack() {
+        let dir = tempfile::tempdir().unwrap();
+        let bytes = [vec![0; MAX_CHUNK], vec![1; MAX_CHUNK], vec![0; MAX_CHUNK]].concat();
+        let packed = pack(dir.path(), &bytes).unwrap();
+        let mut manifest: Manifest = serde_json::from_slice(&packed[MAGIC.len()..]).unwrap();
+        assert_eq!(manifest.chunks.len(), 3);
+        assert_eq!(manifest.chunks[0].sha256, manifest.chunks[2].sha256);
+        assert_eq!(unpack(dir.path(), &packed).unwrap(), bytes);
+        manifest.chunks[2].bytes -= 1;
+        let mut invalid = MAGIC.to_vec();
+        serde_json::to_writer(&mut invalid, &manifest).unwrap();
+        assert!(
+            unpack(dir.path(), &invalid)
+                .unwrap_err()
+                .to_string()
+                .contains("chunk size")
+        );
+        let path = chunk_path(dir.path(), &manifest.chunks[0].sha256).unwrap();
+        std::fs::write(path, vec![2; MAX_CHUNK]).unwrap();
+        assert!(unpack(dir.path(), &packed).is_err());
     }
 
     #[test]

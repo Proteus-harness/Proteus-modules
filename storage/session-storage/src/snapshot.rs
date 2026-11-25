@@ -89,12 +89,19 @@ pub(crate) struct SnapshotState {
     pending: Option<PendingPageRecord>,
     pub(crate) display: Option<crate::display::DisplayRecords>,
 }
-struct PendingPageRecord {
-    record: JournalRecord,
-    // Terminal capture has no pre-count; its first page still measures it.
-    // A budget-deferred
-    // record keeps only its own successful exact count until it is consumed.
-    encoded_bytes: Option<usize>,
+// A lone sequential reader reuses its look-ahead without another disk read.
+// Once other snapshots are open, cap the encoded size retained by each
+// additional reader. At most one previously lone reader can still own a large row.
+const SHARED_BOUNDARY_BYTES: usize = 64 * 1024;
+
+enum PendingPageRecord {
+    Buffered {
+        record: JournalRecord,
+        encoded_bytes: Option<usize>,
+    },
+    OnSource {
+        encoded_bytes: usize,
+    },
 }
 
 impl SnapshotState {
@@ -207,7 +214,12 @@ impl SnapshotState {
         self.verified_version = self.source.source_version()?;
         Ok((state, terminal))
     }
-    pub fn page(&mut self, after: u64, limit: u32) -> Result<StorageRecordPage> {
+    pub fn page(
+        &mut self,
+        after: u64,
+        limit: u32,
+        sole_snapshot: bool,
+    ) -> Result<StorageRecordPage> {
         ensure!(
             after <= self.identity.revision.session_seq,
             "record cursor is past the snapshot prefix"
@@ -232,7 +244,7 @@ impl SnapshotState {
         // page checks after independently authenticating the pinned bytes.
         // Blob-bearing JSONL, changed or unknown sources keep the normal scan.
         if terminal.is_some() && before == page_version && self.source.confirm_verified_data()? {
-            self.pending = terminal.map(|record| PendingPageRecord {
+            self.pending = terminal.map(|record| PendingPageRecord::Buffered {
                 record,
                 encoded_bytes: None,
             });
@@ -247,8 +259,19 @@ impl SnapshotState {
         let mut records = Vec::new();
         let mut bytes = 0_usize;
         while records.len() < limit as usize {
+            let cursor = (!sole_snapshot && !records.is_empty()).then(|| self.source.page_cursor());
             let (record, known_bytes) = match self.pending.take() {
-                Some(pending) => (pending.record, pending.encoded_bytes),
+                Some(PendingPageRecord::Buffered {
+                    record,
+                    encoded_bytes,
+                }) => (record, encoded_bytes),
+                Some(PendingPageRecord::OnSource { encoded_bytes }) => {
+                    let record = self
+                        .source
+                        .next()?
+                        .ok_or_else(|| anyhow::anyhow!("missing deferred journal record"))?;
+                    (record, Some(encoded_bytes))
+                }
                 None => match self.source.next()? {
                     Some(record) => (record, None),
                     None => break,
@@ -266,9 +289,17 @@ impl SnapshotState {
                 "canonical record exceeds maximum"
             );
             if !records.is_empty() && bytes + record_bytes > SESSION_STORAGE_PAGE_BYTE_BUDGET {
-                self.pending = Some(PendingPageRecord {
-                    record,
-                    encoded_bytes: Some(record_bytes),
+                self.pending = Some(if sole_snapshot || record_bytes <= SHARED_BOUNDARY_BYTES {
+                    PendingPageRecord::Buffered {
+                        record,
+                        encoded_bytes: Some(record_bytes),
+                    }
+                } else {
+                    self.source
+                        .restore_page_cursor(cursor.expect("nonempty page has a cursor"))?;
+                    PendingPageRecord::OnSource {
+                        encoded_bytes: record_bytes,
+                    }
                 });
                 break;
             }
