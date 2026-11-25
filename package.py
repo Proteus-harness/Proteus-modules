@@ -142,6 +142,7 @@ def build(selected, profile="release", target_dir=None, env=None, root=ROOT, *, 
     print("+ " + " ".join(command), file=sys.stderr, flush=True)
     result = subprocess.run(command, cwd=root, env=env, stdout=subprocess.PIPE, text=True)
     manifests = {package.manifest: package for package in selected}
+    binaries = {package.binary for package in selected}
     outputs = {package.identity: [] for package in selected}
     finished = []
     targets = set()
@@ -163,9 +164,13 @@ def build(selected, profile="release", target_dir=None, env=None, root=ROOT, *, 
             finished.append(record.get("success"))
         elif reason == "compiler-artifact":
             target = record.get("target", {})
-            targets.add(target.get("name", ""))
+            target_name = target.get("name", "")
+            targets.add(target_name)
             manifest = record.get("manifest_path")
             if not isinstance(manifest, str):
+                continue
+            # Audit every target, but only a selected binary name can match.
+            if isinstance(target_name, str) and target_name and target_name not in binaries:
                 continue
             manifest = Path(manifest)
             package = manifests.get((root / manifest).resolve())
