@@ -29,10 +29,8 @@ export function instructionEvents(messages = []) {
 }
 
 function identity(value) {
-    const hex = createHash("sha256").update(value).digest("hex").slice(0, 32).split("");
-    hex[12] = "5";
-    hex[16] = "8";
-    return `${hex.slice(0, 8).join("")}-${hex.slice(8, 12).join("")}-${hex.slice(12, 16).join("")}-${hex.slice(16, 20).join("")}-${hex.slice(20).join("")}`;
+    const hex = createHash("sha256").update(value).digest("hex");
+    return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-5${hex.slice(13, 16)}-8${hex.slice(17, 20)}-${hex.slice(20, 32)}`;
 }
 
 export function projectInstructions(messages, model) {

@@ -7,6 +7,8 @@ import { createCredentialReader } from './credentials.mjs';
 import { configSchema } from './config-schema.mjs';
 import { createGoQuotaReader } from '../../components/model-runtime-js/opencode-go-quota.mjs';
 
+const STREAM_START_EVENTS = ['text-start', 'text-delta', 'reasoning-start', 'reasoning-delta', 'tool-input-start', 'tool-call'];
+
 let streamParts, loadingStreamParts;
 function loadStreamParts() {
     return loadingStreamParts ??= Promise.all([import('./messages.mjs'), import('./response.mjs')])
@@ -104,7 +106,8 @@ export function modelExport(binding, dependencies = {}) {
                 const resolved = await runtime.resolve(r.model.model, r.reasoning.effort, await credential(signal, r.model.model), signal);
                 const request = await toNativeRequest(r, resolved.model, { signal, modelInfo: resolved.modelInfo });
                 await stream(request, signal, async event => {
-                    if (['text-start', 'text-delta', 'reasoning-start', 'reasoning-delta', 'tool-input-start', 'tool-call'].includes(event.type)) started = true;
+                    const eventType = event.type;
+                    if (!started && STREAM_START_EVENTS.includes(eventType)) started = true;
                     const events = collector.push(event);
                     for (const event of events) if (event.MessageCompleted) {
                         started = true;

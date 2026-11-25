@@ -95,7 +95,7 @@ export class NativeResponseCollector {
             if (event.type.endsWith('-end')) {
                 // Native end events may carry an authoritative completed value.
                 // A correction is published by MessageCompleted at finish.
-                if (suffix.startsWith(block.text)) delta = suffix.slice(block.text.length);
+                if (suffix.length > block.text.length && suffix.startsWith(block.text)) delta = suffix.slice(block.text.length);
                 block.text = suffix;
             } else { delta = suffix; block.text += suffix; }
         }

@@ -6,6 +6,27 @@ import { assistant, finishedStream, piContent, piMessage, piMessages } from "../
 
 import { receiveModelResponse } from "../../components/module-runtime-js/model-stream.mjs";
 
+function convertWorkflowMessages(messages) {
+    if (!Array.isArray(messages) || Object.getPrototypeOf(messages) !== Array.prototype)
+        return convertToLlm(messages);
+    const converted = [];
+    // Pi 1.5.2 passes these roles through unchanged; preserve its full fallback.
+    for (let i = 0, length = messages.length; i < length; i++) {
+        const message = messages[i];
+        switch (message?.role) {
+            case "system":
+            case "user":
+            case "assistant":
+            case "toolResult":
+                converted.push(message);
+                break;
+            default:
+                return convertToLlm(messages);
+        }
+    }
+    return converted;
+}
+
 function piRetryDelay(failure, attempt) {
     const policy = SETTINGS_DEFAULTS.retry;
     if (!policy.enabled || attempt > policy.maxRetries) return undefined;
@@ -74,18 +95,25 @@ export async function workflow({ task, runtime, history }, { hostCall, signal, c
         });
         const order = ["read", "bash", "edit", "write"];
         const specs = selection.tools.toSorted((a, b) => order.indexOf(a.name) - order.indexOf(b.name));
+        let systemChunk;
+        const appendParts = [];
+        const contextFiles = [];
+        context.chunks.forEach(c => {
+            const marker = c.metadata?.["pi/prompt"];
+            if (marker === "system") systemChunk ??= c;
+            else if (marker === "append") appendParts.push(c.content);
+            else if (!marker) contextFiles.push({ path: c.path, content: c.content });
+        });
         const prompt = buildSystemPrompt({
             cwd: task.cwd,
-            customPrompt: context.chunks.find(c => c.metadata?.["pi/prompt"] === "system")?.content,
-            appendSystemPrompt: context.chunks.filter(c => c.metadata?.["pi/prompt"] === "append")
-                .map(c => c.content).join("\n\n"),
+            customPrompt: systemChunk?.content,
+            appendSystemPrompt: appendParts.join("\n\n"),
             selectedTools: specs.map((t) => t.name),
             toolSnippets: Object.fromEntries(specs.map((t) => [t.name, t.metadata?.["pi/prompt_snippet"]])),
             toolGuidelines: Object.fromEntries(
                 specs.map((t) => [t.name, t.metadata?.["pi/prompt_guidelines"] ?? []]),
             ),
-            contextFiles: context.chunks.filter(c => !c.metadata?.["pi/prompt"])
-                .map((c) => ({ path: c.path, content: c.content })),
+            contextFiles,
             skills: [],
         });
         const definitions = new Map(createCodingToolDefinitions(task.cwd).map(t => [t.name, t]));
@@ -227,7 +255,7 @@ export async function workflow({ task, runtime, history }, { hostCall, signal, c
             {
                 model,
                 reasoning: runtime.reasoning.effort,
-                convertToLlm,
+                convertToLlm: convertWorkflowMessages,
                 finishTurn: async () => {
                     await checkpoint();
                 },

@@ -98,8 +98,11 @@ function replyText(reply) {
     return fragments.join("\n");
 }
 
-export async function workflow({ task, history, runtime }, { hostCall, signal }) {
-    let messages = [...history];
+const BROKER_HISTORY = Symbol();
+
+export async function workflow({ task, history, runtime }, { hostCall, signal }, ownership = undefined) {
+    let borrowed = ownership === BROKER_HISTORY && Array.isArray(history);
+    let messages = borrowed ? history : [...history];
     let progress = runtime.continuation?.history ?? {
         new_messages: [],
         history_replacement: null,
@@ -115,6 +118,7 @@ export async function workflow({ task, history, runtime }, { hostCall, signal })
         if (ack.revision != null) {
             progress = ack.history;
             messages = ack.messages;
+            borrowed = false;
         }
         return ack;
     }
@@ -148,6 +152,7 @@ export async function workflow({ task, history, runtime }, { hostCall, signal })
             if (durable) throw new Error("OpenCode overflow compaction requires a durable checkpoint acknowledgement");
             progress = candidate;
             messages = p.messages;
+            borrowed = false;
         }
         signal.throwIfAborted();
         return true;
@@ -246,6 +251,11 @@ export async function workflow({ task, history, runtime }, { hostCall, signal })
                     },
                 ])),
             );
+            // The broker input can stay read-only until the first append.
+            if (borrowed) {
+                messages = [...messages];
+                borrowed = false;
+            }
             messages.push(...reply.messages);
             progress.new_messages.push(...reply.messages);
             await checkpoint([...bindings.values()]);
@@ -335,6 +345,15 @@ export async function workflow({ task, history, runtime }, { hostCall, signal })
 }
 
 export function createWorkflowExport(binding) {
+    return createExport(binding);
+}
+
+// Only the installed component broker supplies freshly decoded JSON.
+export function createBrokerWorkflowExport(binding) {
+    return createExport(binding, BROKER_HISTORY);
+}
+
+function createExport(binding, ownership) {
     if (
         binding.module_id !== "opencode_loop" ||
         binding.slot !== "workflow" ||
@@ -354,7 +373,7 @@ export function createWorkflowExport(binding) {
         },
         invoke(method, params, invocation) {
             if (method !== "run") throw new Error("Unsupported workflow method " + method);
-            return workflow(params, invocation);
+            return workflow(params, invocation, ownership);
         },
     };
 }

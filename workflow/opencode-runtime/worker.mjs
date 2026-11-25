@@ -23,8 +23,8 @@ await runComponent(async binding => {
         return createContextExport(binding);
     }
     if (binding.slot === "workflow" && binding.module_id === "opencode_loop") {
-        const { createWorkflowExport } = await import("./workflow.mjs");
-        return createWorkflowExport(binding);
+        const { createBrokerWorkflowExport } = await import("./workflow.mjs");
+        return createBrokerWorkflowExport(binding);
     }
     throw new Error(`OpenCode ${binding.slot}/${binding.module_id} adapter is unavailable`);
 });

@@ -12,6 +12,8 @@ function unsupported(message) {
     throw error;
 }
 
+const NATIVE_EXTRA_FIELDS = ['providerMetadata', 'metadata', 'cache', 'encrypted', 'namespace', 'providerExecuted'];
+
 function nativeExtras(message, index, type) {
     const extra = message.metadata?.opencode_native?.parts?.[index];
     if (!extra) return undefined;
@@ -19,7 +21,7 @@ function nativeExtras(message, index, type) {
     // Only restore schema fields, never spread an arbitrary provider blob into
     // a canonical block. Text and tool arguments have one authoritative copy.
     let result;
-    for (const key of ['providerMetadata', 'metadata', 'cache', 'encrypted', 'namespace', 'providerExecuted'])
+    for (const key of NATIVE_EXTRA_FIELDS)
         if (extra[key] !== undefined) (result ??= {})[key] = extra[key];
     return result;
 }

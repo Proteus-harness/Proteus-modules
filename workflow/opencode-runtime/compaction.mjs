@@ -286,10 +286,23 @@ export function createCompactionExport(binding) {
             const native = { type: "compaction", status: "completed", summary: completed.text, recent: completed.recent };
             const serialized = toLLMMessages([{ ...native, id: "checkpoint" }], context.model.ref)[0].content[0].text;
             const checkpoint = canonical("User", { Text: { text: serialized } }, "compactor");
-            const instructions = input.messages.flatMap(message => [
-                ...(message.metadata?.["opencode/synthetic"] ?? []),
-                ...message.parts.flatMap(part => part.payload.ToolResult?.result.metadata?.["opencode/synthetic"] ?? []),
-            ]);
+            const instructions = [];
+            input.messages.forEach(message => {
+                const records = message.metadata?.["opencode/synthetic"];
+                if (records != null) {
+                    // Keep the original spread diagnostic for non-array metadata.
+                    const outer = Array.isArray(records) ? records : [...(message.metadata?.["opencode/synthetic"] ?? [])];
+                    for (const event of outer) instructions.push(event);
+                }
+                message.parts.forEach(part => {
+                    const records = part.payload.ToolResult?.result.metadata?.["opencode/synthetic"];
+                    if (Array.isArray(records)) {
+                        for (let i = 0, length = records.length; i < length; i++) {
+                            if (i in records) instructions.push(records[i]);
+                        }
+                    } else if (records != null) instructions.push(records);
+                });
+            });
             checkpoint.metadata = { opencode_compaction: native, ...(instructions.length ? { "opencode/synthetic": instructions } : {}) };
             const currentUser = input.messages.findLast(message => message.role === "User");
             return { result: { action: "context_preparation", output: { ...event.output, messages: [checkpoint], changed: true,
