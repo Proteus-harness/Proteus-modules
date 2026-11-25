@@ -82,10 +82,16 @@ export async function appServer(f, name, overrides = {}) {
     const configPath = join(f.dir, 'synthetic.json');
     const config = { active_provider: 'go',
         providers: { go: { provider: 'opencode', model: flash, stream: true, reasoning: { effort: 'high', summary: true } } },
-        components: { model: { command: node, args: [...(f.preload ? ['--import', f.preload] : []), worker],
-            env_allowlist: Object.keys(f.env), exports: { model: { opencode: {} } } } },
+        modules: { session_storage: 'jsonl' },
+        components: {
+            model: { command: node, args: [...(f.preload ? ['--import', f.preload] : []), worker],
+                env_allowlist: Object.keys(f.env), exports: { model: { opencode: {} } } },
+            storage: { command: moduleBin('proteus-session-storage-module'),
+                exports: { session_storage: { jsonl: {} } } },
+        },
         module_config: { model: { opencode: f.config } } };
     await writeFile(configPath, JSON.stringify({ ...config, ...overrides,
+        modules: { ...config.modules, ...overrides.modules },
         components: { ...config.components, ...overrides.components },
         module_config: { ...config.module_config, ...overrides.module_config } }));
     const child = spawn(core, ['--config', configPath, '--cwd', f.workspace, 'server', 'http', '--host', '127.0.0.1', '--port', '0', '--token', 'synthetic-token', '--ready-stdout'],
