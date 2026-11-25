@@ -242,8 +242,10 @@ def install(package, binary, destination, root=ROOT, *, expected_sha256=None):
     metadata = module / "module.json"
     sources = {module / "licenses/LICENSE": root / "LICENSE"}
     # Preserve upstream provenance beside the exact implementation being shipped.
-    for source in sorted(package.implementation.rglob("*")):
-        if source.is_file() and source.name in ("LICENSE", "NOTICE", "UPSTREAM.md", "PROVENANCE.md"):
+    provenance = (source for source in package.implementation.rglob("*")
+                  if source.name in ("LICENSE", "NOTICE", "UPSTREAM.md", "PROVENANCE.md"))
+    for source in sorted(provenance):
+        if source.is_file():
             sources[module / "licenses" / source.relative_to(package.implementation)] = source
     sources[executable] = binary
 
