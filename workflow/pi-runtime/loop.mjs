@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { runAgentLoop, convertToLlm, buildSystemPrompt, estimateContextTokens, resolveModel, createCodingToolDefinitions, SETTINGS_DEFAULTS, retryDelayMs } from "./upstream.mjs";
+import { runAgentLoop, convertToLlm, buildSystemPrompt, estimateContextTokens, resolveModel, createToolDefinition, SETTINGS_DEFAULTS, retryDelayMs } from "./upstream.mjs";
 import { executionCall } from "./tool-arguments.mjs";
 import { canonical } from "../../components/module-runtime-js/canonical.mjs";
 import { assistant, finishedStream, piContent, piMessage, piMessages } from "../../components/pi-runtime-js/messages.mjs";
@@ -116,15 +116,19 @@ export async function workflow({ task, runtime, history }, { hostCall, signal, c
             contextFiles,
             skills: [],
         });
-        const definitions = new Map(createCodingToolDefinitions(task.cwd).map(t => [t.name, t]));
+        const definitionCwd = task.cwd;
+        // Of Pi 1.5.2's four coding tools, only edit has an argument preparer.
+        let prepareEdit;
         const tools = specs.map((spec) => ({
             name: spec.name,
             label: spec.name,
             description: spec.description,
             parameters: spec.input_schema,
             executionMode: spec.metadata?.["pi/execution_mode"] ?? undefined,
-            prepareArguments: spec.metadata?.["pi/package"] === "@earendil-works/pi-coding-agent@1.5.2"
-                ? definitions.get(spec.name)?.prepareArguments : undefined,
+            prepareArguments:
+                spec.metadata?.["pi/package"] === "@earendil-works/pi-coding-agent@1.5.2" && spec.name === "edit"
+                    ? (prepareEdit ??= createToolDefinition("edit", definitionCwd).prepareArguments)
+                    : undefined,
             execute: async (id, args) => {
                 const binding = pending.get(id);
                 if (!binding) throw new Error("Unbound Pi invocation " + id);

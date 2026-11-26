@@ -208,11 +208,31 @@ impl State {
                 snapshot,
                 after_seq,
                 limit,
-            } => Ok(SessionStorageResponse::Records {
-                page: self
-                    .get_snapshot(&snapshot)?
-                    .display_page(after_seq, limit)?,
-            }),
+            } => {
+                let state = self.get_snapshot(&snapshot)?;
+                let (records, next_after_seq) = state.display_page(after_seq, limit)?;
+                // The live handle was checked exactly. Do not retain spare
+                // capacity carried by an in-process caller in its response.
+                let compact = [
+                    &snapshot.snapshot_id,
+                    &snapshot.session.key,
+                    &snapshot.content_sha256,
+                ]
+                .into_iter()
+                .all(|text| text.capacity() == text.len());
+                let snapshot = if compact {
+                    snapshot
+                } else {
+                    state.identity.clone()
+                };
+                Ok(SessionStorageResponse::Records {
+                    page: StorageRecordPage {
+                        snapshot,
+                        records,
+                        next_after_seq,
+                    },
+                })
+            }
             ReadConversation { snapshot, point } => Ok(SessionStorageResponse::Conversation {
                 conversation: self.get_snapshot(&snapshot)?.conversation_at(point)?,
             }),

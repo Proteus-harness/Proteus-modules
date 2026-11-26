@@ -2,6 +2,7 @@
 use anyhow::{Context, Result, ensure};
 use proteus_module_sdk::contracts::{
     contracts::SessionStorageResponse,
+    domain::ToolResult,
     model_standard::{CanonicalMessage, ContentPart},
     storage::journal::JournalEntry,
 };
@@ -62,6 +63,13 @@ pub(super) fn into_value(mut response: SessionStorageResponse) -> Result<Value> 
                         )?;
                     move_messages(output_messages, messages)?;
                     output.push(value);
+                } else if let JournalEntry::ToolResultRecorded(recorded)
+                | JournalEntry::ToolEffectRecorded(recorded) = &mut record.entry
+                {
+                    let strings = ToolResultStrings::take(&mut recorded.result);
+                    let mut value = serde_json::to_value(record)?;
+                    strings.restore(&mut value, &["entry", "payload", "result"])?;
+                    output.push(value);
                 } else {
                     output.push(serde_json::to_value(record)?);
                 }
@@ -82,7 +90,34 @@ pub(super) fn into_value(mut response: SessionStorageResponse) -> Result<Value> 
     Ok(result)
 }
 
-const MIN_OPAQUE_LEAF_BYTES: usize = 4 * 1024;
+const MIN_COMPACT_LEAF_BYTES: usize = 4 * 1024;
+
+fn take_compact_string(text: &mut String) -> Option<String> {
+    (text.len() >= MIN_COMPACT_LEAF_BYTES && text.capacity() == text.len()).then(|| mem::take(text))
+}
+
+fn take_reasoning_strings(
+    payload: &mut ContentPart,
+) -> Option<(&'static str, [Option<String>; 2])> {
+    let (variant, strings) = match payload {
+        ContentPart::ReasoningSummary { text } => {
+            ("ReasoningSummary", [take_compact_string(text), None])
+        }
+        ContentPart::Reasoning { text, signature } => (
+            "Reasoning",
+            // Keep the Option discriminant, including Some(empty).
+            [
+                take_compact_string(text),
+                signature.as_mut().and_then(take_compact_string),
+            ],
+        ),
+        _ => return None,
+    };
+    strings
+        .iter()
+        .any(Option::is_some)
+        .then_some((variant, strings))
+}
 
 // Opaque data can retain spare capacity after decode. Only lift a known,
 // large string that is already as compact as the serializer's copy. Keep
@@ -97,8 +132,43 @@ fn take_compact_opaque_leaf(format: &str, data: &mut Value) -> Option<(&'static 
     let Value::String(text) = data.get_mut(field)? else {
         return None;
     };
-    (text.len() >= MIN_OPAQUE_LEAF_BYTES && text.capacity() == text.len())
-        .then(|| (field, mem::take(text)))
+    take_compact_string(text).map(|text| (field, text))
+}
+
+struct ToolResultStrings([Option<String>; 2]);
+
+impl ToolResultStrings {
+    fn take(result: &mut ToolResult) -> Self {
+        Self([
+            take_compact_string(&mut result.output),
+            result.error.as_mut().and_then(take_compact_string),
+        ])
+    }
+
+    fn restore(self, envelope: &mut Value, path: &[&str]) -> Result<()> {
+        if self.0.iter().all(Option::is_none) {
+            return Ok(());
+        }
+        let mut result = envelope;
+        for segment in path {
+            result = result
+                .get_mut(*segment)
+                .context("serialized display tool result omitted its payload")?;
+        }
+        for (field, text) in ["output", "error"].into_iter().zip(self.0) {
+            if let Some(text) = text {
+                let slot = result
+                    .get_mut(field)
+                    .context("serialized display tool result omitted its string slot")?;
+                ensure!(
+                    slot.as_str() == Some(""),
+                    "serialized display tool result string slot changed"
+                );
+                *slot = Value::String(text);
+            }
+        }
+        Ok(())
+    }
 }
 
 fn move_messages(
@@ -118,6 +188,10 @@ fn move_messages(
             .context("serialized display message omitted its parts array")?;
         serialized_parts.reserve_exact(parts.len());
         for mut part in parts {
+            let tool_result = match &mut part.payload {
+                ContentPart::ToolResult { result } => Some(ToolResultStrings::take(result)),
+                _ => None,
+            };
             let owned_text = match &mut part.payload {
                 ContentPart::Text { text } => Some(mem::take(text)),
                 _ => None,
@@ -126,7 +200,26 @@ fn move_messages(
                 ContentPart::Opaque { format, data } => take_compact_opaque_leaf(format, data),
                 _ => None,
             };
+            let reasoning = take_reasoning_strings(&mut part.payload);
             let mut value = serde_json::to_value(part)?;
+            if let Some((variant, strings)) = reasoning {
+                let payload = value
+                    .get_mut("payload")
+                    .and_then(|value| value.get_mut(variant))
+                    .context("serialized display reasoning omitted its payload")?;
+                for (field, text) in ["text", "signature"].into_iter().zip(strings) {
+                    if let Some(text) = text {
+                        let slot = payload
+                            .get_mut(field)
+                            .context("serialized display reasoning omitted its string slot")?;
+                        ensure!(
+                            slot.as_str() == Some(""),
+                            "serialized display reasoning string slot changed"
+                        );
+                        *slot = Value::String(text);
+                    }
+                }
+            }
             if let Some(text) = owned_text {
                 let slot = value
                     .get_mut("payload")
@@ -151,6 +244,9 @@ fn move_messages(
                     "serialized opaque display string slot changed"
                 );
                 *slot = Value::String(text);
+            }
+            if let Some(strings) = tool_result {
+                strings.restore(&mut value, &["payload", "ToolResult", "result"])?;
             }
             serialized_parts.push(value);
         }

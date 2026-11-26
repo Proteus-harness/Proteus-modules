@@ -116,6 +116,65 @@ fn read(f: &Fixture, snapshot: &StorageSnapshot) -> SessionStorageResponse {
 }
 
 #[test]
+fn current_conversation_matches_the_full_display_projection_at_the_pinned_revision() {
+    for kind in backends() {
+        let mut f = Fixture::new(kind);
+        f.append(vec![text("current-only usage-rich fixture")]);
+        add_turn(&mut f, false);
+        add_turn(&mut f, true);
+        let SessionStorageResponse::DisplaySnapshot {
+            projection: Some(full),
+        } = f
+            .service
+            .execute(SessionStorageRequest::OpenDisplaySnapshot {
+                session: f.descriptor.session.clone(),
+            })
+            .unwrap()
+        else {
+            panic!("missing display projection");
+        };
+
+        let old = full.snapshot;
+        let expected = SessionStorageResponse::Conversation {
+            conversation: full.state.conversation,
+        };
+        let SessionStorageResponse::Conversation { conversation } = &expected else {
+            unreachable!()
+        };
+        assert!(!conversation.model_context.is_empty());
+        assert_eq!(full.state.usage.requests.len(), 2);
+        let expected_usage = SessionStorageResponse::Usage {
+            usage: full.state.usage,
+        };
+        let read_current = |fixture: &Fixture| {
+            let req = SessionStorageRequest::ReadConversation {
+                snapshot: old.clone(),
+                point: StorageHistoryPoint::Current,
+            };
+            let out = fixture.service.execute(req.clone()).unwrap();
+            req.validate_response(&out).unwrap();
+            assert_eq!(
+                serde_json::to_vec(&out).unwrap(),
+                serde_json::to_vec(&expected).unwrap()
+            );
+        };
+        crate::diagnostics::reset();
+        read_current(&f);
+        assert_eq!(
+            crate::diagnostics::get().decoded,
+            old.revision.session_seq,
+            "the read-only fold still decodes the complete fixed prefix"
+        );
+        assert_eq!(read(&f, &old), expected_usage);
+        // An unrelated later writer suffix is not visible through the old
+        // display handle, even though current conversation has another fold.
+        add_turn(&mut f, false);
+        read_current(&f);
+        assert_eq!(read(&f, &old), expected_usage);
+    }
+}
+
+#[test]
 fn read_usage_holds_the_same_prefix_without_losing_conversation_context() {
     for kind in backends() {
         let mut f = Fixture::new(kind);
@@ -165,5 +224,84 @@ fn read_usage_holds_the_same_prefix_without_losing_conversation_context() {
             JournalEntry::TurnSettled(_)
         ));
         assert!(page.next_after_seq.is_none());
+    }
+}
+
+#[test]
+fn cold_catalog_matches_strict_model_turn_history_and_audit() {
+    for kind in backends() {
+        let mut f = Fixture::new(kind);
+        f.append(vec![text("  первый чат 🦀  ")]);
+        add_turn(&mut f, false);
+        add_turn(&mut f, true);
+        f.append(vec![text("latest history message")]);
+
+        // The full display fold provides an independent, strictly validated
+        // reference for the catalog's history, revision and content digest.
+        let SessionStorageResponse::DisplaySnapshot {
+            projection: Some(full),
+        } = f
+            .service
+            .execute(SessionStorageRequest::OpenDisplaySnapshot {
+                session: f.descriptor.session.clone(),
+            })
+            .unwrap()
+        else {
+            panic!("missing strict display snapshot");
+        };
+        assert_eq!(full.state.conversation.messages.len(), 2);
+        assert_eq!(full.state.usage.requests.len(), 2);
+        assert!(!full.state.conversation.model_context.is_empty());
+
+        // Use a fresh reader and remove only the fixture's disposable index,
+        // so a success from either warm layer cannot mask the cold traversal.
+        let index_path = f
+            .descriptor
+            .local_path
+            .as_ref()
+            .unwrap()
+            .join(".storage-catalog-v1.json");
+        std::fs::remove_file(&index_path).unwrap();
+        let catalog = StorageService::new(kind);
+        let list = |audit| SessionStorageRequest::List {
+            config_root: f.root.path().to_owned(),
+            workspace_path: None,
+            audit,
+        };
+        crate::diagnostics::reset();
+        let normal = catalog.execute(list(false)).unwrap();
+        assert_eq!(
+            crate::diagnostics::get().decoded,
+            full.snapshot.revision.session_seq
+        );
+        let SessionStorageResponse::Sessions { sessions } = &normal else {
+            panic!("missing catalog sessions");
+        };
+        let [summary] = sessions.as_slice() else {
+            panic!("expected a single catalog entry");
+        };
+        assert_eq!(summary.descriptor.session, full.snapshot.session);
+        assert_eq!(summary.message_count, full.state.conversation.messages.len());
+        assert_eq!(summary.preview.as_deref(), Some("первый чат 🦀"));
+
+        let index: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(&index_path).unwrap()).unwrap();
+        assert_eq!(
+            index["data"]["revision"],
+            serde_json::to_value(full.snapshot.revision).unwrap()
+        );
+        assert_eq!(
+            index["data"]["fingerprint"].as_str(),
+            Some(full.snapshot.content_sha256.as_str())
+        );
+
+        crate::diagnostics::reset();
+        assert_eq!(catalog.execute(list(false)).unwrap(), normal);
+        assert_eq!(crate::diagnostics::get().decoded, 0);
+        assert_eq!(catalog.execute(list(true)).unwrap(), normal);
+        assert_eq!(
+            crate::diagnostics::get().decoded,
+            full.snapshot.revision.session_seq
+        );
     }
 }

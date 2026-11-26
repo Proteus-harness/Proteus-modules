@@ -164,9 +164,10 @@ fn codex_interruption_marker_follows_the_synthetic_result() {
 
 #[test]
 fn canonical_ack_retains_request_result_without_persisting_it() {
-    let input = resumed_input(None);
+    let mut input = resumed_input(None);
+    let original = input.history.clone();
     let mut host = FakeHost::default();
-    let mut turn = crate::scaffold::TurnScaffold::begin(&mut host, &input).unwrap();
+    let mut turn = crate::scaffold::TurnScaffold::begin(&mut host, &mut input).unwrap();
     assert_eq!(results_for(&turn.model_messages, "old-call").len(), 1);
     let candidate = turn.model_messages.clone();
     let material = ContextPreparationInput::new(candidate.clone(), None);
@@ -188,13 +189,13 @@ fn canonical_ack_retains_request_result_without_persisting_it() {
     assert!(results_for(&turn.persistent_messages, "old-call").is_empty());
     *host.checkpoint_ack.lock().unwrap() = Some(WorkflowCheckpointAck {
         history: WorkflowHistoryUpdate::new(vec![])
-            .with_history_replacement(input.history.clone())
+            .with_history_replacement(original.clone())
             .with_compactions(vec![report]),
-        messages: input.history.clone(),
+        messages: original.clone(),
         revision: Some(1),
     });
     turn.checkpoint(&host, &[]).unwrap();
-    assert_eq!(turn.persistent_messages, input.history);
+    assert_eq!(turn.persistent_messages, original);
     assert_eq!(results_for(&turn.model_messages, "old-call").len(), 1);
     let checkpoints = host.checkpoints.lock().unwrap();
     let persisted = checkpoints[0].history.history_replacement.as_ref().unwrap();

@@ -44,9 +44,13 @@ fn file_stamp(meta: &Metadata) -> Result<FileStamp> {
 }
 pub(super) type SourceStamp = Vec<Option<FileStamp>>;
 pub(super) fn source_stamp(dir: &Path, kind: BackendKind) -> Result<SourceStamp> {
+    Ok(source_stamp_items(dir, kind)?.into())
+}
+
+fn source_stamp_items(dir: &Path, kind: BackendKind) -> Result<[Option<FileStamp>; 3]> {
     let journal = kind.backend().description_path(dir);
     let wal = PathBuf::from(format!("{}-wal", journal.to_string_lossy()));
-    Ok(vec![
+    Ok([
         stamp(&journal)?,
         // Opening a read-only SQLite snapshot may create an empty WAL. It
         // carries no committed data and is equivalent to a missing WAL.
@@ -69,13 +73,20 @@ pub(super) struct WriterHead {
 }
 
 impl WriterHead {
+    pub(super) fn matches_source(&self, dir: &Path, kind: BackendKind) -> bool {
+        source_stamp_items(dir, kind).is_ok_and(|items| items.as_slice() == self.stamps.as_slice())
+    }
+
     pub fn advance(
         &mut self,
         dir: &Path,
         kind: BackendKind,
         append: crate::backend::Append,
     ) -> Option<()> {
-        self.stamps = source_stamp(dir, kind).ok()?;
+        let items = source_stamp_items(dir, kind).ok()?;
+        // Keep the allocation owned by the current verified writer head.
+        self.stamps.clear();
+        self.stamps.extend(items);
         durable::update_blobs(dir, &mut self.blobs, append.blobs)?;
         self.extent = append.extent;
         self.hash.update(&append.bytes);
@@ -233,13 +244,13 @@ impl CatalogRead {
         let (fold, hint) = match kind {
             BackendKind::Sqlite => {
                 Sqlite::replay_catalog(dir, session, |fold: &mut Fold, record| {
-                    fold.apply(session, record)
+                    fold.apply_validated(session, record)
                 })?
             }
             BackendKind::Jsonl => {
                 let (source, fold) =
                     Jsonl::replay_snapshot(dir, session, None, |fold: &mut Fold, record, _| {
-                        fold.apply(session, record)
+                        fold.apply_validated(session, record)
                     })?;
                 let hint = crate::backend::PrefixHint {
                     extent: source.extent(),

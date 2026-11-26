@@ -24,14 +24,14 @@ use crate::{
 };
 
 pub(crate) fn run_codex_loop(
-    input: WorkflowModuleInput,
+    mut input: WorkflowModuleInput,
     host: &mut WorkflowModuleHostMut<'_>,
     module_id: &str,
 ) -> Result<WorkflowModuleOutput, WorkflowFailure> {
     super::intents::instructions(&input).map_err(WorkflowFailure::from)?;
     let stream_retry = StreamRetryConfig::from_config(&input.config)?;
     let mut turn =
-        TurnScaffold::begin_without_context(host, &input).map_err(WorkflowFailure::from)?;
+        TurnScaffold::begin_without_context(host, &mut input).map_err(WorkflowFailure::from)?;
     super::codex_recovery::prepare_interrupted_turns(
         &mut turn.model_messages,
         &input.runtime.interrupted_turns,

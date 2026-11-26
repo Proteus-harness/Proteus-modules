@@ -29,6 +29,42 @@ fn resident_catalog_uses_observed_descriptor_with_the_cached_projection() {
     }
 }
 
+#[test]
+fn warm_writer_reuses_stamp_storage_without_accepting_changed_metadata() {
+    for kind in backends() {
+        let mut f = Fixture::new(kind);
+        f.append(vec![text("ordinary first record")]);
+        let dir = f.descriptor.local_path.clone().unwrap();
+        let observe = |fixture: &Fixture| {
+            let state = fixture.service.lock_state().unwrap();
+            let head = state.writers[&fixture.lease.session].head.as_ref().unwrap();
+            assert!(head.stamps == source_stamp(&dir, kind).unwrap());
+            (head.stamps.as_ptr(), head.extent)
+        };
+        let (allocation, first_extent) = observe(&f);
+        f.append(vec![text("ordinary second record")]);
+        let (next_allocation, second_extent) = observe(&f);
+        assert_eq!(next_allocation, allocation);
+        assert!(second_extent > first_extent);
+
+        // Change only the synthetic session marker's mtime, not its content
+        // or any journal/WAL bytes. A stale head must still be discarded.
+        let marker = std::fs::OpenOptions::new()
+            .write(true)
+            .open(dir.join("session.json"))
+            .unwrap();
+        let before = marker.metadata().unwrap().modified().unwrap();
+        marker
+            .set_modified(before - std::time::Duration::from_secs(3600))
+            .unwrap();
+        assert_ne!(marker.metadata().unwrap().modified().unwrap(), before);
+        drop(marker);
+        f.append(vec![text("ordinary third record")]);
+        let state = f.service.lock_state().unwrap();
+        assert!(state.writers[&f.lease.session].head.is_none());
+    }
+}
+
 fn pending(f: &Fixture) -> (PathBuf, CatalogRead, Projection) {
     let dir = f.descriptor.local_path.clone().unwrap();
     let descriptor = sessions::open(f.service.kind, &dir).unwrap();

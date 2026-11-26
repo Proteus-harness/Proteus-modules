@@ -54,7 +54,7 @@ impl State {
         let kind = self.kind;
         let writer = self.writer(&commit.lease)?;
         if let Some(head) = writer.head.as_ref()
-            && catalog::source_stamp(&dir, kind).ok().as_ref() != Some(&head.stamps)
+            && !head.matches_source(&dir, kind)
         {
             writer.head = None;
         }

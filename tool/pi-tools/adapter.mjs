@@ -4,7 +4,10 @@ const packageEntry = new URL(import.meta.resolve("@earendil-works/pi-coding-agen
 const packageInfo = JSON.parse(readFileSync(new URL("../package.json", packageEntry), "utf8"));
 if (packageInfo.version !== "1.5.2") throw new Error(`Pi runtime requires 1.5.2, found ${packageInfo.version}`);
 export const importPi = relative => import(new URL(relative, packageEntry));
-const { createCodingToolDefinitions } = await importPi("./core/tools/index.js");
+const { createCodingToolDefinitions, createToolDefinition } = await importPi("./core/tools/index.js");
+// Match the four tools in Pi 1.5.2's createCodingToolDefinitions, not the
+// wider set supported by createToolDefinition.
+const codingToolNames = ["read", "bash", "edit", "write"];
 
 export const loadPi = () => pi;
 
@@ -52,8 +55,10 @@ export function toToolResult(callId, value, failure) {
 }
 
 export async function executePiTool(input, signal) {
-    const definition = createPiDefinitions(input.cwd).find(tool => tool.name === input.call.name);
-    if (!definition) throw new Error(`Unknown Pi tool ${input.call.name}`);
+    const cwd = input.cwd;
+    const name = codingToolNames.find(name => name === input.call.name);
+    if (name === undefined) throw new Error(`Unknown Pi tool ${input.call.name}`);
+    const definition = createToolDefinition(name, cwd);
     const args = input.call.raw_arguments == null ? input.call.args : JSON.parse(input.call.raw_arguments);
     const prepared = definition.prepareArguments ? definition.prepareArguments(args) : args;
     try {

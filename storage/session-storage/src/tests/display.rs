@@ -301,3 +301,69 @@ fn display_reuses_page_scratch_without_reordering_pending_rows() {
         assert_eq!(read(2), second);
     }
 }
+
+#[test]
+fn display_page_reuses_only_the_exact_live_request_snapshot() {
+    for kind in backends() {
+        let mut f = Fixture::new(kind);
+        f.append(vec![text("ordinary first record")]);
+        let projection = open(&f);
+        let expected = &projection.snapshot;
+
+        let mut wrong = expected.clone();
+        wrong.session.key.push('x');
+        let error = f
+            .service
+            .execute(SessionStorageRequest::ReadDisplayRecords {
+                snapshot: wrong,
+                after_seq: 0,
+                limit: 1,
+            })
+            .unwrap_err();
+        assert_eq!(
+            error.to_string(),
+            "snapshot identity/revision/fingerprint mismatch"
+        );
+
+        let supplied = expected.clone();
+        let owned = (
+            supplied.snapshot_id.as_ptr(),
+            supplied.session.key.as_ptr(),
+            supplied.content_sha256.as_ptr(),
+        );
+        let read_page = |snapshot| {
+            let SessionStorageResponse::Records { page } = f
+                .service
+                .execute(SessionStorageRequest::ReadDisplayRecords {
+                    snapshot,
+                    after_seq: 0,
+                    limit: 1,
+                })
+                .unwrap()
+            else {
+                panic!("expected a display page");
+            };
+            page
+        };
+        let page = read_page(supplied);
+        assert_eq!(&page.snapshot, expected);
+        assert_eq!(
+            (
+                page.snapshot.snapshot_id.as_ptr(),
+                page.snapshot.session.key.as_ptr(),
+                page.snapshot.content_sha256.as_ptr(),
+            ),
+            owned,
+        );
+        assert_eq!(page.records.len(), 1);
+        assert_eq!(page.records[0].session_seq, 1);
+        assert_eq!(page.next_after_seq, None);
+
+        let mut with_spare = expected.clone();
+        with_spare.session.key.reserve_exact(4096);
+        let spare = with_spare.session.key.as_ptr();
+        let compact = read_page(with_spare);
+        assert_eq!(compact, page);
+        assert_ne!(compact.snapshot.session.key.as_ptr(), spare);
+    }
+}

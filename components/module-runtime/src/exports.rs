@@ -357,7 +357,9 @@ impl ModuleExport {
             runtime: input.runtime,
         };
         let mut host = WorkflowHostBridge(bridge.clone());
-        let output = match workflow.run_json(serde_json::to_string(&module_input)?, &mut host) {
+        let input_json = serde_json::to_string(&module_input)?;
+        drop(module_input);
+        let output = match workflow.run_json(input_json, &mut host) {
             Ok(output) => output,
             Err(failure) => return encode(ProcessWorkflowResponse::failed(failure)),
         };

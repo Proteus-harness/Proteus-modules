@@ -42,11 +42,11 @@ const EXECUTE_DEVELOPER_INSTRUCTIONS: &str = "Execute phase: follow the plan, in
 const REVIEW_DEVELOPER_INSTRUCTIONS: &str = "Review phase: produce the final user-facing answer. Mention what changed or what you found, and call out verification gaps if no verification was possible. Do not request tools in this phase.";
 
 pub(crate) fn run_plan_execute_review(
-    input: WorkflowModuleInput,
+    mut input: WorkflowModuleInput,
     host: &mut WorkflowModuleHostMut<'_>,
 ) -> Result<WorkflowModuleOutput, WorkflowFailure> {
     crate::intents::reject(&input).map_err(WorkflowFailure::from)?;
-    let mut turn = TurnScaffold::begin(host, &input).map_err(WorkflowFailure::from)?;
+    let mut turn = TurnScaffold::begin(host, &mut input).map_err(WorkflowFailure::from)?;
     run_loop(&input, host, &mut turn).map_err(|error| turn.failure(error))
 }
 

@@ -1,5 +1,5 @@
 import { canonical } from "../../components/module-runtime-js/canonical.mjs";
-import { piMessages, assistant, finishedStream } from "../../components/pi-runtime-js/messages.mjs";
+import { piMessage, piMessages, assistant, finishedStream } from "../../components/pi-runtime-js/messages.mjs";
 import {
     prepareCompaction,
     compact,
@@ -11,16 +11,40 @@ import {
     resolveModel,
 } from "./upstream.mjs";
 
-export async function preparation(params, { hostCall, signal, catalogProvider }) {
+export function preparation(params, invocation) {
+    return prepare(params, invocation, false);
+}
+
+export function preparationFromJsonLine(params, invocation) {
+    return prepare(params, invocation, true);
+}
+
+async function prepare(params, { hostCall, signal, catalogProvider }, jsonLineInputs) {
     const { event } = params;
     const unchanged = { result: { action: "continue" } };
     if (event.event !== "before_context" || !event.input.request) return unchanged;
     const request = event.input.request;
     const model = resolveModel(request.model, catalogProvider);
     const messages = event.output.messages;
+    const hint = jsonLineInputs ? event.input.token_estimate : undefined;
+    // Only the worker's parsed JSON-line requests can take this path. The
+    // pinned Pi predicate uses scalar settings and does not inspect the rows.
+    const decision = jsonLineInputs && event.input.reason === "pi_before_sampling"
+        && event.output.changed === false && Array.isArray(messages)
+        && Number.isInteger(hint) && hint >= 0 && hint <= 0xffff_ffff
+        && Number.isFinite(model.contextWindow)
+        ? shouldCompact(hint, model.contextWindow, DEFAULT_COMPACTION_SETTINGS)
+        : undefined;
+    if (decision === false) {
+        const names = new Map();
+        // Keep the same chronological conversion, including its validation
+        // errors and cross-row tool names, without retaining the results.
+        messages.forEach(message => { piMessage(message, model, names); });
+        return unchanged;
+    }
     const pi = piMessages(messages, model);
-    const tokens = event.input.token_estimate ?? estimateContextTokens(pi).tokens;
-    if (!shouldCompact(tokens, model.contextWindow, DEFAULT_COMPACTION_SETTINGS)) return unchanged;
+    const tokens = (jsonLineInputs ? hint : event.input.token_estimate) ?? estimateContextTokens(pi).tokens;
+    if (!(decision ?? shouldCompact(tokens, model.contextWindow, DEFAULT_COMPACTION_SETTINGS))) return unchanged;
     // Reuse the private projection now that no estimator reads it.
     const entries = pi;
     messages.forEach((m, i) => {

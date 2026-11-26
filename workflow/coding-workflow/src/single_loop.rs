@@ -27,12 +27,12 @@ user explicitly asks you to remember a stable preference or durable project fact
 Do not invent dates or times; omit them unless the user supplied them or you \
 verified them with a tool.";
 pub(crate) fn run_single_loop(
-    input: WorkflowModuleInput,
+    mut input: WorkflowModuleInput,
     host: &mut WorkflowModuleHostMut<'_>,
     max_tool_rounds: usize,
 ) -> Result<WorkflowModuleOutput, WorkflowFailure> {
     crate::intents::instructions(&input).map_err(WorkflowFailure::from)?;
-    let mut turn = TurnScaffold::begin(host, &input).map_err(WorkflowFailure::from)?;
+    let mut turn = TurnScaffold::begin(host, &mut input).map_err(WorkflowFailure::from)?;
     run_loop(&input, host, max_tool_rounds, &mut turn).map_err(|error| turn.failure(error))
 }
 

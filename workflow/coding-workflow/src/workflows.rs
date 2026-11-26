@@ -32,7 +32,7 @@ impl WorkflowModule for CodingSingleLoopWorkflow {
         input_json: String,
         host: &mut WorkflowModuleHostMut<'_>,
     ) -> Result<String, WorkflowFailure> {
-        let input = decode_input(&input_json)?;
+        let input = decode_input(input_json)?;
         let output = run_single_loop(input, host, self.max_tool_rounds)?;
         encode_output(&output)
     }
@@ -44,7 +44,7 @@ impl WorkflowModule for CodingCodexLoopWorkflow {
         input_json: String,
         host: &mut WorkflowModuleHostMut<'_>,
     ) -> Result<String, WorkflowFailure> {
-        let input = decode_input(&input_json)?;
+        let input = decode_input(input_json)?;
         let output = run_codex_loop(input, host, CODEX_LOOP_MODULE_ID)?;
         encode_output(&output)
     }
@@ -56,7 +56,7 @@ impl WorkflowModule for CodingPlanExecuteReviewWorkflow {
         input_json: String,
         host: &mut WorkflowModuleHostMut<'_>,
     ) -> Result<String, WorkflowFailure> {
-        let input = decode_input(&input_json)?;
+        let input = decode_input(input_json)?;
         let output = run_plan_execute_review(input, host)?;
         encode_output(&output)
     }
@@ -68,16 +68,31 @@ impl WorkflowModule for CodingProjectCheckWorkflow {
         input_json: String,
         host: &mut WorkflowModuleHostMut<'_>,
     ) -> Result<String, WorkflowFailure> {
-        let input = decode_input(&input_json)?;
+        let input = decode_input(input_json)?;
         let output = run_project_check(input, host)?;
         encode_output(&output)
     }
 }
 
-fn decode_input(input_json: &str) -> Result<WorkflowModuleInput, WorkflowFailure> {
-    serde_json::from_str(input_json).map_err(|error| WorkflowFailure::new(error.to_string()))
+// The decoded input owns its data. Drop the wire buffer before any workflow callback.
+fn decode_input(input_json: String) -> Result<WorkflowModuleInput, WorkflowFailure> {
+    serde_json::from_str(&input_json).map_err(|error| WorkflowFailure::new(error.to_string()))
 }
 
 fn encode_output(output: &WorkflowModuleOutput) -> Result<String, WorkflowFailure> {
     serde_json::to_string(output).map_err(|error| WorkflowFailure::new(error.to_string()))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn owned_decoder_preserves_typed_json_error() {
+        let json = r#"{"history":[],"unknown":true}"#;
+        let expected = serde_json::from_str::<WorkflowModuleInput>(json)
+            .unwrap_err()
+            .to_string();
+        assert_eq!(decode_input(json.to_owned()).unwrap_err().message, expected);
+    }
 }

@@ -8,6 +8,6 @@ await runComponent(async binding => {
         return modelExport(binding);
     }
     if (binding.slot === "tool") return createPiToolsExport(binding);
-    const { createExport } = await import("../../workflow/pi-runtime/exports.mjs");
-    return createExport(binding);
+    const { createJsonLineExport } = await import("../../workflow/pi-runtime/exports.mjs");
+    return createJsonLineExport(binding);
 });

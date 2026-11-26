@@ -292,12 +292,12 @@ impl DisplayRecords {
 
     pub fn page(
         &mut self,
-        snapshot: &StorageSnapshot,
+        final_seq: u64,
         after: u64,
         limit: u32,
-    ) -> Result<StorageRecordPage> {
+    ) -> Result<(Vec<JournalRecord>, Option<u64>)> {
         ensure!(
-            after <= snapshot.revision.session_seq,
+            after <= final_seq,
             "display cursor is past the snapshot prefix"
         );
         if self.after != Some(after) {
@@ -333,11 +333,8 @@ impl DisplayRecords {
         }
         let last = records.last().map_or(after, |record| record.session_seq);
         self.after = Some(last);
-        Ok(StorageRecordPage {
-            snapshot: snapshot.clone(),
-            records,
-            next_after_seq: (!finished && last < snapshot.revision.session_seq).then_some(last),
-        })
+        let next_after_seq = (!finished && last < final_seq).then_some(last);
+        Ok((records, next_after_seq))
     }
 }
 

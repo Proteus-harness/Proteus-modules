@@ -58,11 +58,11 @@ const PROJECTS: [ProjectDefinition; 4] = [
 ];
 
 pub(crate) fn run_project_check(
-    input: WorkflowModuleInput,
+    mut input: WorkflowModuleInput,
     host: &mut WorkflowModuleHostMut<'_>,
 ) -> Result<WorkflowModuleOutput, ProcessModuleError> {
     super::intents::reject(&input)?;
-    let mut turn = TurnScaffold::begin_without_context(host, &input)?;
+    let mut turn = TurnScaffold::begin_without_context(host, &mut input)?;
 
     let git_status = run_tool(host, &input, "git-status", "git_status", json!({}))?;
     if !git_status.ok {

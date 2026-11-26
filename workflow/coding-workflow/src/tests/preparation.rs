@@ -29,16 +29,16 @@ fn candidate(
 
 #[test]
 fn rejected_preparation_never_escapes_through_failure_or_terminal_output() {
-    let input = workflow_input("continue");
+    let mut input = workflow_input("continue");
+    let (messages, report) = candidate(&input);
     let mut host = FakeHost {
         checkpoint_failure: Some(ProcessModuleError::new("stale revision")),
         ..FakeHost::default()
     };
-    let mut turn = TurnScaffold::begin_without_context(&mut host, &input).unwrap();
+    let mut turn = TurnScaffold::begin_without_context(&mut host, &mut input).unwrap();
     let accepted_progress = CanonicalMessage::text(MessageRole::Assistant, "prior progress");
     turn.persistent_messages.push(accepted_progress.clone());
     turn.model_messages.push(accepted_progress.clone());
-    let (messages, report) = candidate(&input);
     let target = ContextPreparationTarget {
         execution_id: input.runtime.execution_id,
         revision: 1,
@@ -77,11 +77,12 @@ fn rejected_preparation_never_escapes_through_failure_or_terminal_output() {
 
 #[test]
 fn root_acknowledgement_adopts_host_history_and_retains_request_context() {
-    let input = workflow_input("continue");
-    let mut host = FakeHost::default();
-    let mut turn = TurnScaffold::begin(&mut host, &input).unwrap();
-    let context = turn.model_messages[0].clone();
+    let mut input = workflow_input("continue");
+    let current_user = input.history[0].clone();
     let (mut messages, report) = candidate(&input);
+    let mut host = FakeHost::default();
+    let mut turn = TurnScaffold::begin(&mut host, &mut input).unwrap();
+    let context = turn.model_messages[0].clone();
     messages.insert(1, context.clone());
     let target = ContextPreparationTarget {
         execution_id: input.runtime.execution_id,
@@ -90,7 +91,7 @@ fn root_acknowledgement_adopts_host_history_and_retains_request_context() {
     let steering = CanonicalMessage::text(MessageRole::User, "newly delivered steering");
     let accepted = vec![
         messages[0].clone(),
-        input.history[0].clone(),
+        current_user,
         steering.clone(),
     ];
     *host.checkpoint_ack.lock().unwrap() = Some(WorkflowCheckpointAck {
@@ -182,15 +183,67 @@ fn detached_acknowledgement_does_not_replace_full_initial_history_with_partial_p
     let mut input = workflow_input("continue");
     let older = CanonicalMessage::text(MessageRole::User, "older input");
     input.history.insert(0, older);
+    let original = input.history.clone();
+    let original_storage = input.history.as_ptr();
     let mut host = FakeHost::default();
-    let mut turn = TurnScaffold::begin_without_context(&mut host, &input).unwrap();
+    let mut turn = TurnScaffold::begin_without_context(&mut host, &mut input).unwrap();
+    assert!(input.history.is_empty());
+    assert_eq!(turn.persistent_messages.as_ptr(), original_storage);
+    assert_ne!(turn.model_messages.as_ptr(), original_storage);
+    assert_eq!(turn.persistent_messages, original);
+    assert_eq!(turn.model_messages, original);
+
+    // A prompt-only change cannot leak into the persistent projection.
+    let prompt_only = CanonicalMessage::text(MessageRole::User, "request-only fixture");
+    let old_model = std::mem::replace(&mut turn.model_messages[0], prompt_only);
+    assert_eq!(turn.persistent_messages, original);
+    turn.model_messages[0] = old_model;
+
+    turn.checkpoint(&host, &[]).unwrap();
+    assert!(host.checkpoints.lock().unwrap().is_empty());
     let progress = CanonicalMessage::text(MessageRole::Assistant, "progress");
     turn.model_messages.push(progress.clone());
-    turn.persistent_messages.push(progress);
+    turn.persistent_messages.push(progress.clone());
     let before = turn.persistent_messages.clone();
     turn.checkpoint(&host, &[]).unwrap();
     assert_eq!(turn.persistent_messages, before);
     assert_eq!(turn.model_messages, before);
+    let checkpoints = host.checkpoints.lock().unwrap();
+    assert_eq!(checkpoints.len(), 1);
+    assert_eq!(checkpoints[0].history, WorkflowHistoryUpdate::new(vec![progress]));
+    assert!(checkpoints[0].tool_results.is_empty());
+    assert!(checkpoints[0].preparation_target.is_none());
+}
+
+#[test]
+fn rejected_user_anchor_leaves_owned_input_history_untouched() {
+    let role = CanonicalMessage::text(MessageRole::Assistant, "continue");
+    let text = CanonicalMessage::text(MessageRole::User, "different text");
+    for history in [vec![], vec![role], vec![text]] {
+        let mut input = workflow_input("continue");
+        input.history = history;
+        let original = input.history.clone();
+        let storage = input.history.as_ptr();
+        let mut host = FakeHost::default();
+        let error = TurnScaffold::begin_without_context(&mut host, &mut input)
+            .err()
+            .expect("invalid user anchor");
+        assert_eq!(
+            error.message,
+            if original.is_empty() {
+                "workflow input has no current user anchor"
+            } else {
+                "workflow input has no current task user message"
+            }
+        );
+        assert_eq!(input.history, original);
+        assert_eq!(input.history.as_ptr(), storage);
+        assert!(matches!(
+            host.events.lock().unwrap().as_slice(),
+            [Event::TaskReceived { task }] if task == &input.task
+        ));
+        assert!(host.checkpoints.lock().unwrap().is_empty());
+    }
 }
 
 #[test]
@@ -200,7 +253,7 @@ fn root_acknowledgement_moves_context_from_removed_anchor_without_rewriting_its_
     input.history.insert(0, removed.clone());
     let current = input.history.last().unwrap().clone();
     let mut host = FakeHost::default();
-    let mut turn = TurnScaffold::begin_without_context(&mut host, &input).unwrap();
+    let mut turn = TurnScaffold::begin_without_context(&mut host, &mut input).unwrap();
     let make_context = |text| {
         CanonicalMessage::new(
             MessageRole::User,

@@ -74,19 +74,18 @@ pub(crate) fn encode(
         let name = PathBuf::from(format!("{}.json", identity.sha256()));
         let relative_path = Path::new("blobs").join(&name);
         let path = session.join(&relative_path);
-        let stored = if path.try_exists()? {
+        blobs = if path.try_exists()? {
             let stored = bounded_read(&path, MAX_PAYLOAD_BYTES)?;
             ensure!(
                 crate::blob_codec::unpack(session, &stored)? == bytes,
                 "content-addressed blob collision"
             );
-            stored
+            crate::blob_codec::chunk_files(&stored)?
         } else {
-            let stored = identity.pack(session)?;
-            atomic_write(&path, &stored)?;
-            stored
+            let packed = identity.pack(session)?;
+            atomic_write(&path, packed.as_bytes())?;
+            packed.chunk_files()?
         };
-        blobs = crate::blob_codec::chunk_files(&stored)?;
         blobs.push(name);
         StoredPayload::Blob {
             sha256: identity.into_sha256(),
@@ -218,4 +217,47 @@ fn encoded_bytes_matches_compact_json_after_deserialization() {
             serde_json::to_vec(&value).unwrap().len()
         );
     }
+}
+
+#[cfg(test)]
+#[test]
+fn fresh_and_reused_canonical_blob_have_identical_journal_bytes_and_touched_paths() {
+    use crate::tests::text;
+    use proteus_contracts::domain::{new_record_id, new_session_id, new_thread_id};
+
+    let dir = tempfile::tempdir().unwrap();
+    let record = JournalRecord {
+        schema_version: JOURNAL_SCHEMA_VERSION,
+        record_id: new_record_id(),
+        session_seq: 1,
+        timestamp_ms: 1234,
+        session_id: new_session_id(),
+        execution_id: None,
+        thread_id: Some(new_thread_id()),
+        turn_id: None,
+        entry: JournalEntry::HistoryMutated(HistoryMutated {
+            previous_revision: 0,
+            new_revision: 1,
+            mutation: HistoryMutationKind::Append,
+            messages: vec![text(&"x".repeat(DEFAULT_BLOB_THRESHOLD))],
+            compaction: None,
+            tool_results: vec![],
+        }),
+    };
+    let (line, files) = encode(dir.path(), &record, DEFAULT_BLOB_THRESHOLD).unwrap();
+    let manifest_name = files.last().unwrap();
+    let manifest_path = dir.path().join("blobs").join(manifest_name);
+    let manifest_bytes = std::fs::read(&manifest_path).unwrap();
+    let parsed_paths = crate::blob_codec::chunk_files(&manifest_bytes).unwrap();
+    assert!(!parsed_paths.is_empty());
+    assert_eq!(&files[..files.len() - 1], parsed_paths.as_slice());
+    assert_eq!(
+        encode(dir.path(), &record, DEFAULT_BLOB_THRESHOLD).unwrap(),
+        (line.clone(), files)
+    );
+    assert_eq!(std::fs::read(manifest_path).unwrap(), manifest_bytes);
+    assert_eq!(
+        decode(dir.path(), record.session_id, &line).unwrap(),
+        (record, true)
+    );
 }

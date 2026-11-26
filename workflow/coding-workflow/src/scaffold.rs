@@ -86,7 +86,7 @@ impl TurnScaffold {
 
     pub(crate) fn begin_without_context(
         host: &mut WorkflowModuleHostMut<'_>,
-        input: &WorkflowModuleInput,
+        input: &mut WorkflowModuleInput,
     ) -> Result<Self, ProcessModuleError> {
         emit_event(
             host,
@@ -95,12 +95,12 @@ impl TurnScaffold {
             },
         )?;
 
-        let persistent_messages = input.history.clone();
         let current_user_message = match &input.runtime.continuation {
-            Some(continuation) => persistent_messages
+            Some(continuation) => input
+                .history
                 .iter()
                 .find(|message| message.id == continuation.current_user_message_id),
-            None => persistent_messages.last(),
+            None => input.history.last(),
         }
         .ok_or_else(|| ProcessModuleError::new("workflow input has no current user anchor"))?;
         if current_user_message.role != MessageRole::User
@@ -113,6 +113,9 @@ impl TurnScaffold {
         }
         let current_user_message_id = current_user_message.id;
 
+        // Reuse the decoded history for persistence. Request-only changes
+        // still need their own model projection.
+        let persistent_messages = std::mem::take(&mut input.history);
         let model_messages = persistent_messages.clone();
         let current_turn_messages_start = model_messages.len();
 
@@ -141,7 +144,7 @@ impl TurnScaffold {
 
     pub(crate) fn begin(
         host: &mut WorkflowModuleHostMut<'_>,
-        input: &WorkflowModuleInput,
+        input: &mut WorkflowModuleInput,
     ) -> Result<Self, ProcessModuleError> {
         let mut turn = Self::begin_without_context(host, input)?;
         crate::history::normalize_missing_tool_outputs(&mut turn.model_messages);

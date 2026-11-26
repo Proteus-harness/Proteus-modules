@@ -1,14 +1,22 @@
 import { workflow } from "./loop.mjs";
-import { preparation } from "./compaction.mjs";
+import { preparation, preparationFromJsonLine } from "./compaction.mjs";
 import { context } from "./context.mjs";
 
 const slots = {
     workflow: { id: "pi_loop", version: "v22", method: "run", handle: workflow },
-    hook: { id: "pi_compact", version: "v8", method: "hook.invoke", handle: preparation },
+    hook: { id: "pi_compact", version: "v8", method: "hook.invoke" },
     context: { id: "pi_context", version: "v3", method: "build", handle: context },
 };
 
 export function createExport(binding) {
+    return createBoundExport(binding, preparation);
+}
+
+export function createJsonLineExport(binding) {
+    return createBoundExport(binding, preparationFromJsonLine);
+}
+
+function createBoundExport(binding, prepare) {
     const contract = slots[binding.slot];
     if (
         !contract ||
@@ -19,6 +27,7 @@ export function createExport(binding) {
             !["openai-codex", "opencode-go"].includes(binding.module_config.catalog_provider))
     )
         throw new Error("Invalid Pi export binding");
+    const handle = contract.handle ?? prepare;
     return {
         manifest: {
             slot: binding.slot,
@@ -30,7 +39,7 @@ export function createExport(binding) {
         },
         invoke(method, params, invocation) {
             if (method !== contract.method) throw new Error("Unsupported Pi invocation " + method);
-            return contract.handle(params, {
+            return handle(params, {
                 ...invocation,
                 catalogProvider: binding.module_config.catalog_provider ?? "openai-codex",
             });

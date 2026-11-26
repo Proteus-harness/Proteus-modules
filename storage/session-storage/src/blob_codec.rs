@@ -98,21 +98,45 @@ impl<'a> BlobIdentity<'a> {
         self.sha256
     }
 
-    pub(crate) fn pack(&self, session: &Path) -> Result<Vec<u8>> {
+    pub(crate) fn pack(&self, session: &Path) -> Result<PackedBlob> {
         pack_inner(session, self.bytes, Some(&self.sha256))
+    }
+}
+
+/// Serialized output and, only for a manifest produced here, its own typed
+/// descriptors. Other callers cannot manufacture file lists for stored bytes.
+pub(crate) struct PackedBlob {
+    stored: Vec<u8>,
+    chunks: Option<Vec<Chunk>>,
+}
+
+impl PackedBlob {
+    pub(crate) fn as_bytes(&self) -> &[u8] {
+        &self.stored
+    }
+
+    pub(crate) fn chunk_files(&self) -> Result<Vec<PathBuf>> {
+        match &self.chunks {
+            Some(chunks) => files_for_chunks(chunks),
+            // Plain bytes keep the existing detection/parse path.
+            None => chunk_files(&self.stored),
+        }
     }
 }
 
 /// Write all shared chunks before publishing the returned manifest. Journal
 /// references continue to identify the hash and size of the original bytes.
 pub fn pack(session: &Path, bytes: &[u8]) -> Result<Vec<u8>> {
-    pack_inner(session, bytes, None)
+    Ok(pack_inner(session, bytes, None)?.stored)
 }
 
-fn pack_inner(session: &Path, bytes: &[u8], known_sha256: Option<&str>) -> Result<Vec<u8>> {
+fn pack_inner(session: &Path, bytes: &[u8], known_sha256: Option<&str>) -> Result<PackedBlob> {
     ensure!(bytes.len() <= MAX_PAYLOAD_BYTES, "blob exceeds maximum");
     if bytes.len() < MIN_CHUNK {
-        return Ok(bytes.to_vec());
+        return Ok(PackedBlob {
+            stored: bytes.to_vec(),
+            chunks: None,
+        });
     }
     let mut chunks = Vec::new();
     let mut remaining = bytes;
@@ -132,7 +156,10 @@ fn pack_inner(session: &Path, bytes: &[u8], known_sha256: Option<&str>) -> Resul
         packed.len() <= MAX_PAYLOAD_BYTES,
         "blob manifest exceeds maximum"
     );
-    Ok(packed)
+    Ok(PackedBlob {
+        stored: packed,
+        chunks: Some(manifest.chunks),
+    })
 }
 
 fn store_chunk(session: &Path, bytes: &[u8]) -> Result<Chunk> {
@@ -164,11 +191,11 @@ pub(crate) fn chunk_files(stored: &[u8]) -> Result<Vec<PathBuf>> {
         return Ok(Vec::new());
     };
     let manifest: Manifest = serde_json::from_slice(body)?;
-    manifest
-        .chunks
-        .iter()
-        .map(|chunk| chunk_file(&chunk.sha256))
-        .collect()
+    files_for_chunks(&manifest.chunks)
+}
+
+fn files_for_chunks(chunks: &[Chunk]) -> Result<Vec<PathBuf>> {
+    chunks.iter().map(|chunk| chunk_file(&chunk.sha256)).collect()
 }
 
 pub(crate) fn unpack_expected<'a>(
@@ -317,6 +344,25 @@ mod tests {
         let path = chunk_path(dir.path(), &manifest.chunks[0].sha256).unwrap();
         std::fs::write(path, vec![2; MAX_CHUNK]).unwrap();
         assert!(unpack(dir.path(), &packed).is_err());
+    }
+
+    #[test]
+    fn fresh_pack_file_list_matches_parsed_order_and_keeps_repeated_paths() {
+        let dir = tempfile::tempdir().unwrap();
+        let bytes = [vec![0; MAX_CHUNK], vec![1; MAX_CHUNK], vec![0; MAX_CHUNK]].concat();
+        let packed = BlobIdentity::new(&bytes).unwrap().pack(dir.path()).unwrap();
+        let paths = packed.chunk_files().unwrap();
+        assert_eq!(paths, chunk_files(packed.as_bytes()).unwrap());
+        assert_eq!(paths.len(), 3);
+        assert_eq!(paths[0], paths[2]);
+        assert_ne!(paths[0], paths[1]);
+        assert_eq!(unpack(dir.path(), packed.as_bytes()).unwrap(), bytes);
+
+        let legacy = br#"{"stock":true}"#;
+        let raw = BlobIdentity::new(legacy).unwrap().pack(dir.path()).unwrap();
+        assert_eq!(raw.as_bytes(), legacy);
+        assert!(raw.chunk_files().unwrap().is_empty());
+        assert_eq!(raw.chunk_files().unwrap(), chunk_files(legacy).unwrap());
     }
 
     #[test]

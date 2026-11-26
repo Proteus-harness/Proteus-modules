@@ -319,7 +319,11 @@ impl SnapshotState {
             next_after_seq,
         })
     }
-    pub fn display_page(&mut self, after: u64, limit: u32) -> Result<StorageRecordPage> {
+    pub fn display_page(
+        &mut self,
+        after: u64,
+        limit: u32,
+    ) -> Result<(Vec<JournalRecord>, Option<u64>)> {
         let version = self.source.source_version()?;
         if version != self.verified_version {
             self.source.verify_fixed_prefix()?;
@@ -329,7 +333,7 @@ impl SnapshotState {
             .display
             .as_mut()
             .ok_or_else(|| anyhow::anyhow!("snapshot has no display projection"))?
-            .page(&self.identity, after, limit)?;
+            .page(self.identity.revision.session_seq, after, limit)?;
         if self.source.source_version()? != self.verified_version {
             self.source.verify_fixed_prefix()?;
             self.verified_version = self.source.source_version()?;
@@ -338,7 +342,8 @@ impl SnapshotState {
     }
     pub fn conversation_at(&mut self, point: StorageHistoryPoint) -> Result<StorageConversation> {
         if point == StorageHistoryPoint::Current {
-            let state = self.fold()?;
+            // The pinned conversation response needs model context, not usage.
+            let state = self.fold_with_terminal::<true, false>(false)?.0;
             return Ok(StorageConversation {
                 revision: state.revision(),
                 model_context: state.model_context.snapshot(),

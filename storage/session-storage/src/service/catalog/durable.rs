@@ -3,12 +3,14 @@ use super::*;
 use std::{
     collections::{BTreeMap, BTreeSet},
     fs::OpenOptions,
-    io::Write,
+    io::{self, BufWriter, Write},
 };
 
 const FILE: &str = ".storage-catalog-v1.json";
 const MAX_BYTES: usize = 4 * 1024 * 1024;
 const MAX_BLOBS: usize = 16_384;
+const STREAM_CHECKSUM_AT_CAPACITY: usize = 64 * 1024;
+const CHECKSUM_BUFFER_BYTES: usize = 4 * 1024;
 pub(in crate::service) type BlobStamps = BTreeMap<PathBuf, FileStamp>;
 pub(in crate::service) type BlobStampDigest = [u8; 32];
 
@@ -173,23 +175,49 @@ pub(super) fn update_blobs(
     Some(())
 }
 
+struct DigestWriter(ring::digest::Context);
+
+impl Write for DigestWriter {
+    fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+        self.0.update(bytes);
+        Ok(bytes.len())
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        Ok(())
+    }
+}
+
+fn checksum(mut bytes: Vec<u8>, index: &Index) -> Option<String> {
+    if bytes.capacity() < STREAM_CHECKSUM_AT_CAPACITY {
+        bytes.clear();
+        serde_json::to_writer(&mut bytes, index).ok()?;
+        return Some(crate::io::sha256_hex(&bytes));
+    }
+
+    // The parsed index owns its data. Hash the same compact encoding without
+    // retaining the large read buffer or growing a whole canonical byte copy.
+    drop(bytes);
+    let mut writer = BufWriter::with_capacity(
+        CHECKSUM_BUFFER_BYTES,
+        DigestWriter(ring::digest::Context::new(&ring::digest::SHA256)),
+    );
+    serde_json::to_writer(&mut writer, index).ok()?;
+    let writer = writer.into_inner().ok()?;
+    Some(crate::io::digest_hex(writer.0.finish()))
+}
+
 pub(super) fn load(
     dir: &Path,
     descriptor: &StorageSessionDescriptor,
     stamps: &SourceStamp,
 ) -> Option<(StorageSessionSummary, super::super::views::PrefixCache)> {
-    let mut bytes = crate::io::bounded_read(&dir.join(FILE), MAX_BYTES).ok()?;
+    let bytes = crate::io::bounded_read(&dir.join(FILE), MAX_BYTES).ok()?;
     let Envelope {
-        checksum,
+        checksum: expected,
         data: index,
     } = serde_json::from_slice(&bytes).ok()?;
-    // The envelope owns its data. Reuse the read buffer for the canonical JSON,
-    // which can differ from the JSON spelling accepted by the parser.
-    bytes.clear();
-    serde_json::to_writer(&mut bytes, &index).ok()?;
-    let digest = crate::io::sha256_hex(&bytes);
-    drop(bytes);
-    if checksum != digest
+    if expected != checksum(bytes, &index)?
         || index.summary.descriptor.session != descriptor.session
         || &index.stamps != stamps
         || !matches_blob_stamps(dir, &index.blobs)?
@@ -295,7 +323,11 @@ mod tests {
     use super::*;
 
     fn fixture() -> (crate::tests::Fixture, Index) {
-        let mut f = crate::tests::Fixture::new(BackendKind::Jsonl);
+        fixture_for(BackendKind::Jsonl)
+    }
+
+    fn fixture_for(kind: BackendKind) -> (crate::tests::Fixture, Index) {
+        let mut f = crate::tests::Fixture::new(kind);
         f.append(vec![crate::tests::text(
             "quote: \" / slash: \\ / line: \n / Ёж 🦀",
         )]);
@@ -315,6 +347,65 @@ mod tests {
         let checksum = crate::io::sha256_hex(&serde_json::to_vec(&data).unwrap());
         let expected = serde_json::to_vec(&Envelope { checksum, data }).unwrap();
         assert_eq!(actual, expected);
+    }
+
+    #[test]
+    fn catalog_checksum_matches_compact_index_across_scratch_threshold() {
+        let (_f, mut data) = fixture();
+        let stamp = data.stamps.iter().flatten().next().unwrap().clone();
+        for item in 0..512 {
+            data.blobs.insert(
+                PathBuf::from(format!("parts/{item:064x}.json")),
+                stamp.clone(),
+            );
+        }
+        data.blobs.insert(PathBuf::from("parts/Ω \"abc\""), stamp);
+        let canonical = serde_json::to_vec(&data).unwrap();
+        assert!(canonical.len() >= STREAM_CHECKSUM_AT_CAPACITY);
+        let expected = crate::io::sha256_hex(&canonical);
+        assert_eq!(
+            checksum(Vec::new(), &data).as_deref(),
+            Some(expected.as_str())
+        );
+        let retained = Vec::with_capacity(STREAM_CHECKSUM_AT_CAPACITY);
+        assert_eq!(checksum(retained, &data).as_deref(), Some(expected.as_str()));
+    }
+
+    #[test]
+    fn larger_noncompact_catalog_keeps_the_same_typed_checksum_and_read_only_load() {
+        for kind in crate::tests::backends() {
+            let (f, data) = fixture_for(kind);
+            let dir = f.descriptor.local_path.as_ref().unwrap();
+            let descriptor = &data.summary.descriptor;
+            let bound = &data.stamps;
+            let (stock, prefix) = load(dir, descriptor, bound).unwrap();
+            let path = dir.join(FILE);
+            let compact = std::fs::read(&path).unwrap();
+            assert!(compact.len() < STREAM_CHECKSUM_AT_CAPACITY);
+            assert_eq!(encode(&data).unwrap(), compact);
+
+            // Larger input spelling of the same envelope, not a different checksum.
+            let mut spaced = compact;
+            spaced.resize(STREAM_CHECKSUM_AT_CAPACITY + 1, b' ');
+            std::fs::write(&path, &spaced).unwrap();
+            let (summary, observed) = load(dir, descriptor, bound).unwrap();
+            assert_eq!(summary, stock);
+            assert!(observed.stamps == prefix.stamps);
+            assert_eq!(observed.revision, prefix.revision);
+            assert_eq!(observed.hint.extent, prefix.hint.extent);
+            assert_eq!(observed.hint.fingerprint, prefix.hint.fingerprint);
+            assert_eq!(observed.blob_digest, prefix.blob_digest);
+            assert_eq!(std::fs::read(&path).unwrap(), spaced);
+
+            let mut wrong: Envelope = serde_json::from_slice(&spaced).unwrap();
+            let replacement = if wrong.checksum.starts_with('0') { "1" } else { "0" };
+            wrong.checksum.replace_range(..1, replacement);
+            let mut bytes = serde_json::to_vec(&wrong).unwrap();
+            bytes.resize(STREAM_CHECKSUM_AT_CAPACITY + 1, b' ');
+            std::fs::write(&path, &bytes).unwrap();
+            assert!(load(dir, descriptor, bound).is_none());
+            assert_eq!(std::fs::read(&path).unwrap(), bytes);
+        }
     }
 
     #[test]
