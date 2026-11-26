@@ -88,7 +88,7 @@ pub(crate) struct SnapshotState {
     page_after: Option<u64>,
     pending: Option<PendingPageRecord>,
     pub(crate) display: Option<crate::display::DisplayRecords>,
-    served_large_page: bool,
+    served_record_bytes: usize,
 }
 // A lone sequential reader reuses its look-ahead without another disk read.
 // Once other snapshots are open, cap the encoded size retained by each
@@ -122,7 +122,7 @@ impl SnapshotState {
             page_after: None,
             pending: None,
             display: None,
-            served_large_page: false,
+            served_record_bytes: 0,
         })
     }
     /// Reusing a resident semantic projection is safe only for a fully verified
@@ -131,7 +131,7 @@ impl SnapshotState {
         Ok(self.verified && self.source.source_version()? == self.verified_version)
     }
     pub(crate) fn released_large_payload(&self) -> bool {
-        self.served_large_page
+        self.served_record_bytes >= SESSION_STORAGE_PAGE_BYTE_BUDGET
             || self
                 .display
                 .as_ref()
@@ -323,7 +323,7 @@ impl SnapshotState {
             self.verified_version = self.source.source_version()?;
         }
         let last = records.last().map_or(after, |record| record.session_seq);
-        self.served_large_page |= bytes >= SESSION_STORAGE_PAGE_BYTE_BUDGET;
+        self.served_record_bytes = self.served_record_bytes.saturating_add(bytes);
         self.page_after = Some(last);
         let next_after_seq = (last < self.identity.revision.session_seq).then_some(last);
         Ok(StorageRecordPage {

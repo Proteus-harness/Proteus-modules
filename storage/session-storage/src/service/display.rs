@@ -104,18 +104,10 @@ impl State {
             };
             self.save_catalog_head(&dir, summary, &prefix, blobs);
         }
-        let Some(display) = display.and_then(DisplayWriter::finish) else {
+        let Some(display) = display.and_then(|writer| writer.finish_projection(identity.revision))
+        else {
             return Ok(SessionStorageResponse::DisplaySnapshot { projection: None });
         };
-        // With one large history mutation, canonical replay already receives all
-        // display facts and moves the validated messages into its conversation.
-        // A projected reply would send the same large messages a second time.
-        if identity.revision.session_seq == 1
-            && identity.revision.history_revision == 1
-            && display.bytes >= SESSION_STORAGE_PAGE_BYTE_BUDGET as u64
-        {
-            return Ok(SessionStorageResponse::DisplaySnapshot { projection: None });
-        }
         let state = state.into_resume(session.session_id);
         if !state_fits(&state) {
             return Ok(SessionStorageResponse::DisplaySnapshot { projection: None });

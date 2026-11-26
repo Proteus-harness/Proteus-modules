@@ -14,6 +14,7 @@ pub(crate) struct DisplayWriter {
     writer: BufWriter<File>,
     budget: u64,
     remaining: u64,
+    append_records: u64,
     // These are capacity hints from bytes successfully staged, not an index
     // of record identities or trusted read sizes.
     large_lines: Vec<(u64, usize)>,
@@ -49,6 +50,7 @@ impl DisplayWriter {
             writer,
             budget,
             remaining: budget,
+            append_records: 0,
             large_lines: Vec::new(),
         })
     }
@@ -62,6 +64,10 @@ impl DisplayWriter {
             "display record exceeds maximum"
         );
         self.write_all(b"\n")?;
+        if matches!(&record.entry, JournalEntry::HistoryMutated(m) if m.mutation == HistoryMutationKind::Append)
+        {
+            self.append_records += 1;
+        }
         // The aggregate staging budget caps the number of these hints.
         if record_bytes > SESSION_STORAGE_PAGE_BYTE_BUDGET as u64 {
             self.large_lines
@@ -70,7 +76,20 @@ impl DisplayWriter {
         Ok(())
     }
 
-    pub fn finish(self) -> Option<DisplayRecords> {
+    pub fn finish_projection(self, revision: StorageRevision) -> Option<DisplayRecords> {
+        // The strict fold numbers every physical record, including those omitted
+        // from display. Equality therefore proves every record is a staged Append.
+        let canonical_has_same_payload = self.append_records == revision.session_seq
+            || (revision.session_seq == 1 && revision.history_revision == 1);
+        if canonical_has_same_payload
+            && self.budget - self.remaining >= SESSION_STORAGE_PAGE_BYTE_BUDGET as u64
+        {
+            return None;
+        }
+        self.finish()
+    }
+
+    fn finish(self) -> Option<DisplayRecords> {
         Some(DisplayRecords {
             reader: BufReader::new(self.writer.into_inner().ok()?),
             bytes: self.budget - self.remaining,
@@ -204,6 +223,7 @@ fn display_writer_keeps_stage_bytes_budget_and_failed_flush_fallback() {
             writer: BufWriter::with_capacity(capacity, File::open(file.path()).unwrap()),
             budget: MAX_STAGING_BYTES,
             remaining: MAX_STAGING_BYTES,
+            append_records: 0,
             large_lines: Vec::new(),
         };
         let projection = failing.push(&record).ok().and_then(|()| failing.finish());

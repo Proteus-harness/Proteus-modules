@@ -108,7 +108,55 @@ fn one_large_history_mutation_uses_canonical_paging_without_duplicating_the_payl
             .execute(SessionStorageRequest::ReleaseSnapshot { snapshot })
             .unwrap();
         f.append(vec![text("subsequent append")]);
+        append_hook(&mut f);
         assert_eq!(open(&f).state.conversation.messages.len(), 2);
+    }
+}
+
+#[test]
+fn large_append_only_journal_uses_bounded_canonical_pages() {
+    for kind in backends() {
+        let mut f = Fixture::new(kind);
+        let mut expected = Vec::new();
+        for index in 0..5 {
+            let message = text(&format!("{index}{}", "x".repeat(1024 * 1024)));
+            expected.push(f.append(vec![message]).entry);
+        }
+        let request = SessionStorageRequest::OpenDisplaySnapshot {
+            session: f.descriptor.session.clone(),
+        };
+        let response = f.service.execute(request.clone()).unwrap();
+        request.validate_response(&response).unwrap();
+        assert!(matches!(
+            response,
+            SessionStorageResponse::DisplaySnapshot { projection: None }
+        ));
+        let snapshot = f.snapshot();
+        let mut after_seq = 0;
+        let mut received = Vec::new();
+        loop {
+            let request = SessionStorageRequest::ReadRecords {
+                snapshot: snapshot.clone(),
+                after_seq,
+                limit: 2,
+            };
+            let response = f.service.execute(request.clone()).unwrap();
+            request.validate_response(&response).unwrap();
+            let SessionStorageResponse::Records { page } = response else {
+                panic!("expected canonical page")
+            };
+            received.extend(page.records.into_iter().map(|r| r.entry));
+            let Some(next) = page.next_after_seq else {
+                break;
+            };
+            assert!(next > after_seq);
+            after_seq = next;
+        }
+        assert_eq!(received, expected);
+        assert!(after_seq > 0);
+        f.service
+            .execute(SessionStorageRequest::ReleaseSnapshot { snapshot })
+            .unwrap();
     }
 }
 
@@ -306,6 +354,7 @@ fn display_reuses_page_scratch_without_reordering_pending_rows() {
             f.append(vec![text(&letter.to_string().repeat(1024 * 1024))]);
         }
         f.append(vec![text("last small row")]);
+        append_hook(&mut f);
         let projection = open(&f);
         let read = |after_seq| {
             let req = SessionStorageRequest::ReadDisplayRecords {
