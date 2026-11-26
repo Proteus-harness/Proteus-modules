@@ -49,8 +49,14 @@ pub(super) fn from_openai_response_with_ids(
         .enumerate()
     {
         if let Some(mut message) = parse_output_item(item)? {
-            if let Some(id) = ids.get(&item_key(item, index)) {
-                message.id = *id;
+            if !ids.is_empty() {
+                let id = match item.get("id").and_then(Value::as_str) {
+                    Some(key) => ids.get(key),
+                    None => ids.get(&format!("output:{index}")),
+                };
+                if let Some(id) = id {
+                    message.id = *id;
+                }
             }
             tool_calls.extend(message.parts.iter().filter_map(|part| match &part.payload {
                 ContentPart::ToolCall { call } => Some(call.clone()),

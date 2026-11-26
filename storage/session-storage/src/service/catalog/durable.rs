@@ -122,7 +122,7 @@ impl<'a> BlobStampMatch<'a> {
     }
 }
 
-fn matches_blob_stamps(dir: &Path, expected: &BlobStamps) -> Option<bool> {
+pub(in crate::service) fn matches_blob_stamps(dir: &Path, expected: &BlobStamps) -> Option<bool> {
     let mut seen = BlobStampMatch::new(expected);
     walk_blob_stamps(dir, |name, stamp| seen.observe(name, stamp))?;
     Some(seen.matches())

@@ -46,12 +46,27 @@ pub(super) fn context_text(chunk: &ContextChunk) -> String {
 /// Canonical instruction prefix only; legacy system messages and wire shaping
 /// remain provider-specific. Preserve equal-priority order and nonblank bytes.
 pub(super) fn instruction_text(instructions: &[InstructionBlock]) -> String {
+    const SEPARATOR: &str = "\n\n";
     let mut instructions: Vec<_> = instructions.iter().collect();
+    instructions.retain(|instruction| !instruction.text.trim().is_empty());
     instructions.sort_by_key(|instruction| std::cmp::Reverse(instruction.priority));
-    instructions
-        .into_iter()
-        .map(|instruction| instruction.text.as_str())
-        .filter(|text| !text.trim().is_empty())
-        .collect::<Vec<_>>()
-        .join("\n\n")
+
+    let bytes = instructions
+        .len()
+        .saturating_sub(1)
+        .checked_mul(SEPARATOR.len())
+        .and_then(|separators| {
+            instructions.iter().try_fold(separators, |len, instruction| {
+                len.checked_add(instruction.text.len())
+            })
+        })
+        .expect("instruction text capacity overflow");
+    let mut text = String::with_capacity(bytes);
+    for (index, instruction) in instructions.into_iter().enumerate() {
+        if index != 0 {
+            text.push_str(SEPARATOR);
+        }
+        text.push_str(&instruction.text);
+    }
+    text
 }

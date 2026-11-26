@@ -99,8 +99,9 @@ impl State {
             previous_boundary = boundary.or_else(|| {
                 (cut == Some(0)).then(|| (StorageRevision::default(), crate::io::sha256_hex(b"")))
             });
-            let blobs =
-                blobs.filter(|blobs| catalog::durable::blob_stamps(&dir).as_ref() == Some(blobs));
+            let blobs = blobs.filter(|blobs| {
+                catalog::durable::matches_blob_stamps(&dir, blobs) == Some(true)
+            });
             let prefix = PrefixCache {
                 stamps,
                 revision: state.revision(),

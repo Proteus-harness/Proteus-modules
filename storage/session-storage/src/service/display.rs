@@ -84,7 +84,7 @@ impl State {
             content_sha256: source.fingerprint().to_owned(),
         };
         if let Some(blobs) = blobs
-            && catalog::durable::blob_stamps(&dir).as_ref() == Some(&blobs)
+            && catalog::durable::matches_blob_stamps(&dir, &blobs) == Some(true)
             && catalog::source_stamp(&dir, self.kind)? == stamps
         {
             let prefix = views::PrefixCache {

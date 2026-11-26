@@ -194,7 +194,8 @@ impl SnapshotState {
         self.source.reset()?;
         let mut state = Fold::default();
         let mut terminal = None;
-        while let Some(record) = self.source.next()? {
+        let mut line = Vec::new();
+        while let Some(record) = self.source.next_with_scratch(&mut line)? {
             state.apply_projected::<MODEL_CONTEXT, USAGE>(
                 self.identity.session.session_id,
                 &record,
@@ -203,6 +204,7 @@ impl SnapshotState {
                 terminal = Some(record);
             }
         }
+        drop(line);
         ensure!(
             state.revision() == self.identity.revision,
             "snapshot revision changed"

@@ -412,7 +412,7 @@ fn to_openai_input(
                     input.push(message);
                 }
                 ContentPart::ToolCall { call } => {
-                    tool_call_surfaces.insert(call.id.clone(), call.surface);
+                    tool_call_surfaces.insert(call.id.as_str(), call.surface);
                     match call.surface {
                         ToolCallSurface::Function => input.push(json!({
                             "type": "function_call",
@@ -440,7 +440,7 @@ fn to_openai_input(
                 }
                 ContentPart::ToolResult { result } => {
                     let surface = tool_call_surfaces
-                        .get(&result.call_id)
+                        .get(result.call_id.as_str())
                         .copied()
                         .unwrap_or_default();
                     let output_type = match surface {
@@ -478,12 +478,16 @@ fn to_openai_input(
                     input.push(data.clone());
                 }
                 ContentPart::Image { image } => {
-                    let block = json!({ "type": "input_image", "image_url": super::super::images::data_url(image)?, "detail": "auto" });
+                    let mut block = json!({ "type": "input_image", "image_url": null, "detail": "auto" });
+                    *block.get_mut("image_url").expect("image URL slot") =
+                        Value::String(super::super::images::data_url(image)?);
                     if let Some(index) = text_message_index {
                         input[index]["content"].as_array_mut().expect("message content array").push(block);
                     } else {
                         text_message_index = Some(input.len());
-                        input.push(json!({ "type":"message", "role":role_to_openai(&message.role), "content":[block] }));
+                        let mut item = json!({ "type":"message", "role":role_to_openai(&message.role), "content":null });
+                        *item.get_mut("content").expect("message content slot") = Value::Array(vec![block]);
+                        input.push(item);
                     }
                 },
                 ContentPart::FileRef { path, content } => input.push(json!({
@@ -558,16 +562,15 @@ fn openai_text_message(message: &CanonicalMessage, text: &str) -> Result<Value> 
 }
 
 fn openai_reasoning_item(summary: &str, encrypted_content: Option<&str>) -> Value {
-    let summary = if summary.trim().is_empty() {
-        Vec::new()
-    } else {
-        vec![json!({ "type": "summary_text", "text": summary })]
-    };
-    json!({
+    let mut item = json!({
         "type": "reasoning",
-        "summary": summary,
+        "summary": [],
         "encrypted_content": encrypted_content,
-    })
+    });
+    if !summary.trim().is_empty() {
+        item["summary"] = Value::Array(vec![json!({ "type": "summary_text", "text": summary })]);
+    }
+    item
 }
 
 fn freeform_tool_input(call: &ToolCall) -> Result<&str> {

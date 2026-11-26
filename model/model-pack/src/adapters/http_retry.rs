@@ -1,20 +1,28 @@
 use std::time::Duration;
 
-pub(super) async fn send_with_transport_retry<F>(
-    mut build: F,
-) -> Result<reqwest::Response, reqwest::Error>
-where
-    F: FnMut() -> reqwest::RequestBuilder,
-{
+pub(super) async fn send_with_transport_retry(
+    mut builder: reqwest::RequestBuilder,
+) -> Result<reqwest::Response, reqwest::Error> {
     const MAX_RETRIES: usize = 2;
 
     let mut attempt = 0usize;
     loop {
-        match build().send().await {
+        // A reusable JSON body shares its encoded bytes across builder clones.
+        // Always send the original builder, including any stored builder error.
+        let retry = if attempt < MAX_RETRIES {
+            builder.try_clone()
+        } else {
+            None
+        };
+        match builder.send().await {
             Ok(response) => return Ok(response),
-            Err(error) if attempt < MAX_RETRIES && should_retry_transport_error(&error) => {
+            Err(error) if should_retry_transport_error(&error) => {
+                let Some(retry) = retry else {
+                    return Err(error);
+                };
                 attempt += 1;
                 tokio::time::sleep(retry_delay(attempt)).await;
+                builder = retry;
             }
             Err(error) => return Err(error),
         }

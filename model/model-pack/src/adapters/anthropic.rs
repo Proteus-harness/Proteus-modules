@@ -191,11 +191,8 @@ impl AnthropicMessagesClient {
         &self,
         request: CanonicalModelRequest,
     ) -> Result<CanonicalModelResponse> {
-        let body = to_anthropic_request_with_cache(&request, &self.prompt_cache)?;
-        let url = format!("{}/v1/messages", self.base_url);
-        let api_key = self.api_key()?;
-        let response =
-            send_with_transport_retry(|| self.request_builder(&url, &body, &api_key)).await?;
+        let request = self.prepare_request(request, false)?;
+        let response = send_with_transport_retry(request).await?;
 
         let status = response.status();
         let response_text = response.text().await?;
@@ -221,12 +218,8 @@ impl AnthropicMessagesClient {
     }
 
     async fn stream_response(&self, request: CanonicalModelRequest) -> Result<ModelEventStream> {
-        let mut body = to_anthropic_request_with_cache(&request, &self.prompt_cache)?;
-        body["stream"] = json!(true);
-        let url = format!("{}/v1/messages", self.base_url);
-        let api_key = self.api_key()?;
-        let response =
-            send_with_transport_retry(|| self.request_builder(&url, &body, &api_key)).await?;
+        let request = self.prepare_request(request, true)?;
+        let response = send_with_transport_retry(request).await?;
         let status = response.status();
         if matches!(status.as_u16(), 400 | 529) {
             let response_text = response.text().await?;
@@ -285,6 +278,23 @@ impl AnthropicMessagesClient {
             }
         };
         Ok(Box::pin(events))
+    }
+
+    fn prepare_request(
+        &self,
+        request: CanonicalModelRequest,
+        stream: bool,
+    ) -> Result<reqwest::RequestBuilder> {
+        let mut body = to_anthropic_request_with_cache(&request, &self.prompt_cache)?;
+        drop(request);
+        if stream {
+            body["stream"] = json!(true);
+        }
+        let url = format!("{}/v1/messages", self.base_url);
+        let api_key = self.api_key()?;
+        // The builder owns reusable JSON bytes. Do not keep the rendered Value
+        // alive while sending or waiting to retry.
+        Ok(self.request_builder(&url, &body, &api_key))
     }
 
     fn api_key(&self) -> Result<String> {

@@ -209,9 +209,13 @@ fn to_anthropic_messages(messages: &[CanonicalMessage]) -> Result<Vec<Value>> {
         }
 
         let role = anthropic_role(message);
-        let blocks = anthropic_content_blocks(message)?;
+        let mut blocks = Vec::new();
+        append_content_blocks(
+            message,
+            last_role_content(&mut out, role).unwrap_or(&mut blocks),
+        )?;
         if !blocks.is_empty() {
-            push_message(&mut out, role, blocks);
+            push_new_message(&mut out, role, blocks);
         }
     }
 
@@ -237,8 +241,7 @@ fn anthropic_role(message: &CanonicalMessage) -> &'static str {
     }
 }
 
-fn anthropic_content_blocks(message: &CanonicalMessage) -> Result<Vec<Value>> {
-    let mut blocks = Vec::new();
+fn append_content_blocks(message: &CanonicalMessage, blocks: &mut Vec<Value>) -> Result<()> {
     for part in &message.parts {
         match &part.payload {
             ContentPart::Text { text } => blocks.push(json!({ "type": "text", "text": text })),
@@ -303,10 +306,10 @@ fn anthropic_content_blocks(message: &CanonicalMessage) -> Result<Vec<Value>> {
             _ => {}
         }
     }
-    Ok(blocks)
+    Ok(())
 }
 
-fn tool_result_blocks(message: &CanonicalMessage) -> Vec<Value> {
+fn tool_result_blocks(message: &CanonicalMessage) -> impl Iterator<Item = Value> + '_ {
     message
         .parts
         .iter()
@@ -314,7 +317,6 @@ fn tool_result_blocks(message: &CanonicalMessage) -> Vec<Value> {
             ContentPart::ToolResult { result } => Some(tool_result_block(result)),
             _ => None,
         })
-        .collect()
 }
 
 fn tool_result_block(result: &crate::domain::ToolResult) -> Value {
@@ -351,15 +353,23 @@ fn tool_result_block(result: &crate::domain::ToolResult) -> Value {
     block
 }
 
-fn push_message(out: &mut Vec<Value>, role: &str, blocks: Vec<Value>) {
-    if let Some(last) = out.last_mut() {
-        let same_role = last.get("role").and_then(Value::as_str) == Some(role);
-        if same_role && let Some(content) = last.get_mut("content").and_then(Value::as_array_mut) {
-            content.extend(blocks);
-            return;
-        }
+fn last_role_content<'a>(out: &'a mut [Value], role: &str) -> Option<&'a mut Vec<Value>> {
+    let last = out.last_mut()?;
+    if last.get("role").and_then(Value::as_str) != Some(role) {
+        return None;
     }
+    last.get_mut("content").and_then(Value::as_array_mut)
+}
 
+fn push_message(out: &mut Vec<Value>, role: &str, blocks: Vec<Value>) {
+    if let Some(content) = last_role_content(out, role) {
+        content.extend(blocks);
+    } else {
+        push_new_message(out, role, blocks);
+    }
+}
+
+fn push_new_message(out: &mut Vec<Value>, role: &str, blocks: Vec<Value>) {
     let mut message = json!({ "role": role, "content": [] });
     message["content"] = Value::Array(blocks);
     out.push(message);
