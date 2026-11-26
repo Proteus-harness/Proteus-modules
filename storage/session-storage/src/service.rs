@@ -121,20 +121,17 @@ impl StorageService {
             } => cache::read_cache(session, key, source),
             ReleaseSnapshot { snapshot } => {
                 let mut state = self.lock_state()?;
-                let released = state
-                    .get_snapshot(&snapshot)?
-                    .display
-                    .as_ref()
-                    .map_or(0, |d| d.bytes);
+                let released_large_payload =
+                    state.get_snapshot(&snapshot)?.released_large_payload();
                 state.snapshots.remove(&snapshot.snapshot_id);
                 state
                     .snapshot_order
                     .retain(|id| id != &snapshot.snapshot_id);
                 drop(state);
-                // Large projected replies have left the wire by the time their
+                // Large snapshot replies have left the wire by the time their
                 // reader releases its handle. Return their free glibc pages once,
                 // outside the service lock, rather than trimming each record page.
-                if released >= 4 * 1024 * 1024 {
+                if released_large_payload {
                     #[cfg(all(target_os = "linux", target_env = "gnu"))]
                     {
                         unsafe extern "C" {

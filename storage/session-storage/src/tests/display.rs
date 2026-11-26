@@ -75,6 +75,44 @@ fn page(f: &Fixture, snapshot: &StorageSnapshot, after_seq: u64) -> StorageRecor
 }
 
 #[test]
+fn one_large_history_mutation_uses_canonical_paging_without_duplicating_the_payload() {
+    for kind in backends() {
+        let mut f = Fixture::new(kind);
+        let entry = f
+            .append(vec![text(&"x".repeat(SESSION_STORAGE_PAGE_BYTE_BUDGET))])
+            .entry;
+        let request = SessionStorageRequest::OpenDisplaySnapshot {
+            session: f.descriptor.session.clone(),
+        };
+        let response = f.service.execute(request.clone()).unwrap();
+        request.validate_response(&response).unwrap();
+        assert!(matches!(
+            response,
+            SessionStorageResponse::DisplaySnapshot { projection: None }
+        ));
+        let snapshot = f.snapshot();
+        let request = SessionStorageRequest::ReadRecords {
+            snapshot: snapshot.clone(),
+            after_seq: 0,
+            limit: 64,
+        };
+        let response = f.service.execute(request.clone()).unwrap();
+        request.validate_response(&response).unwrap();
+        let SessionStorageResponse::Records { page } = response else {
+            panic!("expected canonical page")
+        };
+        assert_eq!(page.records.len(), 1);
+        assert_eq!(page.records[0].entry, entry);
+        assert!(page.next_after_seq.is_none());
+        f.service
+            .execute(SessionStorageRequest::ReleaseSnapshot { snapshot })
+            .unwrap();
+        f.append(vec![text("subsequent append")]);
+        assert_eq!(open(&f).state.conversation.messages.len(), 2);
+    }
+}
+
+#[test]
 fn jsonl_display_fold_reuses_bounded_fallback_scratch() {
     use crate::backend::{JournalBackend, Jsonl};
 
