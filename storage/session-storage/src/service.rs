@@ -119,6 +119,35 @@ impl StorageService {
                 key,
                 source,
             } => cache::read_cache(session, key, source),
+            ReleaseSnapshot { snapshot } => {
+                let mut state = self.lock_state()?;
+                let released = state
+                    .get_snapshot(&snapshot)?
+                    .display
+                    .as_ref()
+                    .map_or(0, |d| d.bytes);
+                state.snapshots.remove(&snapshot.snapshot_id);
+                state
+                    .snapshot_order
+                    .retain(|id| id != &snapshot.snapshot_id);
+                drop(state);
+                // Large projected replies have left the wire by the time their
+                // reader releases its handle. Return their free glibc pages once,
+                // outside the service lock, rather than trimming each record page.
+                if released >= 4 * 1024 * 1024 {
+                    #[cfg(all(target_os = "linux", target_env = "gnu"))]
+                    {
+                        unsafe extern "C" {
+                            fn malloc_trim(pad: usize) -> std::ffi::c_int;
+                        }
+                        // SAFETY: glibc synchronizes allocator access internally.
+                        unsafe {
+                            malloc_trim(0);
+                        }
+                    }
+                }
+                Ok(SessionStorageResponse::Done)
+            }
             request => self.lock_state()?.execute(request),
         }
     }
@@ -183,12 +212,6 @@ impl State {
                 Ok(SessionStorageResponse::Snapshot { snapshot })
             }
             OpenDisplaySnapshot { session } => self.open_display_snapshot(session),
-            ReleaseSnapshot { snapshot } => {
-                self.get_snapshot(&snapshot)?;
-                self.snapshots.remove(&snapshot.snapshot_id);
-                self.snapshot_order.retain(|s| s != &snapshot.snapshot_id);
-                Ok(SessionStorageResponse::Done)
-            }
             CompareSnapshots { snapshot, prefix } => {
                 let matches = self.get_snapshot(&snapshot)?.matches_prefix(&prefix)?;
                 Ok(SessionStorageResponse::SnapshotPrefix { matches })
@@ -282,7 +305,11 @@ impl State {
                     .context("model context requested outside the latest admitted turn")?;
                 Ok(SessionStorageResponse::ModelContext { observations })
             }
-            Open { .. } | ReadCache { .. } | ListCandidates { .. } | List { .. } => {
+            Open { .. }
+            | ReadCache { .. }
+            | ListCandidates { .. }
+            | List { .. }
+            | ReleaseSnapshot { .. } => {
                 unreachable!("handled by StorageService")
             }
             WriteCache {
