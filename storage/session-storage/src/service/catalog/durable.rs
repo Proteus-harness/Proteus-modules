@@ -286,7 +286,7 @@ pub(super) fn save(
             "catalog source changed"
         );
         ensure!(
-            blob_stamps(dir).as_ref() == Some(&blobs),
+            matches_blob_stamps(dir, &blobs) == Some(true),
             "catalog blobs changed"
         );
         let bytes = encode(&Index {
@@ -420,5 +420,59 @@ mod tests {
             encode(&data).unwrap_err().to_string(),
             "catalog index exceeds maximum"
         );
+    }
+
+    #[test]
+    fn catalog_save_rechecks_inventory_without_replacing_a_rejected_sidecar() {
+        let mut f = crate::tests::Fixture::new(BackendKind::Jsonl);
+        f.append(vec![crate::tests::text(
+            &"x".repeat(crate::codec::DEFAULT_BLOB_THRESHOLD + 1024),
+        )]);
+        let dir = f.descriptor.local_path.as_ref().unwrap();
+        let summary = f.service.catalog_summary(dir, false).unwrap();
+        let sidecar = dir.join(FILE);
+        let expected = std::fs::read(&sidecar).unwrap();
+        let envelope: Envelope = serde_json::from_slice(&expected).unwrap();
+        let (_, prefix) = load(dir, &summary.descriptor, &envelope.data.stamps).unwrap();
+        let inventory = envelope.data.blobs;
+        assert!(!inventory.is_empty());
+        let root = dir.join("blobs");
+        let expected_leaf = inventory
+            .keys()
+            .map(|path| root.join(path))
+            .find(|path| path.is_file())
+            .unwrap();
+        let journal = summary.descriptor.record_location.as_ref().unwrap();
+        let original_journal = std::fs::read(journal).unwrap();
+
+        assert_eq!(matches_blob_stamps(dir, &inventory), Some(true));
+        std::fs::remove_file(&sidecar).unwrap();
+        save(dir, &summary, &prefix, inventory.clone());
+        assert_eq!(std::fs::read(&sidecar).unwrap(), expected);
+
+        let check_rejected = |outcome| {
+            assert_eq!(matches_blob_stamps(dir, &inventory), outcome);
+            assert_eq!(
+                blob_stamps(dir).map(|observed| observed == inventory),
+                outcome
+            );
+            assert!(source_stamp(dir, BackendKind::Jsonl).unwrap() == prefix.stamps);
+            save(dir, &summary, &prefix, inventory.clone());
+            assert_eq!(std::fs::read(&sidecar).unwrap(), expected);
+            assert_eq!(std::fs::read(journal).unwrap(), original_journal);
+        };
+
+        // A well-formed observation disagrees with the prior full stamp.
+        std::fs::write(&expected_leaf, b"changed owned blob fixture").unwrap();
+        check_rejected(Some(false));
+
+        // No observed paths cannot satisfy this nonempty expected inventory.
+        std::fs::rename(&root, dir.join("parked-fixture-blobs")).unwrap();
+        check_rejected(Some(false));
+
+        // A blob root that is no longer a directory fails the walk, not merely
+        // the comparison; save declines with the old file still present.
+        std::fs::write(&root, b"not a directory").unwrap();
+        check_rejected(None);
     }
 }

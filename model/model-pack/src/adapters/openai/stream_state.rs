@@ -111,7 +111,7 @@ impl OpenAiStreamState {
                 let refusal = event_type.starts_with("response.refusal.");
                 let done = event_type == "response.refusal.done";
                 let field = if done { "refusal" } else { "delta" };
-                let Some(text) = parsed.get(field).and_then(Value::as_str) else {
+                let Some(Value::String(text)) = parsed.get_mut(field).map(Value::take) else {
                     return Vec::new();
                 };
                 let key = parsed
@@ -134,13 +134,13 @@ impl OpenAiStreamState {
                 let emitted = if done {
                     let suffix = text
                         .strip_prefix(buffer.as_str())
-                        .unwrap_or(text)
+                        .unwrap_or(text.as_str())
                         .to_owned();
-                    *buffer = text.to_owned();
+                    *buffer = text;
                     suffix
                 } else {
-                    buffer.push_str(text);
-                    text.to_owned()
+                    buffer.push_str(&text);
+                    text
                 };
                 if emitted.is_empty() {
                     return Vec::new();

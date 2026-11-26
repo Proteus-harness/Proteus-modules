@@ -351,7 +351,10 @@ fn finished_requires_exit_and_reader_completion_and_does_not_consume_model_bytes
     let snapshot = session.terminal.read(None, 100, 0).unwrap();
     assert!(snapshot.finished);
     assert_eq!(STANDARD.decode(snapshot.data_base64).unwrap(), b"headtail");
-    assert_eq!(lock(&session.output).buffer, b"headtail");
+    assert_eq!(
+        lock(&session.output).buffer.contiguous_for_test(),
+        b"headtail"
+    );
 }
 
 #[test]

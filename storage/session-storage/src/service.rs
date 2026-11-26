@@ -370,10 +370,11 @@ impl Writer {
             let stamps = catalog::source_stamp(dir, kind)?;
             let blobs = catalog::durable::blob_stamps(dir);
             let mut source = self.backend.snapshot(dir, id)?;
-            let mut fold = Fold::default();
-            while let Some(record) = source.next()? {
-                fold.apply(id, &record)?;
-            }
+            let fold = crate::backend::replay_records(
+                source.as_mut(),
+                None,
+                &|fold: &mut Fold, record, _| fold.apply(id, record),
+            )?;
             self.head = blobs
                 .filter(|blobs| {
                     catalog::source_stamp(dir, kind).ok().as_ref() == Some(&stamps)

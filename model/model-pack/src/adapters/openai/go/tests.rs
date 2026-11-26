@@ -119,23 +119,40 @@ fn catalog_omits_non_chat_and_sampling_uses_model_flags() {
 async fn live_catalog_is_shared_and_invalid_updates_keep_offline_models() {
     let mut go = Go::new().unwrap();
     Arc::get_mut(&mut go).unwrap().http = Client::builder().no_proxy().build().unwrap();
-    let (bad, bad_server) = test_http::server(vec![(200, "application/json", "{}".into())]).await;
-    assert!(
-        go.catalog_from(&bad)
-            .await
-            .unwrap()
-            .models
-            .iter()
-            .any(|entry| entry.id == "deepseek-v4.1-flash")
-    );
-    bad_server.await.unwrap();
+    let seed = go.models.read().unwrap().catalog();
+    assert!(seed.models.iter().any(|entry| entry.id == "deepseek-v4.1-flash"));
+    for invalid in [
+        json!({}),
+        json!({"data":[{"id":"next-model","type":"chat",
+            "capabilities":{"reasoning":{"effort":["low","low"]}}}]}),
+    ] {
+        *go.refresh_after.lock().await = None;
+        let (bad, bad_server) =
+            test_http::server(vec![(200, "application/json", invalid.to_string())]).await;
+        assert_eq!(go.catalog_from(&bad).await.unwrap(), seed);
+        assert_eq!(bad_server.await.unwrap().len(), 1);
+    }
     *go.refresh_after.lock().await = None;
-    let fixture =
-        json!({"data":[{"id":"next-model","type":"chat","limit":{"input":900,"output":100}}]});
+    let fixture = json!({"data":[
+        {"id":"ignored","type":"embedding"},
+        {"id":"next-model","type":"chat","limit":{"input":900,"output":100}},
+        {"id":"legacy","type":"chat","name":"Former model","description":"Old",
+         "status":"deprecated","capabilities":{"reasoning":{"effort":["low","high"]}}}
+    ]});
     let (url, server) =
         test_http::server(vec![(200, "application/json", fixture.to_string())]).await;
     let (a, b) = tokio::join!(go.catalog_from(&url), go.catalog_from(&url));
-    assert_eq!(a.unwrap(), b.unwrap());
+    let a = a.unwrap();
+    assert_eq!(a, b.unwrap());
+    assert_eq!(
+        serde_json::to_value(&a).unwrap(),
+        json!({"models":[
+            {"id":"next-model","display_name":"next-model","description":null,"hidden":false,
+             "reasoning_efforts":[],"default_reasoning_effort":null},
+            {"id":"legacy","display_name":"Former model","description":"Old","hidden":true,
+             "reasoning_efforts":["low","high"],"default_reasoning_effort":null}
+        ]})
+    );
     assert_eq!(
         go.capabilities("next-model").unwrap().max_input_tokens,
         Some(900)

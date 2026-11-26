@@ -1,9 +1,10 @@
 //! Session ownership, storage and lifetime.
 use super::capture::{CaptureTap, PreparedCapture};
+use super::output::BoundedOutput;
 use super::reader::{ReaderCompletions, ReaderEnd};
 use super::{
-    CANCELLATION_POLL_INTERVAL, EXIT_DRAIN_GRACE, MAX_SESSIONS, SESSION_BUFFER_LIMIT,
-    SESSION_JANITOR_INTERVAL, SESSION_MAX_IDLE, ensure_not_cancelled,
+    CANCELLATION_POLL_INTERVAL, EXIT_DRAIN_GRACE, MAX_SESSIONS, SESSION_JANITOR_INTERVAL,
+    SESSION_MAX_IDLE, ensure_not_cancelled,
 };
 use crate::sandbox::SandboxKind;
 use anyhow::{Result, anyhow};
@@ -20,8 +21,7 @@ use std::{
 
 /// Состояние вывода сессии; reader/wait-потоки будят ожидающих через Condvar.
 pub(super) struct SessionOutput {
-    pub(super) buffer: Vec<u8>,
-    pub(super) dropped_bytes: usize,
+    pub(super) buffer: BoundedOutput,
     /// Reader termination facts; closed readers may have failed or timed out.
     pub(super) readers: ReaderCompletions,
     pub(super) exited: bool,
@@ -116,8 +116,7 @@ impl ExecSession {
         Self {
             interaction: Mutex::new(()),
             output: Mutex::new(SessionOutput {
-                buffer: Vec::new(),
-                dropped_bytes: 0,
+                buffer: BoundedOutput::default(),
                 readers: ReaderCompletions::new(tty),
                 exited: false,
                 exit_code: None,
@@ -181,13 +180,7 @@ impl ExecSession {
             capture.observe(chunk);
         }
         self.terminal.append(chunk);
-        output.buffer.extend_from_slice(chunk);
-        if output.buffer.len() > SESSION_BUFFER_LIMIT {
-            let excess = output.buffer.len() - SESSION_BUFFER_LIMIT;
-            let head = SESSION_BUFFER_LIMIT / 2;
-            output.buffer.drain(head..head + excess);
-            output.dropped_bytes = output.dropped_bytes.saturating_add(excess);
-        }
+        output.buffer.push(chunk);
         drop(output);
         self.output_cond.notify_all();
     }

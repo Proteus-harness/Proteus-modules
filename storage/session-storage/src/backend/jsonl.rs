@@ -30,13 +30,24 @@ impl Jsonl {
         cut: Option<u64>,
         apply: impl Fn(&mut T, &JournalRecord, Option<String>) -> Result<()>,
     ) -> Result<(Box<dyn RecordSnapshot>, T)> {
+        Self::replay_snapshot_with(dir, id, cut, |_| T::default(), apply)
+    }
+
+    pub(crate) fn replay_snapshot_with<T>(
+        dir: &Path,
+        id: SessionId,
+        cut: Option<u64>,
+        initialize: impl Fn(u64) -> T,
+        apply: impl Fn(&mut T, &JournalRecord, Option<String>) -> Result<()>,
+    ) -> Result<(Box<dyn RecordSnapshot>, T)> {
         ensure!(
             !dir.join("journal.sqlite").try_exists()?,
             "session contains a SQLite journal; select its storage implementation or explicitly migrate it"
         );
         let (mut source, version) = JsonlSnapshot::pin(dir, id, None)?;
+        let extent = source.extent();
         let observed = if cfg!(unix) {
-            let fold = replay_records(&mut source, cut, &apply)?;
+            let fold = replay_records_with(&mut source, cut, initialize(extent), &apply)?;
             let fingerprint = source.consumed_fingerprint();
             if source.source_version()? == version {
                 source.fingerprint = Some(fingerprint);
@@ -60,7 +71,7 @@ impl Jsonl {
         source.fully_read = false;
         source.has_external_payloads = false;
         source.page_boundary = None;
-        let fold = replay_records(&mut source, cut, &apply)?;
+        let fold = replay_records_with(&mut source, cut, initialize(extent), &apply)?;
         let replayed_version = source.source_version()?;
         if replayed_version != version {
             source.verify_fixed_prefix()?;

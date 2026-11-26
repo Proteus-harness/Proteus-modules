@@ -19,6 +19,78 @@ pub(super) struct Collected {
     pub(super) exit_code: Option<i32>,
 }
 
+/// The model buffer keeps the first half and a circular last half after
+/// overflow. Only collection needs the retained suffix in stream order.
+#[derive(Default)]
+pub(super) struct BoundedOutput {
+    bytes: Vec<u8>,
+    next_tail: usize,
+    dropped_bytes: usize,
+}
+
+impl BoundedOutput {
+    const HEAD: usize = SESSION_BUFFER_LIMIT / 2;
+    const TAIL: usize = SESSION_BUFFER_LIMIT - Self::HEAD;
+
+    pub(super) fn push(&mut self, chunk: &[u8]) {
+        let len = self.bytes.len();
+        let fit = chunk.len().min(SESSION_BUFFER_LIMIT - len);
+        let retained = len + fit;
+        let excess = chunk.len() - fit;
+        let replaces_tail = excess != 0 && chunk.len() >= Self::TAIL;
+        let capacity = self.bytes.capacity();
+        if retained > capacity && (capacity > Self::HEAD || replaces_tail) {
+            // A large replacement appends twice (head then tail). Reserve
+            // both at once so neither that nor an ordinary large append can
+            // double a partly filled allocation past the retention limit.
+            self.bytes.reserve_exact(SESSION_BUFFER_LIMIT - len);
+        }
+        if excess == 0 {
+            self.bytes.extend_from_slice(chunk);
+            return;
+        }
+        self.dropped_bytes = self.dropped_bytes.saturating_add(excess);
+        if replaces_tail {
+            let missing_head = Self::HEAD.saturating_sub(len);
+            self.bytes.truncate(Self::HEAD);
+            self.bytes.extend_from_slice(&chunk[..missing_head]);
+            self.bytes.extend_from_slice(&chunk[chunk.len() - Self::TAIL..]);
+            self.next_tail = 0;
+            return;
+        }
+
+        self.bytes.extend_from_slice(&chunk[..fit]);
+        let chunk = &chunk[fit..];
+        let tail = &mut self.bytes[Self::HEAD..];
+        let first = chunk.len().min(Self::TAIL - self.next_tail);
+        tail[self.next_tail..self.next_tail + first].copy_from_slice(&chunk[..first]);
+        tail[..chunk.len() - first].copy_from_slice(&chunk[first..]);
+        self.next_tail = (self.next_tail + chunk.len()) % Self::TAIL;
+    }
+
+    #[cfg(test)]
+    pub(super) fn len(&self) -> usize {
+        self.bytes.len()
+    }
+
+    #[cfg(test)]
+    pub(super) fn contiguous_for_test(&self) -> &[u8] {
+        assert_eq!(self.next_tail, 0, "test expected ordered bytes");
+        &self.bytes
+    }
+
+    pub(super) fn take(&mut self, final_output: bool) -> (Vec<u8>, usize) {
+        let next_tail = std::mem::take(&mut self.next_tail);
+        if next_tail != 0 {
+            self.bytes[Self::HEAD..].rotate_left(next_tail);
+        }
+        (
+            take_ready_bytes(&mut self.bytes, final_output),
+            std::mem::take(&mut self.dropped_bytes),
+        )
+    }
+}
+
 /// Ждёт до дедлайна (или до exit + drain) и забирает накопленный вывод.
 pub(super) fn wait_and_collect(
     session: &ExecSession,
@@ -61,9 +133,10 @@ pub(super) fn wait_and_collect(
         output = guard;
     }
     let final_output = output.exited || output.readers.is_closed();
+    let (bytes, dropped_bytes) = output.buffer.take(final_output);
     Ok(Collected {
-        bytes: take_ready_bytes(&mut output.buffer, final_output),
-        dropped_bytes: std::mem::take(&mut output.dropped_bytes),
+        bytes,
+        dropped_bytes,
         exited: output.exited,
         exit_code: output.exit_code,
     })

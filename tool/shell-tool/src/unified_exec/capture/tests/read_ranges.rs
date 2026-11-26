@@ -39,6 +39,28 @@ fn actual_model_text_exposes_failed_pending_and_truncated_receipts() {
 }
 
 #[test]
+fn bounded_model_output_does_not_drop_from_source_capture_accounting() {
+    use crate::unified_exec::SESSION_BUFFER_LIMIT;
+
+    let prefix = b"capture-original";
+    let (_dir, store, context) = fixture(prefix.len() as u64, 1);
+    let (session, record) = attached(&store, &context, true);
+    session.push_output(prefix);
+    let chunk = [b'x'; CHUNK_BYTES];
+    let chunks = SESSION_BUFFER_LIMIT / chunk.len() + 1;
+    for _ in 0..chunks {
+        session.push_output(&chunk);
+    }
+    session.mark_reader_ended(ReaderEnd::Eof);
+    sealed(&record);
+    let receipt = record.receipt();
+    assert_eq!(receipt["observed_bytes"], prefix.len() + chunks * chunk.len());
+    assert_eq!(receipt["prefix_truncated"], true);
+    let view = read(&store, &context, json!({"handle": record.handle()})).unwrap();
+    assert_eq!(view["envelope"]["text"], "capture-original");
+}
+
+#[test]
 fn raw_binary_and_mid_codepoint_ranges_have_explicit_utf8_or_hex_behavior() {
     let (_dir, store, context) = fixture(100, 1);
     let (session, record) = attached(&store, &context, true);

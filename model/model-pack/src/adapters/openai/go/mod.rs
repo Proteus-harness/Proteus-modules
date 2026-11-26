@@ -118,14 +118,14 @@ impl Go {
                 2 * 1024 * 1024,
             )
             .await
-            .and_then(|raw| Models::parse(&raw));
-            if let Ok(models) = fresh {
+            .and_then(|raw| Models::parse_with_catalog(&raw));
+            if let Ok((models, catalog)) = fresh {
                 *self.models.write().unwrap() = models;
                 *refresh_after = Some(Instant::now() + Duration::from_secs(300));
-            } else {
-                // Keep the last valid list or the packaged offline snapshot. Retry in 15 seconds.
-                *refresh_after = Some(Instant::now() + Duration::from_secs(15));
+                return Ok(catalog);
             }
+            // Keep the last valid list or the packaged offline snapshot. Retry in 15 seconds.
+            *refresh_after = Some(Instant::now() + Duration::from_secs(15));
         }
         Ok(self.models.read().unwrap().catalog())
     }

@@ -219,3 +219,124 @@ fn unmaterialized_create_survives_worker_restart_with_parent_identity() {
         client.execute(SessionStorageRequest::ReleaseWriter { lease });
     }
 }
+
+#[test]
+fn cache_writes_keep_wire_replies_and_admission_at_the_builtin_boundary() {
+    for module in ["jsonl", "sqlite"] {
+        let config = tempfile::tempdir().unwrap();
+        let workspace = tempfile::tempdir().unwrap();
+        let mut client = Client::new(module);
+        let SessionStorageResponse::Session { descriptor } =
+            client.execute(SessionStorageRequest::Create {
+                config_root: config.path().into(),
+                workspace_path: workspace.path().into(),
+                session_id: new_session_id(),
+                parent_session_id: None,
+            })
+        else {
+            panic!()
+        };
+        let dir = descriptor.local_path.unwrap();
+        let session = descriptor.session;
+        let SessionStorageResponse::Writer { lease, .. } =
+            client.execute(SessionStorageRequest::AcquireWriter {
+                session: session.clone(),
+            })
+        else {
+            panic!()
+        };
+        let SessionStorageResponse::Snapshot { snapshot } =
+            client.execute(SessionStorageRequest::OpenSnapshot {
+                session: session.clone(),
+            })
+        else {
+            panic!()
+        };
+
+        let key = "display-revision-test";
+        let value = json!({
+            "pages": ["é🦀\n\u{0000}", {"text": "Z".repeat(128 * 1024)}],
+            "summary": {"messages": 2}
+        });
+        let etag = storage_value_etag(&value).unwrap();
+        let write = |key: &str, source: StorageSnapshot, value: Value| {
+            SessionStorageRequest::WriteCache {
+                session: session.clone(),
+                key: key.into(),
+                source,
+                value,
+            }
+        };
+        client.send(&write(key, snapshot.clone(), value.clone()));
+        let reply = client.receive();
+        assert_eq!(
+            reply["result"],
+            serde_json::to_value(SessionStorageResponse::CacheWritten {
+                etag: Some(etag.clone()),
+            })
+            .unwrap()
+        );
+
+        let files: Vec<_> = std::fs::read_dir(&dir)
+            .unwrap()
+            .map(|entry| entry.unwrap().path())
+            .filter(|path| {
+                let name = path.file_name().unwrap().to_string_lossy();
+                name.starts_with(".storage-cache-") && name.ends_with(".json")
+            })
+            .collect();
+        assert_eq!(files.len(), 1);
+        let saved = format!(
+            r#"{{"source":{},"value":{}}}"#,
+            serde_json::to_string(&snapshot).unwrap(),
+            serde_json::to_string(&value).unwrap()
+        );
+        assert_eq!(std::fs::read(&files[0]).unwrap(), saved.as_bytes());
+
+        let mut wrong_session = snapshot.clone();
+        wrong_session.session.session_id = new_session_id();
+        for (request, message) in [
+            (
+                write(".", wrong_session, json!({"different": true})),
+                "storage cache source belongs to another session",
+            ),
+            (
+                write(".", snapshot.clone(), json!({"different": true})),
+                "invalid storage metadata key",
+            ),
+        ] {
+            let expected = request.validate().unwrap_err();
+            assert_eq!(expected.to_string(), message);
+            client.send(&request);
+            let reply = client.receive();
+            assert!(reply.get("result").is_none(), "{reply}");
+            assert_eq!(reply["error"]["code"].as_i64(), Some(-32_000));
+            assert_eq!(reply["error"]["message"].as_str(), Some(message));
+        }
+
+        let mut stale = snapshot.clone();
+        stale.content_sha256 = if stale.content_sha256 == "0".repeat(64) {
+            "1".repeat(64)
+        } else {
+            "0".repeat(64)
+        };
+        let stale = write(key, stale, json!({"different": true}));
+        stale.validate().unwrap();
+        assert_eq!(
+            client.execute(stale),
+            SessionStorageResponse::CacheWritten { etag: None }
+        );
+        assert_eq!(std::fs::read(&files[0]).unwrap(), saved.as_bytes());
+        assert_eq!(
+            client.execute(SessionStorageRequest::ReadCache {
+                session,
+                key: key.into(),
+                source: Some(snapshot),
+            }),
+            SessionStorageResponse::Metadata {
+                document: Some(StorageMetadataDocument { etag, value }),
+            }
+        );
+        client.execute(SessionStorageRequest::ReleaseWriter { lease });
+    }
+}

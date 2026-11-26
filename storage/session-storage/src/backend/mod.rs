@@ -103,7 +103,15 @@ pub(crate) fn replay_records<T: Default>(
     cut: Option<u64>,
     apply: &impl Fn(&mut T, &JournalRecord, Option<String>) -> Result<()>,
 ) -> Result<T> {
-    let mut fold = T::default();
+    replay_records_with(source, cut, T::default(), apply)
+}
+
+pub(crate) fn replay_records_with<T>(
+    source: &mut dyn RecordSnapshot,
+    cut: Option<u64>,
+    mut fold: T,
+    apply: &impl Fn(&mut T, &JournalRecord, Option<String>) -> Result<()>,
+) -> Result<T> {
     let mut line = Vec::new();
     while let Some(record) = source.next_with_scratch(&mut line)? {
         let boundary = (cut == Some(record.session_seq)).then(|| {

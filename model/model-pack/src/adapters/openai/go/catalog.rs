@@ -57,6 +57,10 @@ struct Feature {
 
 impl Models {
     pub(super) fn parse(bytes: &[u8]) -> Result<Self> {
+        Ok(Self::parse_with_catalog(bytes)?.0)
+    }
+
+    pub(super) fn parse_with_catalog(bytes: &[u8]) -> Result<(Self, ModelCatalog)> {
         let mut models: Self =
             serde_json::from_slice(bytes).context("invalid OpenCode Go model list")?;
         models.data.retain(|entry| entry.kind == "chat");
@@ -69,8 +73,9 @@ impl Models {
                     .all(|entry| !entry.id.is_empty() && ids.insert(&entry.id)),
             "invalid OpenCode Go chat model IDs"
         );
-        models.catalog().validate().map_err(anyhow::Error::msg)?;
-        Ok(models)
+        let catalog = models.catalog();
+        catalog.validate().map_err(anyhow::Error::msg)?;
+        Ok((models, catalog))
     }
     pub(super) fn get(&self, id: &str) -> Option<&Entry> {
         self.data.iter().find(|entry| entry.id == id)

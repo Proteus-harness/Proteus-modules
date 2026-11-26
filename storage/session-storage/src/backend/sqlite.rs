@@ -109,6 +109,57 @@ fn snapshot_source(
 }
 
 impl Sqlite {
+    pub(crate) fn replay_display<T>(
+        dir: &Path,
+        id: SessionId,
+        cut: Option<u64>,
+        initialize: impl Fn() -> T,
+        apply: impl Fn(&mut T, &JournalRecord, Option<String>) -> Result<()>,
+    ) -> Result<(Box<dyn RecordSnapshot>, T)> {
+        let (conn, end) = open_source(dir, id)?;
+        if let Some(tx) = &conn
+            && end > 0
+            && !tx.is_autocommit()
+            && writer_journal_for_display(tx)
+        {
+            let mut folded = initialize();
+            // Use the complete stock fingerprint range. Any failure discards
+            // this attempt and lets the legacy path preserve error precedence.
+            let scanned = scan_display_rows(tx, id, end, cut, true, |record, boundary| {
+                apply(&mut folded, record, boundary)
+            });
+            if let Ok((hash, after)) = scanned
+                && after == end
+            {
+                let fingerprint = crate::io::digest_hex(hash.clone().finish());
+                return Ok((
+                    Box::new(SqliteSnapshot {
+                        conn,
+                        end,
+                        id,
+                        after,
+                        fingerprint,
+                        current_hash: hash,
+                    }),
+                    folded,
+                ));
+            }
+        }
+
+        let mut source = snapshot_source(conn, id, end, None)?;
+        let mut folded = initialize();
+        if !source.try_visit_display_rows(cut, &mut |record, boundary| {
+            apply(&mut folded, record, boundary)
+        })? {
+            while let Some(record) = source.next()? {
+                let boundary =
+                    (cut == Some(record.session_seq)).then(|| source.consumed_fingerprint());
+                apply(&mut folded, &record, boundary)?;
+            }
+        }
+        Ok((Box::new(source), folded))
+    }
+
     /// Cold catalog only. Hand back proof after every ordered row has passed
     /// the visitor and EOF is reached, without exposing an unverified snapshot.
     pub(crate) fn replay_catalog<T: Default>(
@@ -329,22 +380,9 @@ impl RecordSnapshot for SqliteSnapshot {
             return Ok(false);
         }
 
-        // The exact writer table has one integral row per sequence. Match the
-        // seek reader's positive range; sequence gaps still fail in the fold.
-        let mut stmt = conn.prepare(
-            "SELECT sequence,payload FROM journal WHERE sequence>0 AND sequence<=?1 ORDER BY sequence",
-        )?;
-        let mut rows = stmt.query([i64::try_from(self.end)?])?;
-        while let Some(row) = rows.next()? {
-            let sequence = u64::try_from(row.get::<_, i64>(0)?)?;
-            let bytes = payload_bytes(row, 1)?;
-            self.current_hash.update(bytes);
-            let record = decode_record(self.id, sequence, bytes)?;
-            self.after = record.session_seq;
-            let boundary = (cut == Some(self.after))
-                .then(|| crate::io::digest_hex(self.current_hash.clone().finish()));
-            visit(&record, boundary)?;
-        }
+        let (hash, after) = scan_display_rows(conn, self.id, self.end, cut, false, visit)?;
+        self.current_hash = hash;
+        self.after = after;
         let actual = crate::io::digest_hex(self.current_hash.clone().finish());
         ensure!(actual == self.fingerprint, "SQLite snapshot prefix changed");
         Ok(true)
@@ -386,6 +424,39 @@ impl RecordSnapshot for SqliteSnapshot {
         }
         Ok(Some(crate::io::digest_hex(hash.finish())))
     }
+}
+
+fn scan_display_rows(
+    conn: &Connection,
+    id: SessionId,
+    end: u64,
+    cut: Option<u64>,
+    full_range: bool,
+    mut visit: impl FnMut(&JournalRecord, Option<String>) -> Result<()>,
+) -> Result<(HashContext, u64)> {
+    // Exact writer DDL proves one integral row per sequence; the caller folds
+    // every record and checks continuity. Hash the literal stored BLOB bytes.
+    let mut stmt = conn.prepare(if full_range {
+        "SELECT sequence,payload FROM journal WHERE sequence<=?1 ORDER BY sequence"
+    } else {
+        "SELECT sequence,payload FROM journal WHERE sequence>0 AND sequence<=?1 ORDER BY sequence"
+    })?;
+    let mut rows = stmt.query([i64::try_from(end)?])?;
+    let mut hash = HashContext::new(&SHA256);
+    let mut after = 0_u64;
+    while let Some(row) = rows.next()? {
+        let sequence = u64::try_from(row.get::<_, i64>(0)?)?;
+        if full_range {
+            ensure!(after.checked_add(1) == Some(sequence), "unexpected SQLite sequence");
+        }
+        let bytes = payload_bytes(row, 1)?;
+        hash.update(bytes);
+        let record = decode_record(id, sequence, bytes)?;
+        after = record.session_seq;
+        let boundary = (cut == Some(after)).then(|| crate::io::digest_hex(hash.clone().finish()));
+        visit(&record, boundary)?;
+    }
+    Ok((hash, after))
 }
 
 fn writer_journal_for_display(conn: &Connection) -> bool {

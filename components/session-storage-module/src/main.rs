@@ -43,6 +43,12 @@ impl Export for StorageExport {
             return self.standard.invoke(method, params, host);
         }
         match params.get("operation").and_then(Value::as_str) {
+            Some("write_cache") => {
+                // This concrete service already validates the request before
+                // admission, including the full JSON value byte budget.
+                let request: SessionStorageRequest = serde_json::from_value(params)?;
+                return Ok(serde_json::to_value(self.backend.0.execute(request)?)?);
+            }
             // Canonical records, conversation and disposable caches do not
             // require projection negotiation.
             Some("read_records" | "read_conversation" | "read_cache") => {}

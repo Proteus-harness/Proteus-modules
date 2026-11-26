@@ -1,6 +1,77 @@
 use super::*;
 
 #[test]
+fn circular_output_matches_append_then_drain_across_chunk_boundaries() {
+    const LIMIT: usize = SESSION_BUFFER_LIMIT;
+    const HEAD: usize = BoundedOutput::HEAD;
+    const TAIL: usize = BoundedOutput::TAIL;
+    // Short output, exact fill, crossing the cutoff, the ring wraps, and a
+    // single large chunk supplies both a missing head and its latest tail.
+    for lengths in [
+        &[0, 17, 1][..],
+        &[HEAD - 3, 1, TAIL + 2, 1, HEAD / 5, TAIL - 7, 29],
+        &[3, 3 * LIMIT + 17, 5],
+        &[LIMIT, TAIL, TAIL + 1, LIMIT + 2],
+        &[HEAD - 37, TAIL - 41, 4096, TAIL / 3, TAIL / 3, TAIL / 3, 32768],
+    ] {
+        let mut state = BoundedOutput::default();
+        let mut stock = Vec::new();
+        let mut dropped = 0usize;
+        let mut byte_state = 7u32;
+        for len in lengths.iter().copied() {
+            let chunk = (0..len)
+                .map(|_| {
+                    byte_state ^= byte_state << 13;
+                    byte_state ^= byte_state >> 17;
+                    byte_state ^= byte_state << 5;
+                    byte_state as u8
+                })
+                .collect::<Vec<_>>();
+            state.push(&chunk);
+            stock.extend_from_slice(&chunk);
+            let excess = stock.len().saturating_sub(LIMIT);
+            if excess != 0 {
+                stock.drain(HEAD..HEAD + excess);
+            }
+            dropped = dropped.saturating_add(excess);
+            assert_eq!(state.bytes.len(), stock.len());
+        }
+        assert_eq!(state.take(true), (stock, dropped));
+        assert_eq!(state.take(true), (Vec::new(), 0));
+    }
+}
+
+#[test]
+fn full_ring_does_not_reallocate_for_a_small_overflowing_chunk() {
+    let mut state = BoundedOutput::default();
+    state.push(&vec![b'x'; SESSION_BUFFER_LIMIT]);
+    let allocation = (state.bytes.as_ptr(), state.bytes.capacity());
+    state.push(b"new-tail");
+    assert_eq!((state.bytes.as_ptr(), state.bytes.capacity()), allocation);
+    let (bytes, dropped) = state.take(true);
+    assert_eq!(dropped, 8);
+    assert_eq!(bytes.len(), SESSION_BUFFER_LIMIT);
+    assert!(bytes.ends_with(b"new-tail"));
+}
+
+#[test]
+fn huge_chunk_reserves_head_and_tail_together_after_a_partial_head() {
+    let mut state = BoundedOutput::default();
+    let old_len = 400 * 1024;
+    state.push(&vec![b'a'; old_len]);
+    assert_eq!(state.bytes.capacity(), old_len);
+    assert!(old_len < BoundedOutput::HEAD && old_len * 3 > SESSION_BUFFER_LIMIT);
+
+    state.push(&vec![b'b'; SESSION_BUFFER_LIMIT + 17]);
+    assert_eq!(state.bytes.capacity(), SESSION_BUFFER_LIMIT);
+    let (bytes, dropped) = state.take(true);
+    assert_eq!(dropped, old_len + 17);
+    assert_eq!(bytes.len(), SESSION_BUFFER_LIMIT);
+    assert!(bytes[..old_len].iter().all(|&byte| byte == b'a'));
+    assert!(bytes[old_len..].iter().all(|&byte| byte == b'b'));
+}
+
+#[test]
 fn every_pair_of_poll_boundaries_preserves_valid_utf8() {
     for text in ["", "ASCII", "é", "中", "😀", "aé中😀z"] {
         let input = text.as_bytes();
@@ -130,16 +201,21 @@ fn split_scalar_renders_once_and_output_bytes_count_delivered_bytes() {
 
 #[test]
 fn retained_suffix_does_not_break_existing_dropped_middle_rendering() {
-    let mut buffer = vec![b'x'; SESSION_BUFFER_LIMIT];
-    buffer[SESSION_BUFFER_LIMIT - 2..].copy_from_slice(&[0xf0, 0x9f]);
-    let first = rendered(take_ready_bytes(&mut buffer, false), 17, false);
+    let mut buffer = BoundedOutput::default();
+    buffer.push(&vec![b'x'; SESSION_BUFFER_LIMIT]);
+    buffer.push(b"0123456789abcde");
+    buffer.push(&[0xf0, 0x9f]);
+    let (bytes, dropped) = buffer.take(false);
+    let first = rendered(bytes, dropped, false);
     assert_eq!(first["metadata"]["output_bytes"], SESSION_BUFFER_LIMIT - 2);
     assert_eq!(first["metadata"]["dropped_bytes"], 17);
     assert_eq!(first["metadata"]["truncated"], true);
     assert!(!first["output"].as_str().unwrap().contains('�'));
-    assert_eq!(buffer, [0xf0, 0x9f]);
-    buffer.extend_from_slice(&[0x98, 0x80]);
-    let second = rendered(take_ready_bytes(&mut buffer, true), 0, true);
+    assert_eq!(buffer.bytes, [0xf0, 0x9f]);
+    buffer.push(&[0x98, 0x80]);
+    let (bytes, dropped) = buffer.take(true);
+    assert_eq!(dropped, 0);
+    let second = rendered(bytes, dropped, true);
     assert!(second["output"].as_str().unwrap().ends_with("Output:\n😀"));
 }
 

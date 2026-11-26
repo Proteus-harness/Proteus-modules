@@ -199,6 +199,85 @@ fn opaque_checkpoint_can_read_original_history_without_interpreting_provider_dat
 }
 
 #[test]
+fn jsonl_writer_reopen_reuses_the_bounded_spill_for_multi_buffer_lines() {
+    use crate::backend::{JournalBackend, Jsonl};
+
+    let mut f = Fixture::new(BackendKind::Jsonl);
+    let expected: Vec<_> = (0..6)
+        .map(|i| text(&format!("ordinary paragraph {i}: {}", "x".repeat(72 * 1024))))
+        .collect();
+    for message in &expected {
+        f.append(vec![message.clone()]);
+    }
+    let session = f.descriptor.session.clone();
+    let path = f.descriptor.local_path.clone().unwrap();
+    let journal = path.join(crate::codec::JOURNAL_FILE);
+    let raw = std::fs::read(&journal).unwrap();
+    let lengths: Vec<_> = raw
+        .split_inclusive(|&byte| byte == b'\n')
+        .map(<[u8]>::len)
+        .collect();
+    assert_eq!(lengths.len(), expected.len());
+    assert!(!path.join("blobs").exists());
+    assert!(
+        lengths.iter().all(|&len| len > 64 * 1024 && len < 128 * 1024),
+        "ordinary inline rows must need a temporary spill"
+    );
+
+    // The production recovery uses the same borrowed scratch entry point.
+    // Verify a real producer's complete >buffer lines stay in that one Vec.
+    let mut source = Jsonl::new().snapshot(&path, session.session_id).unwrap();
+    let mut scratch = Vec::new();
+    for (index, &length) in lengths.iter().enumerate() {
+        let allocation = scratch.as_ptr();
+        let had_capacity = scratch.capacity() >= length;
+        let record = source.next_with_scratch(&mut scratch).unwrap().unwrap();
+        assert_eq!(record.session_seq, index as u64 + 1);
+        assert_eq!(scratch.len(), length);
+        assert!(scratch.capacity() <= 128 * 1024);
+        if index > 0 {
+            assert!(had_capacity, "ordinary full-sized first fill retains the spill");
+            assert_eq!(scratch.as_ptr(), allocation);
+        }
+    }
+    assert_eq!(source.next_with_scratch(&mut scratch).unwrap(), None);
+    let fingerprint = source.consumed_fingerprint();
+    assert_eq!(fingerprint, crate::io::sha256_hex(&raw));
+    drop(source);
+
+    // Actual writer first-open, resident history and head readback unchanged.
+    let want = f.revision;
+    f.service
+        .execute(SessionStorageRequest::ReleaseWriter { lease: f.lease.clone() })
+        .unwrap();
+    let fresh = StorageService::new(BackendKind::Jsonl);
+    let SessionStorageResponse::Writer { lease, revision } = fresh
+        .execute(SessionStorageRequest::AcquireWriter { session: session.clone() })
+        .unwrap()
+    else {
+        panic!("reopened writer");
+    };
+    assert_eq!(revision, want);
+    let SessionStorageResponse::Resumed { state } = fresh
+        .execute(SessionStorageRequest::Resume { lease })
+        .unwrap()
+    else {
+        panic!("reopened state");
+    };
+    assert_eq!(state.conversation.revision, revision);
+    assert_eq!(state.conversation.messages, expected);
+    let SessionStorageResponse::Snapshot { snapshot } = fresh
+        .execute(SessionStorageRequest::OpenSnapshot { session })
+        .unwrap()
+    else {
+        panic!("reopened snapshot");
+    };
+    assert_eq!(snapshot.revision, revision);
+    assert_eq!(snapshot.content_sha256, fingerprint);
+    assert_eq!(std::fs::read(&journal).unwrap(), raw);
+}
+
+#[test]
 fn jsonl_torn_tail_is_read_only_until_writer_recovery() {
     use std::io::Write;
     let mut f = Fixture::new(BackendKind::Jsonl);

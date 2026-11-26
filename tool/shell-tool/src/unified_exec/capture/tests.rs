@@ -395,7 +395,10 @@ fn binding_drop_stops_writer_without_future_lookup_or_reader_eof() {
     wait_for(|| weak.upgrade().is_none());
     assert_eq!(quota.used.load(Ordering::Acquire), 0);
     session.push_output(b"preview still works");
-    assert_eq!(lock(&session.output).buffer, b"preview still works");
+    assert_eq!(
+        lock(&session.output).buffer.contiguous_for_test(),
+        b"preview still works"
+    );
 }
 
 #[test]
