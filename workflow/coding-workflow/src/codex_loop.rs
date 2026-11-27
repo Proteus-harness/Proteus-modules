@@ -68,7 +68,6 @@ fn run_loop(
                 .ok_or_else(|| {
                     ProcessModuleError::new("pre-turn history dropped the current user message")
                 })?;
-        let current_user = turn.model_messages[current_user_position].clone();
         let mut prepared = pre_turn_request(
             input,
             host,
@@ -76,7 +75,9 @@ fn run_loop(
             context_hint,
         )?;
         let mut compacted = std::mem::take(&mut prepared.request.messages);
-        compacted.push(current_user);
+        if prepared.compaction.as_ref().is_some_and(|report| report.changed) {
+            compacted.push(turn.model_messages[current_user_position].clone());
+        }
         let changed = turn.apply_compaction_report(
             prepared.compaction.as_ref(),
             prepared.preparation_target.as_ref(),

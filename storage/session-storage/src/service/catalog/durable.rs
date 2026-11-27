@@ -86,6 +86,7 @@ struct BlobStampMatch<'a> {
     // their stamps and keep only the outcome of the last observation.
     paths: Vec<(&'a PathBuf, &'a FileStamp, Option<bool>)>,
     seen_expected: usize,
+    saw_mismatch: bool,
     unexpected: BTreeSet<PathBuf>,
 }
 
@@ -94,6 +95,7 @@ impl<'a> BlobStampMatch<'a> {
         Self {
             paths: expected.iter().map(|(p, s)| (p, s, None)).collect(),
             seen_expected: 0,
+            saw_mismatch: false,
             unexpected: BTreeSet::new(),
         }
     }
@@ -106,7 +108,9 @@ impl<'a> BlobStampMatch<'a> {
             Ok(index) => {
                 let (_, expected, last) = &mut self.paths[index];
                 self.seen_expected += usize::from(last.is_none());
-                *last = Some(**expected == stamp);
+                let matches = **expected == stamp;
+                self.saw_mismatch |= !matches;
+                *last = Some(matches);
             }
             Err(_) => {
                 // Keep distinct unexpected paths too, so the walk hits the
@@ -118,7 +122,12 @@ impl<'a> BlobStampMatch<'a> {
     }
 
     fn matches(&self) -> bool {
-        self.unexpected.is_empty() && self.paths.iter().all(|(_, _, last)| *last == Some(true))
+        // If all paths were observed and none ever differed, the last stamp
+        // matched for every key. A changing directory can repeat a path, so
+        // after any disagreement use the same last-observation rule as before.
+        self.unexpected.is_empty()
+            && self.seen_expected == self.paths.len()
+            && (!self.saw_mismatch || self.paths.iter().all(|(_, _, last)| *last == Some(true)))
     }
 }
 
@@ -136,12 +145,14 @@ pub(in crate::service) fn blob_stamp_digest(stamps: &BlobStamps) -> BlobStampDig
         let path = path.as_os_str().as_encoded_bytes();
         hash.update(&(path.len() as u64).to_le_bytes());
         hash.update(path);
-        hash.update(&stamp.len.to_le_bytes());
-        hash.update(&stamp.modified.to_le_bytes());
-        hash.update(&stamp.device.to_le_bytes());
-        hash.update(&stamp.inode.to_le_bytes());
-        hash.update(&stamp.changed.0.to_le_bytes());
-        hash.update(&stamp.changed.1.to_le_bytes());
+        let mut metadata = [0; 56];
+        metadata[..8].copy_from_slice(&stamp.len.to_le_bytes());
+        metadata[8..24].copy_from_slice(&stamp.modified.to_le_bytes());
+        metadata[24..32].copy_from_slice(&stamp.device.to_le_bytes());
+        metadata[32..40].copy_from_slice(&stamp.inode.to_le_bytes());
+        metadata[40..48].copy_from_slice(&stamp.changed.0.to_le_bytes());
+        metadata[48..].copy_from_slice(&stamp.changed.1.to_le_bytes());
+        hash.update(&metadata);
     }
     hash.finish()
         .as_ref()
@@ -221,7 +232,7 @@ pub(super) fn load(
         || index.summary.descriptor.session != descriptor.session
         || &index.stamps != stamps
         || !matches_blob_stamps(dir, &index.blobs)?
-        || source_stamp(dir, journal_kind(descriptor)?)
+        || source_stamp_items(dir, journal_kind(descriptor)?)
             .ok()?
             .as_slice()
             != stamps.as_slice()
@@ -282,7 +293,7 @@ pub(super) fn save(
         let kind = journal_kind(&summary.descriptor).context("catalog journal kind")?;
         // A concurrent append or payload replacement makes this generation unusable.
         ensure!(
-            source_stamp(dir, kind)? == prefix.stamps,
+            source_stamp_items(dir, kind)?.as_slice() == prefix.stamps.as_slice(),
             "catalog source changed"
         );
         ensure!(

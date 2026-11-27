@@ -13,8 +13,22 @@ pub(crate) fn sha256_hex(bytes: &[u8]) -> String {
     digest_hex(digest(&SHA256, bytes))
 }
 
+const HEX: &[u8; 16] = b"0123456789abcdef";
+
+pub(crate) fn sha256_matches(bytes: &[u8], expected: &str) -> bool {
+    let digest = digest(&SHA256, bytes);
+    let expected = expected.as_bytes();
+    expected.len() == digest.as_ref().len() * 2
+        && digest
+            .as_ref()
+            .iter()
+            .zip(expected.chunks_exact(2))
+            .all(|(&byte, hex)| {
+                hex[0] == HEX[(byte >> 4) as usize] && hex[1] == HEX[(byte & 0x0f) as usize]
+            })
+}
+
 pub(crate) fn digest_hex(digest: ring::digest::Digest) -> String {
-    const HEX: &[u8; 16] = b"0123456789abcdef";
     let bytes = digest.as_ref();
     let mut encoded = String::with_capacity(bytes.len() * 2);
     for &byte in bytes {

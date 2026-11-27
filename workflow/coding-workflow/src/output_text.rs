@@ -13,10 +13,18 @@ pub(crate) fn message_text(message: &CanonicalMessage) -> String {
         Some(first) => match text_parts.next() {
             None => first.to_owned(),
             Some(second) => {
-                let mut parts = Vec::new();
-                parts.extend([first, second]);
-                parts.extend(text_parts);
-                parts.join("\n")
+                let tail = std::iter::once(second).chain(text_parts);
+                let len = tail
+                    .clone()
+                    .try_fold(first.len(), |len, part| len.checked_add(1)?.checked_add(part.len()))
+                    .expect("joined text length overflow");
+                let mut text = String::with_capacity(len);
+                text.push_str(first);
+                for part in tail {
+                    text.push('\n');
+                    text.push_str(part);
+                }
+                text
             }
         },
     };

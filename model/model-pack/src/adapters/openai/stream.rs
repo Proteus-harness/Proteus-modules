@@ -12,13 +12,13 @@ mod tests;
 /// finalize_completed_event; неизвестные events здесь игнорируются.
 pub(super) fn translate_non_message_event(
     event_type: &str,
-    parsed: &Value,
+    parsed: &mut Value,
 ) -> Vec<ModelStreamEvent> {
     match event_type {
         "response.reasoning_summary_text.delta" | "response.reasoning_summary.delta" => {
-            if let Some(delta) = parsed.get("delta").and_then(Value::as_str) {
+            if let Some(Value::String(delta)) = parsed.get_mut("delta") {
                 return vec![ModelStreamEvent::ReasoningSummaryDelta {
-                    text: delta.to_owned(),
+                    text: std::mem::take(delta),
                 }];
             }
             Vec::new()
@@ -30,18 +30,19 @@ pub(super) fn translate_non_message_event(
                 .and_then(Value::as_str)
                 .unwrap_or("")
                 .to_owned();
-            let args_delta = parsed
-                .get("delta")
-                .and_then(Value::as_str)
-                .unwrap_or("")
-                .to_owned();
-            if call_id.is_empty() || args_delta.is_empty() {
+            if call_id.is_empty() {
+                return Vec::new();
+            }
+            let Some(Value::String(args_delta)) = parsed.get_mut("delta") else {
+                return Vec::new();
+            };
+            if args_delta.is_empty() {
                 return Vec::new();
             }
             vec![ModelStreamEvent::ToolCallDelta {
                 call_id,
                 name: None,
-                args_delta,
+                args_delta: std::mem::take(args_delta),
             }]
         }
         "response.incomplete" => {

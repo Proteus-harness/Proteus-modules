@@ -1,6 +1,26 @@
 //! Capture display state in the same strict pass that validates its source.
 use super::*;
+use crate::backend::RecordSnapshot;
 use crate::display::{DisplayWriter, MAX_STAGING_BYTES, state_fits};
+use proteus_contracts::model_standard::ContentPart;
+
+fn text_reaches_page_budget(record: &JournalRecord) -> bool {
+    let JournalEntry::HistoryMutated(change) = &record.entry else {
+        return false;
+    };
+    let mut remaining = SESSION_STORAGE_PAGE_BYTE_BUDGET;
+    // Every Text value here is serialized in the staged row. JSON escaping
+    // can only increase its byte count, so this is a sufficient lower bound.
+    for part in change.messages.iter().flat_map(|message| &message.parts) {
+        if let ContentPart::Text { text } = &part.payload {
+            remaining = remaining.saturating_sub(text.len());
+            if remaining == 0 {
+                return true;
+            }
+        }
+    }
+    false
+}
 
 impl State {
     pub(super) fn open_display_snapshot(
@@ -23,14 +43,21 @@ impl State {
             .sum();
         let budget = MAX_STAGING_BYTES.saturating_sub(staged);
         let apply = |(state, previous_boundary, display): &mut (Fold, Option<_>, Option<DisplayWriter>),
-                     record: &JournalRecord, boundary| -> Result<()> {
+                     record: &JournalRecord,
+                     boundary,
+                     replay_source: Option<&dyn RecordSnapshot>|
+         -> Result<()> {
             state.apply(session.session_id, record)?;
             if let Some(hash) = boundary {
                 *previous_boundary = Some((state.revision(), hash));
             }
             if record.entry.kind().is_display_record()
                 && let Some(writer) = display
-                && writer.push(record).is_err()
+                && ((record.session_seq == 1
+                    && state.revision().history_revision == 1
+                    && replay_source.is_some_and(|source| source.at_pinned_end())
+                    && text_reaches_page_budget(record))
+                    || writer.push(record).is_err())
             {
                 *display = None;
             }
@@ -42,14 +69,14 @@ impl State {
                 session.session_id,
                 cut,
                 |extent| (Fold::default(), None, DisplayWriter::for_jsonl(budget, extent)),
-                apply,
+                |fold, record, hash, source| apply(fold, record, hash, Some(source)),
             )?,
             BackendKind::Sqlite => Sqlite::replay_display(
                 &dir,
                 session.session_id,
                 cut,
                 || (Fold::default(), None, DisplayWriter::new(budget)),
-                apply,
+                |fold, record, hash| apply(fold, record, hash, None),
             )?,
             BackendKind::Jsonl => {
                 let mut source = self.kind.backend().snapshot(&dir, session.session_id)?;
@@ -57,7 +84,7 @@ impl State {
                 let writer = DisplayWriter::for_jsonl(budget, source.extent());
                 let mut staged = (Fold::default(), None, writer);
                 if !source.try_visit_display_rows(cut, &mut |record, hash| {
-                    apply(&mut staged, record, hash)
+                    apply(&mut staged, record, hash, None)
                 })? {
                     let mut line = Vec::new();
                     while let Some(record) = source.next_with_scratch(&mut line)? {
@@ -65,7 +92,7 @@ impl State {
                             source.remember_page_boundary(record.session_seq);
                             source.consumed_fingerprint()
                         });
-                        apply(&mut staged, &record, boundary)?;
+                        apply(&mut staged, &record, boundary, None)?;
                     }
                 }
                 if source.source_version()? != version {

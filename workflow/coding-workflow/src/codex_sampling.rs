@@ -31,7 +31,7 @@ fn default_stream_max_retries() -> u64 {
 
 impl StreamRetryConfig {
     pub(crate) fn from_config(config: &Value) -> Result<Self, ProcessModuleError> {
-        let mut config: Self = serde_json::from_value(config.clone()).map_err(|error| {
+        let mut config: Self = Self::deserialize(config).map_err(|error| {
             ProcessModuleError::new(format!("invalid codex_loop config: {error}"))
         })?;
         config.stream_max_retries = config.stream_max_retries.min(100);

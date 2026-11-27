@@ -1,5 +1,5 @@
 use proteus_contracts::{
-    domain::{TokenUsageCategory, TokenUsageSnapshot, TokenUsageSource},
+    domain::{TokenUsageCategory, TokenUsageSnapshot, TokenUsageSource, ToolResult},
     model_standard::{
         CanonicalMessage, CanonicalModelRequest, ContentPart, MessageRole, TokenUsage,
         input_estimates::ModelInputEstimate,
@@ -77,31 +77,28 @@ fn estimate_request_categories(request: &CanonicalModelRequest) -> Vec<TokenUsag
                     bytes.context += chunk.source.len()
                         + chunk
                             .path
-                            .as_ref()
-                            .map(|path| path.display().to_string().len())
+                            .as_deref()
+                            .map(displayed_path_bytes)
                             .unwrap_or_default()
                         + chunk.content.len()
-                        + chunk.metadata.to_string().len();
+                        + json_value_bytes(&chunk.metadata);
                 }
                 ContentPart::FileRef { path, content } => {
-                    bytes.files += path.display().to_string().len()
+                    bytes.files += displayed_path_bytes(path)
                         + content.as_deref().unwrap_or_default().len();
                 }
                 ContentPart::ToolCall { call } => {
-                    bytes.tool_calls +=
-                        call.id.as_str().len() + call.name.len() + call.args.to_string().len();
+                    bytes.tool_calls += call.id.as_str().len()
+                        + call.name.len()
+                        + json_value_bytes(&call.args);
                 }
                 ContentPart::ToolResult { result } => {
                     // The report needs only the selected byte count; keep the
                     // canonical compound and status rendering as the fallback.
-                    let text_bytes = match result.error.as_deref().filter(|s| !s.is_empty()) {
-                        Some(error) => error.len(),
-                        None if !result.output.is_empty() => result.output.len(),
-                        None => result.text_or_status().len(),
-                    };
+                    let text_bytes = tool_result_text_bytes(result);
                     bytes.tool_results += result.call_id.as_str().len()
                         + text_bytes
-                        + result.metadata.to_string().len();
+                        + json_value_bytes(&result.metadata);
                 }
                 ContentPart::Patch { patch } => {
                     bytes.patches += patch.content.len();
@@ -110,7 +107,7 @@ fn estimate_request_categories(request: &CanonicalModelRequest) -> Vec<TokenUsag
                     let tokens = estimates
                         .as_ref()
                         .and_then(|estimates| estimates.tokens_for(part))
-                        .unwrap_or_else(|| estimate_tokens_from_bytes(data.to_string().len()));
+                        .unwrap_or_else(|| estimate_tokens_from_bytes(json_value_bytes(data)));
                     opaque_tokens = opaque_tokens.saturating_add(tokens);
                 }
                 // OpenAI/other adapters replay the assistant text, not hosted
@@ -150,6 +147,12 @@ fn estimate_request_categories(request: &CanonicalModelRequest) -> Vec<TokenUsag
     .collect()
 }
 
+fn displayed_path_bytes(path: &std::path::Path) -> usize {
+    path.to_str()
+        .map(str::len)
+        .unwrap_or_else(|| path.display().to_string().len())
+}
+
 fn serialized_json_len(value: &impl serde::Serialize) -> serde_json::Result<usize> {
     let mut counter = JsonByteCounter(0);
     serde_json::to_writer(&mut counter, value)?;
@@ -172,6 +175,18 @@ impl std::io::Write for JsonByteCounter {
 
     fn flush(&mut self) -> std::io::Result<()> {
         Ok(())
+    }
+}
+
+fn json_value_bytes(value: &Value) -> usize {
+    serialized_json_len(value).expect("JSON value is serializable")
+}
+
+fn tool_result_text_bytes(result: &ToolResult) -> usize {
+    match result.error.as_deref().filter(|error| !error.is_empty()) {
+        Some(error) => error.len(),
+        None if !result.output.is_empty() => result.output.len(),
+        None => result.text_or_status().len(),
     }
 }
 
@@ -220,7 +235,7 @@ fn message_envelope_bytes(message: &CanonicalMessage) -> usize {
             .as_ref()
             .map(|id| id.as_str().len())
             .unwrap_or_default()
-        + message.metadata.to_string().len()
+        + serialized_json_len(&message.metadata).expect("message metadata is serializable")
         + 4
 }
 
@@ -311,12 +326,12 @@ fn part_text_len(part: &ContentPart) -> usize {
         ContentPart::Text { text } => text.len(),
         ContentPart::Context { chunk } => chunk.content.len(),
         ContentPart::FileRef { content, .. } => content.as_deref().unwrap_or_default().len(),
-        ContentPart::ToolCall { call } => call.name.len() + call.args.to_string().len(),
+        ContentPart::ToolCall { call } => call.name.len() + json_value_bytes(&call.args),
         ContentPart::ToolResult { result } => {
-            result.text_or_status().len() + result.metadata.to_string().len()
+            tool_result_text_bytes(result) + json_value_bytes(&result.metadata)
         }
         ContentPart::Patch { patch } => patch.content.len(),
-        ContentPart::Opaque { data, .. } => data.to_string().len(),
+        ContentPart::Opaque { data, .. } => json_value_bytes(data),
         ContentPart::ReasoningSummary { text } | ContentPart::Reasoning { text, .. } => text.len(),
         ContentPart::HostedToolActivity { .. } | ContentPart::Citation { .. } => 0,
         _ => 0,

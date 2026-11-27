@@ -84,6 +84,9 @@ impl DisplayWriter {
         if canonical_has_same_payload
             && self.budget - self.remaining >= SESSION_STORAGE_PAGE_BYTE_BUDGET as u64
         {
+            // This private stage is being discarded, not published. Do not
+            // write its remaining buffer just to close the temporary file.
+            drop(self.writer.into_parts());
             return None;
         }
         self.finish()

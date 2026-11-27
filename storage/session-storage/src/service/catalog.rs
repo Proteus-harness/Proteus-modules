@@ -47,8 +47,12 @@ pub(super) fn source_stamp(dir: &Path, kind: BackendKind) -> Result<SourceStamp>
     Ok(source_stamp_items(dir, kind)?.into())
 }
 
+pub(super) fn source_matches(dir: &Path, kind: BackendKind, stamps: &SourceStamp) -> Result<bool> {
+    Ok(source_stamp_items(dir, kind)?.as_slice() == stamps.as_slice())
+}
+
 fn source_stamp_items(dir: &Path, kind: BackendKind) -> Result<[Option<FileStamp>; 3]> {
-    let journal = kind.backend().description_path(dir);
+    let journal = kind.description_path(dir);
     let wal = PathBuf::from(format!("{}-wal", journal.to_string_lossy()));
     Ok([
         stamp(&journal)?,

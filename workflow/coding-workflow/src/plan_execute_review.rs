@@ -72,12 +72,22 @@ fn run_loop(
                 disable_tools: forced_text_round,
             },
         )?;
-        let plan_messages = plan_response
+        let persist_plan = !forced_text_round
+            && plan_response.finish_reason == FinishReason::ToolCalls
+            && !plan_response.tool_calls.is_empty();
+        let start = turn.model_messages.len();
+        let tagged = plan_response
             .messages
             .into_iter()
-            .map(|message| with_workflow_phase(message, PLAN_EXECUTE_REVIEW_MODULE_ID, "plan"))
-            .collect::<Vec<_>>();
-        turn.model_messages.extend(plan_messages.iter().cloned());
+            .map(|message| with_workflow_phase(message, PLAN_EXECUTE_REVIEW_MODULE_ID, "plan"));
+        let persistent_plan = if persist_plan {
+            let messages = tagged.collect::<Vec<_>>();
+            turn.model_messages.extend(messages.iter().cloned());
+            Some(messages)
+        } else {
+            turn.model_messages.extend(tagged);
+            None
+        };
         if let Some(usage) = plan_response.usage.clone() {
             last_usage = Some(LastModelUsage {
                 usage,
@@ -85,15 +95,12 @@ fn run_loop(
             });
         }
 
-        let should_run_tools = plan_response.finish_reason == FinishReason::ToolCalls
-            && !plan_response.tool_calls.is_empty();
-        if forced_text_round || !should_run_tools {
+        let Some(plan_messages) = persistent_plan else {
             // The private plan must survive canonical durable ACK replacement,
             // without becoming public conversation history.
-            let start = turn.model_messages.len() - plan_messages.len();
             make_private_projection(&mut turn.model_messages[start..]);
             break;
-        }
+        };
         plan_tool_rounds_used += 1;
         turn.persistent_messages.extend(plan_messages);
         turn.checkpoint_tools(host, input, &plan_response.tool_calls, "plan")?;

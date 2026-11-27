@@ -100,7 +100,8 @@ impl State {
         let mut source = self.kind.backend().snapshot(&dir, session.session_id)?;
         let mut fold = Fold::default();
         let mut found = None;
-        while let Some(record) = source.next()? {
+        let mut line = Vec::new();
+        while let Some(record) = source.next_with_scratch(&mut line)? {
             // An ACK needs the validated revision and original record, not the
             // model-context or usage views. Still validate the entire suffix.
             fold.apply_validated(session.session_id, &record)?;

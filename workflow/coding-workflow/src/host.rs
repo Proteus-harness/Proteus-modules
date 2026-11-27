@@ -26,12 +26,6 @@ pub(super) struct PreparedRequest {
     pub(super) preparation_target: Option<ContextPreparationTarget>,
 }
 
-struct CompactedMessages {
-    messages: Vec<CanonicalMessage>,
-    report: Option<HistoryCompactionReport>,
-    target: Option<ContextPreparationTarget>,
-}
-
 #[derive(Clone, Copy)]
 struct RequestOptions<'a> {
     include_dynamic_meta_tools: bool,
@@ -210,20 +204,25 @@ fn request_from_state_with_instruction_blocks_and_options(
     // TokenUsageUpdated нёс max_input_tokens (хост-шейпер правит свою копию
     // уже после того, как module собрал снимок, поэтому делаем это здесь).
     request.limits.max_input_tokens = input.runtime.max_input_tokens;
-    let (compaction, preparation_target) = if let Some(reason) = options.compaction_reason {
-        let compacted = compact_messages(
+    let PreparedRequest {
+        mut request,
+        compaction,
+        preparation_target,
+    } = if let Some(reason) = options.compaction_reason {
+        compact_messages(
             input,
             host,
-            &mut request,
+            request,
             reason,
             options.last_usage,
             options.context_hint,
-        )?;
-        request.messages = compacted.messages;
-        (compacted.report, compacted.target)
+        )?
     } else {
-        // The request already owns its messages in the no-preparation case.
-        (None, None)
+        PreparedRequest {
+            request,
+            compaction: None,
+            preparation_target: None,
+        }
     };
     // Advisory estimates travel with the preparation report, never the durable
     // canonical payload. Continuations reuse their recorded report without a new
@@ -288,11 +287,11 @@ pub(super) fn execute_or_handle_tool(
 fn compact_messages(
     input: &WorkflowModuleInput,
     host: &WorkflowModuleHostMut<'_>,
-    request: &mut CanonicalModelRequest,
+    mut request: CanonicalModelRequest,
     reason: &str,
     last_usage: Option<&LastModelUsage>,
     context_hint: Option<u32>,
-) -> Result<CompactedMessages, ProcessModuleError> {
+) -> Result<PreparedRequest, ProcessModuleError> {
     ensure_not_cancelled(host)?;
     let valid_usage = last_usage.is_some_and(|usage| usage.message_count <= request.messages.len());
     let observed = context_hint.is_some() || valid_usage;
@@ -313,17 +312,17 @@ fn compact_messages(
     } else {
         [usage_estimate, context_hint].into_iter().flatten().max()
     };
-    // The caller replaces these messages with the preparation output.
-    let messages = std::mem::take(&mut request.messages);
-    let mut preparation_request = request.clone();
-    preparation_request.messages = messages;
+    // Move the model controls through preparation. Only metadata needs a copy
+    // because the estimate source is private to the preparation request.
+    let original_metadata = std::mem::take(&mut request.metadata);
+    request.metadata = original_metadata.clone();
     let source = if observed {
         ContextTokenEstimateSource::Observed
     } else {
         ContextTokenEstimateSource::Estimated
     };
-    source.write_metadata(&mut preparation_request.metadata);
-    let compaction_input = ContextPreparationInput::from_request(preparation_request)
+    source.write_metadata(&mut request.metadata);
+    let compaction_input = ContextPreparationInput::from_request(request)
         .with_reason(reason)
         .with_token_estimate(token_estimate)
         .with_window_tokens(input.runtime.max_input_tokens);
@@ -343,10 +342,13 @@ fn compact_messages(
     }
     let report =
         HistoryCompactionReport::from_context_preparation_output(&compaction_input, &output);
-    Ok(CompactedMessages {
-        messages: output.messages,
-        report: Some(report),
-        target: result.target,
+    let mut request = compaction_input.request.expect("owned preparation request");
+    request.metadata = original_metadata;
+    request.messages = output.messages;
+    Ok(PreparedRequest {
+        request,
+        compaction: Some(report),
+        preparation_target: result.target,
     })
 }
 

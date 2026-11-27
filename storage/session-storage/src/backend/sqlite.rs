@@ -3,10 +3,9 @@ use super::*;
 use anyhow::{Context, ensure};
 use ring::digest::{Context as HashContext, SHA256};
 use rusqlite::{Connection, OpenFlags, params};
-use std::path::PathBuf;
 mod record;
 
-const FILE: &str = "journal.sqlite";
+pub(crate) const FILE: &str = "journal.sqlite";
 // Exact schema text of the built-in writer (SQLite drops IF NOT EXISTS).
 // Anything else, including hand-built compatible tables, uses the seek reader.
 const WRITER_JOURNAL_SCHEMA: &str = "CREATE TABLE journal (
@@ -312,9 +311,6 @@ impl JournalBackend for Sqlite {
             bytes: payload,
             blobs: Vec::new(),
         })
-    }
-    fn description_path(&self, dir: &Path) -> PathBuf {
-        dir.join(FILE)
     }
 }
 

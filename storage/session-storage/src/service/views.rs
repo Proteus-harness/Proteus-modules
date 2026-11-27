@@ -27,15 +27,28 @@ impl State {
     pub(super) fn prepare_snapshot(&mut self, session: SessionLocator) -> Result<SnapshotState> {
         let dir = self.checked_path(&session)?;
         let stamps = catalog::source_stamp(&dir, self.kind)?;
-        let mut cached = self
+        let cached = self
             .prefixes
             .get(&session)
-            .filter(|cache| cache.valid_at(&dir, &stamps))
-            .cloned();
+            .filter(|cache| cache.valid_at(&dir, &stamps));
         let descriptor = self.describe(&session)?;
+        let kind = self.kind;
+        let session_id = session.session_id;
+        let warm = |cached: &PrefixCache| -> Result<_> {
+            let source = kind
+                .backend()
+                .snapshot_warm(&dir, session_id, &cached.hint)?;
+            ensure!(
+                catalog::source_matches(&dir, kind, &cached.stamps)?,
+                "journal changed during snapshot capture"
+            );
+            Ok((source, cached.revision))
+        };
         let mut verified = false;
-        if cached.is_none()
-            && let Some(writer) = self.writers.get(&session)
+        let mut previous_boundary = None;
+        let (mut source, revision) = if let Some(cached) = cached {
+            warm(cached)?
+        } else if let Some(writer) = self.writers.get(&session)
             && let (Some(fold), Some(head)) = (&writer.fold, &writer.head)
             && head.stamps == stamps
             && let Some(blobs) = catalog::durable::blob_stamps(&dir)
@@ -43,7 +56,7 @@ impl State {
         {
             let messages = fold.validation.history();
             let prefix = PrefixCache {
-                stamps: stamps.clone(),
+                stamps,
                 revision: fold.revision(),
                 hint: PrefixHint {
                     extent: head.extent,
@@ -52,28 +65,15 @@ impl State {
                 blob_digest: Some(catalog::durable::blob_stamp_digest(&blobs)),
             };
             let summary = StorageSessionSummary {
-                descriptor: descriptor.clone(),
+                descriptor,
                 message_count: messages.len(),
                 preview: crate::snapshot::preview(messages),
             };
             self.save_catalog_head(&dir, summary, &prefix, blobs);
-            cached = Some(prefix);
             verified = true;
-        }
-        if cached.is_none() {
-            cached = self.load_catalog_head(&dir, &descriptor, &stamps);
-        }
-        let mut previous_boundary = None;
-        let (mut source, revision) = if let Some(cached) = cached {
-            let source =
-                self.kind
-                    .backend()
-                    .snapshot_warm(&dir, session.session_id, &cached.hint)?;
-            ensure!(
-                catalog::source_stamp(&dir, self.kind)? == cached.stamps,
-                "journal changed during snapshot capture"
-            );
-            (source, cached.revision)
+            warm(&prefix)?
+        } else if let Some(cached) = self.load_catalog_head(&dir, &descriptor, &stamps) {
+            warm(&cached)?
         } else {
             let blobs = catalog::durable::blob_stamps(&dir);
             let cut = self
@@ -99,9 +99,8 @@ impl State {
             previous_boundary = boundary.or_else(|| {
                 (cut == Some(0)).then(|| (StorageRevision::default(), crate::io::sha256_hex(b"")))
             });
-            let blobs = blobs.filter(|blobs| {
-                catalog::durable::matches_blob_stamps(&dir, blobs) == Some(true)
-            });
+            let blobs = blobs
+                .filter(|blobs| catalog::durable::matches_blob_stamps(&dir, blobs) == Some(true));
             let prefix = PrefixCache {
                 stamps,
                 revision: state.revision(),
@@ -113,7 +112,7 @@ impl State {
             };
             let revision = prefix.revision;
             if let Some(blobs) = blobs
-                && catalog::source_stamp(&dir, self.kind)? == prefix.stamps
+                && catalog::source_matches(&dir, self.kind, &prefix.stamps)?
             {
                 let messages = state.validation.history();
                 let summary = StorageSessionSummary {
@@ -175,8 +174,7 @@ impl State {
             fold.model_context.before_turn(turn_id)
         } else {
             self.get_snapshot(&snapshot)?
-                .fold()?
-                .model_context
+                .fold_model_context()?
                 .before_turn(turn_id)
         }
         .context("model context requested outside the latest admitted turn")?;

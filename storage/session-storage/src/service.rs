@@ -64,6 +64,13 @@ struct Writer {
     _ownership: SessionWriteOwnership,
 }
 impl BackendKind {
+    fn description_path(self, dir: &Path) -> PathBuf {
+        dir.join(match self {
+            Self::Jsonl => crate::codec::JOURNAL_FILE,
+            Self::Sqlite => crate::backend::SQLITE_JOURNAL_FILE,
+        })
+    }
+
     fn backend(self) -> Box<dyn JournalBackend> {
         match self {
             Self::Jsonl => Box::new(Jsonl::new()),
@@ -219,10 +226,11 @@ impl State {
                 limit,
             } => {
                 let sole_snapshot = self.snapshots.len() == 1;
-                let page = self
-                    .get_snapshot(&snapshot)?
-                    .page(after_seq, limit, sole_snapshot)?;
-                Ok(SessionStorageResponse::Records { page })
+                let state = self.get_snapshot(&snapshot)?;
+                let (records, next_after_seq) = state.page(after_seq, limit, sole_snapshot)?;
+                Ok(SessionStorageResponse::Records {
+                    page: state.record_page(snapshot, records, next_after_seq),
+                })
             }
             ReadDisplayRecords {
                 snapshot,
@@ -231,26 +239,8 @@ impl State {
             } => {
                 let state = self.get_snapshot(&snapshot)?;
                 let (records, next_after_seq) = state.display_page(after_seq, limit)?;
-                // The live handle was checked exactly. Do not retain spare
-                // capacity carried by an in-process caller in its response.
-                let compact = [
-                    &snapshot.snapshot_id,
-                    &snapshot.session.key,
-                    &snapshot.content_sha256,
-                ]
-                .into_iter()
-                .all(|text| text.capacity() == text.len());
-                let snapshot = if compact {
-                    snapshot
-                } else {
-                    state.identity.clone()
-                };
                 Ok(SessionStorageResponse::Records {
-                    page: StorageRecordPage {
-                        snapshot,
-                        records,
-                        next_after_seq,
-                    },
+                    page: state.record_page(snapshot, records, next_after_seq),
                 })
             }
             ReadConversation { snapshot, point } => Ok(SessionStorageResponse::Conversation {
@@ -402,7 +392,7 @@ impl Writer {
             self.head = blobs
                 .filter(|blobs| {
                     catalog::source_stamp(dir, kind).ok().as_ref() == Some(&stamps)
-                        && catalog::durable::blob_stamps(dir).as_ref() == Some(blobs)
+                        && catalog::durable::matches_blob_stamps(dir, blobs) == Some(true)
                 })
                 .map(|blobs| catalog::WriterHead {
                     stamps,

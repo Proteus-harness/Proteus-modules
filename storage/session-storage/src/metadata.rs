@@ -1,6 +1,6 @@
 //! Metadata CAS and its operation receipt commit in one atomic document.
 use crate::{
-    io::{atomic_write, bounded_read, digest_hex, sha256_hex},
+    io::{atomic_write, bounded_file_eq, bounded_read, digest_hex, sha256_hex},
     types::*,
 };
 use anyhow::{Result, ensure};
@@ -82,7 +82,7 @@ fn store(
         .join(format!("{object_sha256}.json"));
     if path.try_exists()? {
         ensure!(
-            bounded_read(&path, SESSION_STORAGE_MAX_METADATA_BYTES)? == bytes,
+            bounded_file_eq(&path, &bytes, SESSION_STORAGE_MAX_METADATA_BYTES)?,
             "metadata object collision"
         );
     } else {

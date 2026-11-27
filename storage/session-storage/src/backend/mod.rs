@@ -7,7 +7,7 @@ use std::path::{Path, PathBuf};
 mod jsonl;
 mod sqlite;
 pub(crate) use jsonl::Jsonl;
-pub(crate) use sqlite::Sqlite;
+pub(crate) use sqlite::{FILE as SQLITE_JOURNAL_FILE, Sqlite};
 
 #[derive(Clone)]
 pub(crate) struct PrefixHint {
@@ -38,6 +38,10 @@ pub(crate) struct PageCursor {
 
 pub(crate) trait RecordSnapshot: Send {
     fn page_cursor(&self) -> PageCursor;
+    /// Position in a pinned complete extent, not a substitute for EOF checks.
+    fn at_pinned_end(&self) -> bool {
+        false
+    }
     fn restore_page_cursor(&mut self, cursor: PageCursor) -> Result<()>;
     /// None means the backend transaction already pins an immutable view.
     fn source_version(&self) -> Result<Option<SourceVersion>> {
@@ -95,7 +99,6 @@ pub(crate) trait JournalBackend: Send {
     /// Caller holds the persistent writer lease. Only recovery may repair a torn tail.
     fn recover(&mut self, dir: &Path, id: SessionId) -> Result<()>;
     fn append(&mut self, dir: &Path, record: &JournalRecord) -> Result<Append>;
-    fn description_path(&self, dir: &Path) -> std::path::PathBuf;
 }
 
 pub(crate) fn replay_records<T: Default>(
@@ -103,14 +106,16 @@ pub(crate) fn replay_records<T: Default>(
     cut: Option<u64>,
     apply: &impl Fn(&mut T, &JournalRecord, Option<String>) -> Result<()>,
 ) -> Result<T> {
-    replay_records_with(source, cut, T::default(), apply)
+    replay_records_with(source, cut, T::default(), &|fold, record, hash, _| {
+        apply(fold, record, hash)
+    })
 }
 
 pub(crate) fn replay_records_with<T>(
     source: &mut dyn RecordSnapshot,
     cut: Option<u64>,
     mut fold: T,
-    apply: &impl Fn(&mut T, &JournalRecord, Option<String>) -> Result<()>,
+    apply: &impl Fn(&mut T, &JournalRecord, Option<String>, &dyn RecordSnapshot) -> Result<()>,
 ) -> Result<T> {
     let mut line = Vec::new();
     while let Some(record) = source.next_with_scratch(&mut line)? {
@@ -118,7 +123,7 @@ pub(crate) fn replay_records_with<T>(
             source.remember_page_boundary(record.session_seq);
             source.consumed_fingerprint()
         });
-        apply(&mut fold, &record, boundary)?;
+        apply(&mut fold, &record, boundary, source)?;
     }
     Ok(fold)
 }

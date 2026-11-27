@@ -1,5 +1,7 @@
 //! Lossless content-defined chunks shared by large journal payloads.
-use crate::io::{MAX_PAYLOAD_BYTES, atomic_write, bounded_file_eq, bounded_read_into, sha256_hex};
+use crate::io::{
+    MAX_PAYLOAD_BYTES, atomic_write, bounded_file_eq, bounded_read_into, sha256_hex, sha256_matches,
+};
 use anyhow::{Result, ensure};
 use serde::{Deserialize, Serialize};
 use std::{
@@ -47,11 +49,16 @@ fn chunk_path(session: &Path, hash: &str) -> Result<PathBuf> {
 }
 
 fn chunk_file(hash: &str) -> Result<PathBuf> {
+    validate_chunk_hash(hash)?;
+    Ok(Path::new("shared").join(format!("{hash}.bin")))
+}
+
+fn validate_chunk_hash(hash: &str) -> Result<()> {
     ensure!(
         hash.len() == 64 && hash.bytes().all(|byte| byte.is_ascii_hexdigit()),
         "invalid shared blob hash"
     );
-    Ok(Path::new("shared").join(format!("{hash}.bin")))
+    Ok(())
 }
 
 /// Gear shifts the previous state left one bit for every byte. After 64
@@ -182,7 +189,22 @@ fn store_chunk(session: &Path, bytes: &[u8]) -> Result<Chunk> {
 /// Ordinary JSON blobs remain readable. Packed bytes are verified both at each
 /// chunk and as a complete payload before a caller parses canonical records.
 pub fn unpack<'a>(session: &Path, stored: &'a [u8]) -> Result<Cow<'a, [u8]>> {
-    unpack_checked(session, stored, None)
+    Ok(unpack_checked(session, stored, None)?.0)
+}
+
+/// Reuse the descriptors from the same manifest whose data matched the write.
+pub(crate) fn verified_chunk_files(
+    session: &Path,
+    stored: &[u8],
+    requested: &[u8],
+) -> Result<Vec<PathBuf>> {
+    let (content, chunks) = unpack_checked(session, stored, None)?;
+    ensure!(content == requested, "content-addressed blob collision");
+    drop(content);
+    match chunks {
+        Some(chunks) => files_for_chunks(&chunks),
+        None => Ok(Vec::new()),
+    }
 }
 
 /// The caller has already packed or verified these bytes.
@@ -204,14 +226,14 @@ pub(crate) fn unpack_expected<'a>(
     sha256: &str,
     bytes: u64,
 ) -> Result<Cow<'a, [u8]>> {
-    unpack_checked(session, stored, Some((sha256, bytes)))
+    Ok(unpack_checked(session, stored, Some((sha256, bytes)))?.0)
 }
 
 fn unpack_checked<'a>(
     session: &Path,
     stored: &'a [u8],
     expected: Option<(&str, u64)>,
-) -> Result<Cow<'a, [u8]>> {
+) -> Result<(Cow<'a, [u8]>, Option<Vec<Chunk>>)> {
     ensure!(
         stored.len() <= MAX_PAYLOAD_BYTES,
         "stored blob exceeds maximum"
@@ -219,9 +241,9 @@ fn unpack_checked<'a>(
     let Some(body) = stored.strip_prefix(MAGIC) else {
         if let Some((hash, length)) = expected {
             ensure!(stored.len() as u64 == length, "journal blob size mismatch");
-            ensure!(sha256_hex(stored) == hash, "journal blob hash mismatch");
+            ensure!(sha256_matches(stored, hash), "journal blob hash mismatch");
         }
-        return Ok(Cow::Borrowed(stored));
+        return Ok((Cow::Borrowed(stored), None));
     };
     let manifest: Manifest = serde_json::from_slice(body)?;
     ensure!(
@@ -242,6 +264,7 @@ fn unpack_checked<'a>(
     // A chunk can occur many times in one payload. Index only ranges in our
     // output; a later unpack verifies its files independently.
     let mut verified = HashMap::new();
+    let mut path = session.join("blobs").join("shared");
     for chunk in &manifest.chunks {
         let start = bytes.len();
         ensure!(
@@ -259,23 +282,27 @@ fn unpack_checked<'a>(
             }
             Entry::Vacant(entry) => entry,
         };
-        let path = chunk_path(session, &chunk.sha256)?;
+        validate_chunk_hash(&chunk.sha256)?;
+        path.push(&chunk.sha256);
+        path.set_extension("bin");
         bytes.resize(start + chunk.bytes, 0);
         let content = &mut bytes[start..];
         let count = bounded_read_into(&path, MAX_CHUNK, content)?;
         ensure!(count == chunk.bytes, "shared blob chunk size mismatch");
         ensure!(
-            sha256_hex(content) == chunk.sha256,
+            sha256_matches(content, &chunk.sha256),
             "shared blob chunk hash mismatch"
         );
         vacant.insert((start, chunk.bytes));
+        path.pop();
     }
     ensure!(bytes.len() == manifest.bytes, "shared blob size mismatch");
     ensure!(
-        sha256_hex(&bytes) == manifest.sha256,
+        sha256_matches(&bytes, &manifest.sha256),
         "shared blob hash mismatch"
     );
-    Ok(Cow::Owned(bytes))
+    drop(verified);
+    Ok((Cow::Owned(bytes), Some(manifest.chunks)))
 }
 
 #[cfg(test)]

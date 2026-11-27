@@ -30,7 +30,9 @@ impl Jsonl {
         cut: Option<u64>,
         apply: impl Fn(&mut T, &JournalRecord, Option<String>) -> Result<()>,
     ) -> Result<(Box<dyn RecordSnapshot>, T)> {
-        Self::replay_snapshot_with(dir, id, cut, |_| T::default(), apply)
+        Self::replay_snapshot_with(dir, id, cut, |_| T::default(), |fold, record, hash, _| {
+            apply(fold, record, hash)
+        })
     }
 
     pub(crate) fn replay_snapshot_with<T>(
@@ -38,7 +40,7 @@ impl Jsonl {
         id: SessionId,
         cut: Option<u64>,
         initialize: impl Fn(u64) -> T,
-        apply: impl Fn(&mut T, &JournalRecord, Option<String>) -> Result<()>,
+        apply: impl Fn(&mut T, &JournalRecord, Option<String>, &dyn RecordSnapshot) -> Result<()>,
     ) -> Result<(Box<dyn RecordSnapshot>, T)> {
         ensure!(
             !dir.join("journal.sqlite").try_exists()?,
@@ -149,9 +151,6 @@ impl JournalBackend for Jsonl {
             bytes: line,
             blobs,
         })
-    }
-    fn description_path(&self, dir: &Path) -> PathBuf {
-        dir.join(codec::JOURNAL_FILE)
     }
 }
 
@@ -300,6 +299,10 @@ fn version_from_metadata(metadata: &std::fs::Metadata) -> Result<SourceVersion> 
 }
 
 impl RecordSnapshot for JsonlSnapshot {
+    fn at_pinned_end(&self) -> bool {
+        self.consumed == self.length
+    }
+
     fn page_cursor(&self) -> super::PageCursor {
         super::PageCursor {
             position: self.consumed,
@@ -441,7 +444,8 @@ impl RecordSnapshot for JsonlSnapshot {
     fn prefix_fingerprint(&mut self, sequence: u64) -> Result<Option<String>> {
         self.reset()?;
         let mut found = (sequence == 0).then(|| crate::io::sha256_hex(b""));
-        while let Some(record) = self.next()? {
+        let mut line = Vec::new();
+        while let Some(record) = self.next_with_scratch(&mut line)? {
             if record.session_seq == sequence {
                 found = Some(self.consumed_fingerprint());
             }

@@ -76,11 +76,7 @@ pub(crate) fn encode(
         let path = session.join(&relative_path);
         blobs = if path.try_exists()? {
             let stored = bounded_read(&path, MAX_PAYLOAD_BYTES)?;
-            ensure!(
-                crate::blob_codec::unpack(session, &stored)? == bytes,
-                "content-addressed blob collision"
-            );
-            crate::blob_codec::chunk_files(&stored)?
+            crate::blob_codec::verified_chunk_files(session, &stored, &bytes)?
         } else {
             let packed = identity.pack(session)?;
             atomic_write(&path, packed.as_bytes())?;
@@ -129,8 +125,14 @@ pub(crate) fn decode(
     let external = matches!(stored.payload, StoredPayload::Blob { .. });
     let entry = match stored.payload {
         StoredPayload::Inline { value } => {
+            // The compact Value cannot exceed 32 times its source JSON:
+            // string escapes cost at most 6 bytes per decoded byte, numbers
+            // need at most 24 bytes in the current serializer, and literals
+            // and structural tokens cannot grow. The whole line also bounds
+            // the payload source. Larger lines keep the exact size check.
             ensure!(
-                encoded_bytes(&value)? <= MAX_PAYLOAD_BYTES,
+                line.len() <= MAX_PAYLOAD_BYTES / 32
+                    || encoded_bytes(&value)? <= MAX_PAYLOAD_BYTES,
                 "inline payload exceeds maximum"
             );
             JournalEntry::from_stored_kind_and_payload(stored.kind, value)?
@@ -172,15 +174,22 @@ fn validate_blob(hash: &str, path: &Path) -> Result<()> {
         hash.len() == 64 && hash.bytes().all(|b| b.is_ascii_hexdigit()),
         "invalid blob sha256"
     );
-    let name = format!("{}.json", hash.to_ascii_lowercase());
-    match path.components().collect::<Vec<_>>().as_slice() {
-        [Component::Normal(dir), Component::Normal(file)]
-            if *dir == "blobs" && *file == std::ffi::OsStr::new(&name) =>
-        {
-            Ok(())
-        }
-        _ => bail!("journal blob path must be blobs/<sha256>.json"),
+    let mut parts = path.components();
+    if let (Some(Component::Normal(dir)), Some(Component::Normal(file)), None) =
+        (parts.next(), parts.next(), parts.next())
+        && dir == "blobs"
+        && file
+            .as_encoded_bytes()
+            .strip_suffix(b".json")
+            .is_some_and(|name| {
+                name.iter()
+                    .copied()
+                    .eq(hash.bytes().map(|byte| byte.to_ascii_lowercase()))
+            })
+    {
+        return Ok(());
     }
+    bail!("journal blob path must be blobs/<sha256>.json")
 }
 
 pub(crate) fn encoded_bytes(value: &impl serde::Serialize) -> Result<usize> {

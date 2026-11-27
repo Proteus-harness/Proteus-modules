@@ -17,14 +17,22 @@ pub(crate) fn tool_result_message(result: ToolResult) -> CanonicalMessage {
 /// prompt-only "aborted" outputs. This does not assert whether an effect ran.
 /// The journal and durable history retain the original unresolved call.
 pub(crate) fn normalize_missing_tool_outputs(messages: &mut Vec<CanonicalMessage>) {
+    let mut has_tool_calls = false;
     let completed = messages
         .iter()
         .flat_map(|message| &message.parts)
         .filter_map(|part| match &part.payload {
             ContentPart::ToolResult { result } => Some(&result.call_id),
+            ContentPart::ToolCall { .. } => {
+                has_tool_calls = true;
+                None
+            }
             _ => None,
         })
         .collect::<HashSet<_>>();
+    if !has_tool_calls {
+        return;
+    }
     let mut inserts = Vec::new();
     for (index, message) in messages.iter().enumerate() {
         for part in &message.parts {

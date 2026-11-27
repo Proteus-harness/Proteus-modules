@@ -64,7 +64,7 @@ impl AnthropicStreamState {
     }
 
     pub(super) fn translate(&mut self, event_type: &str, data: &str) -> Vec<ModelStreamEvent> {
-        let Ok(parsed) = serde_json::from_str::<Value>(data) else {
+        let Ok(mut parsed) = serde_json::from_str::<Value>(data) else {
             return vec![ModelStreamEvent::Error {
                 failure: ModelFailure::other("malformed Anthropic SSE JSON"),
             }];
@@ -81,35 +81,36 @@ impl AnthropicStreamState {
             }
             "content_block_start" => {
                 let index = parsed.get("index").and_then(Value::as_u64).unwrap_or(0) as usize;
-                let block = parsed.get("content_block");
+                let Some(block) = parsed.get_mut("content_block") else {
+                    return Vec::new();
+                };
                 let block_type = block
-                    .and_then(|b| b.get("type"))
+                    .get("type")
                     .and_then(Value::as_str)
                     .unwrap_or("");
+                let is_text = block_type == "text";
                 let new_block = match block_type {
                     "thinking" => Some(AnthropicBlock::Thinking {
                         text: block
-                            .and_then(|b| b.get("thinking"))
+                            .get("thinking")
                             .and_then(Value::as_str)
                             .unwrap_or("")
                             .to_owned(),
                         signature: block
-                            .and_then(|b| b.get("signature"))
+                            .get("signature")
                             .and_then(Value::as_str)
                             .map(str::to_owned),
                     }),
                     "redacted_thinking" => {
-                        let Some(block) = block
-                            .filter(|block| block.get("data").and_then(Value::as_str).is_some())
-                        else {
+                        if block.get("data").and_then(Value::as_str).is_none() {
                             return vec![ModelStreamEvent::Error {
                                 failure: ModelFailure::other(
                                     "redacted_thinking missing opaque data",
                                 ),
                             }];
-                        };
+                        }
                         Some(AnthropicBlock::Opaque {
-                            data: block.clone(),
+                            data: block.take(),
                         })
                     }
                     "text" => Some(AnthropicBlock::Text {
@@ -118,12 +119,12 @@ impl AnthropicStreamState {
                     }),
                     "tool_use" => {
                         let id = block
-                            .and_then(|b| b.get("id"))
+                            .get("id")
                             .and_then(Value::as_str)
                             .unwrap_or("")
                             .to_owned();
                         let name = block
-                            .and_then(|b| b.get("name"))
+                            .get("name")
                             .and_then(Value::as_str)
                             .unwrap_or("")
                             .to_owned();
@@ -132,7 +133,7 @@ impl AnthropicStreamState {
                             name,
                             // SSE без JSON-байтов сохраняет input стартового блока.
                             initial_input: block
-                                .and_then(|b| b.get("input"))
+                                .get("input")
                                 .cloned()
                                 .unwrap_or(Value::Null),
                             input_json: String::new(),
@@ -152,9 +153,9 @@ impl AnthropicStreamState {
                     }
                     self.blocks[index] = block;
                 }
-                if block_type == "text" {
+                if is_text {
                     let text = block
-                        .and_then(|b| b.get("text"))
+                        .get("text")
                         .and_then(Value::as_str)
                         .unwrap_or("");
                     if !text.is_empty() {
@@ -214,35 +215,33 @@ impl AnthropicStreamState {
                         self.append_text(index, text)
                     }
                     "input_json_delta" => {
-                        let partial = delta
-                            .and_then(|d| d.get("partial_json"))
-                            .and_then(Value::as_str)
-                            .unwrap_or("");
-                        let call_id = if let Some(AnthropicBlock::ToolUse {
+                        let Some(Value::String(partial)) = parsed
+                            .get_mut("delta")
+                            .and_then(|d| d.get_mut("partial_json"))
+                            .map(Value::take)
+                        else {
+                            return Vec::new();
+                        };
+                        if partial.is_empty() {
+                            return Vec::new();
+                        }
+                        let Some(AnthropicBlock::ToolUse {
                             id,
                             initial_input,
                             input_json,
                             ..
                         }) = self.blocks.get_mut(index)
-                        {
-                            if !partial.is_empty() {
-                                // JSON-дельты заменяют input, а не дополняют его.
-                                *initial_input = Value::Null;
-                            }
-                            input_json.push_str(partial);
-                            id.clone()
-                        } else {
+                        else {
                             return Vec::new();
                         };
-                        if partial.is_empty() {
-                            Vec::new()
-                        } else {
-                            vec![ModelStreamEvent::ToolCallDelta {
-                                call_id,
-                                name: None,
-                                args_delta: partial.to_owned(),
-                            }]
-                        }
+                        // JSON-дельты заменяют input, а не дополняют его.
+                        *initial_input = Value::Null;
+                        input_json.push_str(&partial);
+                        vec![ModelStreamEvent::ToolCallDelta {
+                            call_id: id.clone(),
+                            name: None,
+                            args_delta: partial,
+                        }]
                     }
                     _ => Vec::new(),
                 }

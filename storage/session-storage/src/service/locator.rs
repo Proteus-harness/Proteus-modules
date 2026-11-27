@@ -2,17 +2,17 @@
 use super::*;
 #[derive(Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub(super) struct Key {
+pub(super) struct Key<P = PathBuf> {
     version: u32,
-    pub path: PathBuf,
-    pub workspace: PathBuf,
+    pub path: P,
+    pub workspace: P,
     pub parent_session_id: Option<SessionId>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub incarnation: Option<Uuid>,
 }
 pub(super) fn make(
-    path: PathBuf,
-    workspace: PathBuf,
+    path: &Path,
+    workspace: &Path,
     id: SessionId,
     parent_session_id: Option<SessionId>,
     incarnation: Option<Uuid>,

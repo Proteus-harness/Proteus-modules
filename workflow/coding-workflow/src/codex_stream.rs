@@ -1,7 +1,7 @@
 //! Handle completed items while the model pump is still active. Tool results
 //! are durable through checkpoints immediately, then drained into the prompt
 //! after all model items, including on a failed sampling request.
-use std::collections::HashSet;
+use std::{borrow::Cow, collections::HashSet};
 
 use proteus_contracts::{
     contracts::WorkflowModelStreamItem,
@@ -28,7 +28,7 @@ pub(crate) fn sample(
         let host = &*host;
         let mut sample = SampleProgress::default();
         let mut in_flight = InFlight::default();
-        let mut accept = |messages: &[CanonicalMessage]| {
+        let mut accept = |messages: &[CanonicalMessage], completed| {
             sample.accept(
                 host,
                 input,
@@ -36,6 +36,7 @@ pub(crate) fn sample(
                 request,
                 tools,
                 messages,
+                completed,
                 |batch, parallel| in_flight.start(scope, host, input, batch, parallel),
             )
         };
@@ -49,7 +50,7 @@ pub(crate) fn sample(
                         .map_err(json_error)?;
                 match item {
                     WorkflowModelStreamItem::MessageCompleted { message } => {
-                        accept(std::slice::from_ref(&message))?;
+                        accept(&[], Some(message))?;
                     }
                     WorkflowModelStreamItem::Response { response } => {
                         crate::validation::validate_codex_model_response(
@@ -57,11 +58,11 @@ pub(crate) fn sample(
                             request,
                             &response,
                         )?;
-                        accept(&response.messages)?;
+                        accept(&response.messages, None)?;
                         return Ok(response);
                     }
                     WorkflowModelStreamItem::Error { failure } => {
-                        accept(&failure.completed_messages)?;
+                        accept(&failure.completed_messages, None)?;
                         return Err(ProcessModuleError::from_model_failure(failure));
                     }
                 }
@@ -91,6 +92,7 @@ impl SampleProgress {
         request: &CanonicalModelRequest,
         tools: &mut CodexToolRun,
         messages: &[CanonicalMessage],
+        completed: Option<CanonicalMessage>,
         mut start: impl FnMut(
             crate::codex_tools::CodexToolBatch,
             bool,
@@ -98,17 +100,23 @@ impl SampleProgress {
     ) -> Result<(), ProcessModuleError> {
         let mut calls = Vec::new();
         let mut changed = false;
+        let messages = messages
+            .iter()
+            .map(Cow::Borrowed)
+            .chain(completed.map(Cow::Owned));
         for message in messages {
             if !self.messages.insert(message.id) {
                 continue;
             }
             changed = true;
-            turn.model_messages.push(message.clone());
-            turn.persistent_messages.push(message.clone());
+            turn.model_messages.push(message.as_ref().clone());
             calls.extend(message.parts.iter().filter_map(|part| match &part.payload {
                 ContentPart::ToolCall { call } => Some(call.clone()),
                 _ => None,
             }));
+            // Standalone completions already own their payload. Terminal
+            // responses and failures keep theirs for the caller.
+            turn.persistent_messages.push(message.into_owned());
         }
         if !calls.is_empty() {
             if !self.had_tools {

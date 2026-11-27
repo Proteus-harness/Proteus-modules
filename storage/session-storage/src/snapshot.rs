@@ -83,6 +83,8 @@ pub(crate) struct SnapshotState {
     // At most one historical boundary, derived inside the same validation
     // pass as identity. No caller-supplied descriptor or Fold is retained.
     previous_boundary: Option<(StorageRevision, String)>,
+    // One successful historical comparison, not proof of full semantic replay.
+    compared_boundary: Option<(StorageRevision, String)>,
     verified: bool,
     verified_version: Option<crate::backend::SourceVersion>,
     page_after: Option<u64>,
@@ -118,6 +120,7 @@ impl SnapshotState {
             source,
             verified,
             previous_boundary,
+            compared_boundary: None,
             verified_version,
             page_after: None,
             pending: None,
@@ -164,6 +167,14 @@ impl SnapshotState {
                 return Ok(*revision == prefix.revision && *hash == prefix.content_sha256);
             }
         }
+        if self.compared_boundary.as_ref().is_some_and(|(revision, hash)| {
+            *revision == prefix.revision && *hash == prefix.content_sha256
+        }) && matches!(self.source.confirm_verified_data(), Ok(true))
+        {
+            return Ok(true);
+        }
+        // If reauthentication could not prove equality, keep the original
+        // replay (including its precise corruption and I/O errors).
         let Some(hash) = self
             .source
             .prefix_fingerprint(prefix.revision.session_seq)?
@@ -175,17 +186,23 @@ impl SnapshotState {
         }
         self.source.reset()?;
         let mut state = Fold::default();
-        while let Some(record) = self.source.next()? {
+        let mut line = Vec::new();
+        while let Some(record) = self.source.next_with_scratch(&mut line)? {
             if record.session_seq > prefix.revision.session_seq {
                 continue;
             }
             // The comparison needs the verified revision, not model context or usage.
             state.apply_validated(self.identity.session.session_id, &record)?;
         }
-        Ok(state.revision() == prefix.revision)
+        let revision = state.revision();
+        let matches = revision == prefix.revision;
+        if matches && revision.session_seq < self.identity.revision.session_seq {
+            self.compared_boundary = Some((revision, hash));
+        }
+        Ok(matches)
     }
-    pub fn fold(&mut self) -> Result<Fold> {
-        Ok(self.fold_with_terminal::<true, true>(false)?.0)
+    pub fn fold_model_context(&mut self) -> Result<ModelContextProjection> {
+        Ok(self.fold_with_terminal::<true, false>(false)?.0.model_context)
     }
 
     /// Usage has no dependency on the separate model-context projection.
@@ -231,7 +248,7 @@ impl SnapshotState {
         after: u64,
         limit: u32,
         sole_snapshot: bool,
-    ) -> Result<StorageRecordPage> {
+    ) -> Result<(Vec<JournalRecord>, Option<u64>)> {
         ensure!(
             after <= self.identity.revision.session_seq,
             "record cursor is past the snapshot prefix"
@@ -241,9 +258,8 @@ impl SnapshotState {
         let before = self.source.source_version()?;
         let mut terminal = None;
         if !self.verified || before != self.verified_version {
-            let capture = limit > 0
-                && before.is_some()
-                && self.identity.revision.session_seq.checked_sub(1) == Some(after);
+            let capture =
+                limit > 0 && self.identity.revision.session_seq.checked_sub(1) == Some(after);
             // Canonical pages need full verification, not the derived views.
             terminal = self.fold_with_terminal::<false, false>(capture)?.1;
         }
@@ -253,7 +269,8 @@ impl SnapshotState {
         let page_version = self.source.source_version()?;
         // For an exact terminal page, the complete fold already decoded the
         // one result and left the reader at EOF. Only hand it to the existing
-        // page checks after independently authenticating the pinned bytes.
+        // page checks after the backend confirms the pinned data (by a
+        // read transaction or by authenticating the complete prefix).
         // Blob-bearing JSONL, changed or unknown sources keep the normal scan.
         if terminal.is_some() && before == page_version && self.source.confirm_verified_data()? {
             self.pending = terminal.map(|record| PendingPageRecord::Buffered {
@@ -270,6 +287,7 @@ impl SnapshotState {
         }
         let mut records = Vec::new();
         let mut bytes = 0_usize;
+        let mut line = Vec::new();
         while records.len() < limit as usize {
             let cursor = (!sole_snapshot && !records.is_empty()).then(|| self.source.page_cursor());
             let (record, known_bytes) = match self.pending.take() {
@@ -280,11 +298,11 @@ impl SnapshotState {
                 Some(PendingPageRecord::OnSource { encoded_bytes }) => {
                     let record = self
                         .source
-                        .next()?
+                        .next_with_scratch(&mut line)?
                         .ok_or_else(|| anyhow::anyhow!("missing deferred journal record"))?;
                     (record, Some(encoded_bytes))
                 }
-                None => match self.source.next()? {
+                None => match self.source.next_with_scratch(&mut line)? {
                     Some(record) => (record, None),
                     None => break,
                 },
@@ -326,11 +344,28 @@ impl SnapshotState {
         self.served_record_bytes = self.served_record_bytes.saturating_add(bytes);
         self.page_after = Some(last);
         let next_after_seq = (last < self.identity.revision.session_seq).then_some(last);
-        Ok(StorageRecordPage {
-            snapshot: self.identity.clone(),
+        Ok((records, next_after_seq))
+    }
+    pub(crate) fn record_page(
+        &self,
+        snapshot: StorageSnapshot,
+        records: Vec<JournalRecord>,
+        next_after_seq: Option<u64>,
+    ) -> StorageRecordPage {
+        // The service already checked this live handle exactly. Do not keep
+        // spare capacity carried by an in-process caller in the response.
+        let compact = [
+            &snapshot.snapshot_id,
+            &snapshot.session.key,
+            &snapshot.content_sha256,
+        ]
+        .into_iter()
+        .all(|text| text.capacity() == text.len());
+        StorageRecordPage {
+            snapshot: if compact { snapshot } else { self.identity.clone() },
             records,
             next_after_seq,
-        })
+        }
     }
     pub fn display_page(
         &mut self,
@@ -373,7 +408,8 @@ impl SnapshotState {
             }
         )
         .then(|| state.conversation());
-        while let Some(record) = self.source.next()? {
+        let mut line = Vec::new();
+        while let Some(record) = self.source.next_with_scratch(&mut line)? {
             if let JournalEntry::HistoryMutated(mutation) = &record.entry {
                 let compacted = mutation
                     .compaction
@@ -399,7 +435,7 @@ impl SnapshotState {
                     }
                 }
             }
-            state.apply(self.identity.session.session_id, &record)?;
+            state.apply_projected::<true, false>(self.identity.session.session_id, &record)?;
             if let StorageHistoryPoint::Revision { history_revision } = point {
                 if selected.is_none() && state.validation.history_revision() == history_revision {
                     selected = Some(state.conversation());

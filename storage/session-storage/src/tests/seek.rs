@@ -188,13 +188,7 @@ fn freshly_validated_terminal_page_decodes_each_pinned_record_once() {
             assert_eq!(page.snapshot, warm);
             assert_eq!(page.records, expected);
             assert!(page.next_after_seq.is_none());
-            assert_eq!(
-                crate::diagnostics::get().decoded,
-                match kind {
-                    BackendKind::Jsonl => 8,
-                    BackendKind::Sqlite => 16, // Unchanged: no physical version.
-                }
-            );
+            assert_eq!(crate::diagnostics::get().decoded, 8);
             if matches!(kind, BackendKind::Jsonl) {
                 let bytes = std::fs::metadata(f.descriptor.record_location.as_ref().unwrap())
                     .unwrap()
@@ -343,7 +337,10 @@ fn jsonl_terminal_fold_discards_its_capture_on_append_during_validation() {
     )
     .unwrap();
     crate::diagnostics::reset();
-    assert_eq!(snapshot.page(1, 1, true).unwrap(), expected);
+    assert_eq!(
+        snapshot.page(1, 1, true).unwrap(),
+        (expected.records, expected.next_after_seq)
+    );
     assert_eq!(
         crate::diagnostics::get().decoded,
         4,

@@ -1,18 +1,16 @@
 use super::*;
 use base64::{Engine, engine::general_purpose::STANDARD};
 
-fn object_path(dir: &Path, blob: &StorageBlobRef) -> Result<PathBuf> {
+fn object_path(dir: &Path, sha256: &str, bytes: u64) -> Result<PathBuf> {
     ensure!(
-        blob.sha256.len() == 64
-            && blob.sha256.bytes().all(|b| b.is_ascii_hexdigit())
-            && blob.sha256 == blob.sha256.to_ascii_lowercase(),
+        sha256.len() == 64 && sha256.bytes().all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f')),
         "invalid blob hash"
     );
     ensure!(
-        blob.bytes <= SESSION_STORAGE_MAX_BLOB_BYTES,
+        bytes <= SESSION_STORAGE_MAX_BLOB_BYTES,
         "blob exceeds maximum"
     );
-    Ok(dir.join("images").join(&blob.sha256))
+    Ok(dir.join("images").join(sha256))
 }
 impl State {
     pub(super) fn put_blob(
@@ -23,7 +21,7 @@ impl State {
         expected: StorageBlobRef,
     ) -> Result<SessionStorageResponse> {
         let dir = self.writer_path(&lease)?;
-        let path = object_path(&dir, &expected)?;
+        let path = object_path(&dir, &expected.sha256, expected.bytes)?;
         let bytes = STANDARD.decode(data)?;
         ensure!(
             bytes.len() as u64 == expected.bytes
@@ -57,7 +55,7 @@ impl State {
     ) -> Result<SessionStorageResponse> {
         let dir = self.checked_path(&session)?;
         let bytes = crate::io::bounded_read(
-            &object_path(&dir, &blob)?,
+            &object_path(&dir, &blob.sha256, blob.bytes)?,
             SESSION_STORAGE_MAX_BLOB_BYTES as usize,
         )?;
         ensure!(
@@ -80,13 +78,7 @@ impl State {
             "blob read exceeds maximum"
         );
         let dir = self.checked_path(&session)?;
-        let path = object_path(
-            &dir,
-            &StorageBlobRef {
-                sha256: sha256.clone(),
-                bytes: 0,
-            },
-        )?;
+        let path = object_path(&dir, &sha256, 0)?;
         let bytes = crate::io::bounded_read(&path, max_bytes as usize)?;
         ensure!(
             crate::io::sha256_hex(&bytes) == sha256,

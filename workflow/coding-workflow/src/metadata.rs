@@ -37,8 +37,8 @@ pub(crate) fn output_metadata_with_extra(
         "thread_id": input.runtime.conversation.as_ref().map(|c| c.thread_id),
         "turn_id": input.runtime.conversation.as_ref().map(|c| c.turn_id),
         "model": {
-            "provider": input.runtime.model_ref.as_ref().map(|m| m.provider.clone()),
-            "name": input.runtime.model_ref.as_ref().map(|m| m.model.clone()),
+            "provider": input.runtime.model_ref.as_ref().map(|m| m.provider.as_str()),
+            "name": input.runtime.model_ref.as_ref().map(|m| m.model.as_str()),
         },
         "context": {
             "chunks": context_chunks,

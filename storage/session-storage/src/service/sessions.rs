@@ -12,7 +12,6 @@ fn check_selected_format(kind: BackendKind, path: &Path) -> Result<()> {
         BackendKind::Jsonl => BackendKind::Sqlite,
         BackendKind::Sqlite => BackendKind::Jsonl,
     }
-    .backend()
     .description_path(path);
     ensure!(
         !other.try_exists()?,
@@ -39,7 +38,7 @@ pub(super) fn open(kind: BackendKind, path: &Path) -> Result<StorageSessionDescr
     let identity = identity::resolve_session_identity(&path)?;
     let workspace_path = workspace_dir::workspace_path_from_session_dir(&path)?;
     let meta = std::fs::metadata(&path)?;
-    let journal = kind.backend().description_path(&path);
+    let journal = kind.description_path(&path);
     let mut modified = std::fs::metadata(&journal)
         .and_then(|m| m.modified())
         .or_else(|_| meta.modified())?;
@@ -60,8 +59,8 @@ pub(super) fn open(kind: BackendKind, path: &Path) -> Result<StorageSessionDescr
     );
     Ok(StorageSessionDescriptor {
         session: super::locator::make(
-            path.clone(),
-            workspace_path.clone(),
+            &path,
+            &workspace_path,
             identity.session_id,
             identity.parent_session_id,
             control.incarnation,
@@ -206,18 +205,18 @@ impl State {
         let may_create = identity::validate_new_session_target(&path, id)?;
         let control = super::control::load(&path)?;
         let session = super::locator::make(
-            path.clone(),
-            workspace.clone(),
+            &path,
+            &workspace,
             id,
             parent,
             super::control::locator_incarnation(&control),
         )?;
         let descriptor = if may_create || control.deleted {
             StorageSessionDescriptor {
-                session: session.clone(),
+                session,
                 parent_session_id: parent,
                 workspace_path: workspace,
-                record_location: Some(self.kind.backend().description_path(&path)),
+                record_location: Some(self.kind.description_path(&path)),
                 local_path: Some(path),
                 created_at_ms: 0,
                 updated_at_ms: 0,
@@ -243,7 +242,7 @@ impl State {
                 session: session.clone(),
                 parent_session_id: key.parent_session_id,
                 workspace_path: key.workspace,
-                record_location: Some(self.kind.backend().description_path(&path)),
+                record_location: Some(self.kind.description_path(&path)),
                 local_path: Some(path),
                 created_at_ms: 0,
                 updated_at_ms: 0,

@@ -216,7 +216,7 @@ impl OpenAiStreamState {
                 {
                     parsed["call_id"] = Value::String(call_id);
                 }
-                translate_non_message_event(&event_type, &parsed)
+                translate_non_message_event(&event_type, &mut parsed)
             }
         }
     }

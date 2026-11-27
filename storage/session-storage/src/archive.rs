@@ -41,6 +41,35 @@ enum Payload {
     },
 }
 
+fn read_envelope(reader: &mut impl BufRead, line: &mut Vec<u8>) -> Result<Option<Envelope>> {
+    const MAX_LINE: usize = MAX_PAYLOAD_BYTES * 2;
+    match reader.fill_buf() {
+        Ok(bytes) => {
+            if let Some(end) = memchr::memchr(b'\n', bytes)
+                && end < MAX_LINE
+            {
+                let count = end + 1;
+                let envelope = serde_json::from_slice(&bytes[..count]);
+                reader.consume(count);
+                return Ok(Some(envelope?));
+            }
+        }
+        // read_until retries interrupted reads.
+        Err(error) if error.kind() == std::io::ErrorKind::Interrupted => {}
+        Err(error) => return Err(error.into()),
+    }
+    line.clear();
+    let count = reader.take((MAX_LINE + 1) as u64).read_until(b'\n', line)?;
+    if count == 0 {
+        return Ok(None);
+    }
+    ensure!(
+        line.len() <= MAX_LINE && line.ends_with(b"\n"),
+        "archive contains an incomplete or oversized journal record"
+    );
+    Ok(Some(serde_json::from_slice(line)?))
+}
+
 /// Rewrite each referenced blob atomically while preserving journal bytes and payload hashes.
 /// An interrupted invocation can be repeated. Existing unpacked payloads remain readable.
 pub fn compact_jsonl_archive(session: &Path) -> Result<ArchiveCompaction> {
@@ -55,20 +84,7 @@ pub fn compact_jsonl_archive(session: &Path) -> Result<ArchiveCompaction> {
     let mut reader = BufReader::new(File::open(&journal)?);
     let mut payloads = BTreeMap::new();
     let mut line = Vec::new();
-    loop {
-        line.clear();
-        let count = reader
-            .by_ref()
-            .take((MAX_PAYLOAD_BYTES * 2 + 1) as u64)
-            .read_until(b'\n', &mut line)?;
-        if count == 0 {
-            break;
-        }
-        ensure!(
-            line.len() <= MAX_PAYLOAD_BYTES * 2 && line.ends_with(b"\n"),
-            "archive contains an incomplete or oversized journal record"
-        );
-        let envelope: Envelope = serde_json::from_slice(&line)?;
+    while let Some(envelope) = read_envelope(&mut reader, &mut line)? {
         if let Payload::Blob {
             sha256,
             bytes,
