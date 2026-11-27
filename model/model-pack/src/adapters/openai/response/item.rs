@@ -47,17 +47,7 @@ pub(crate) fn parse_output_item(item: &Value) -> Result<Option<CanonicalMessage>
             message
         }
         Some("reasoning") => {
-            let text = item
-                .get("summary")
-                .and_then(Value::as_array)
-                .into_iter()
-                .flatten()
-                .filter(|summary| {
-                    summary.get("type").and_then(Value::as_str) == Some("summary_text")
-                })
-                .filter_map(|summary| summary.get("text").and_then(Value::as_str))
-                .collect::<Vec<_>>()
-                .join("\n\n");
+            let text = reasoning_summary(item);
             let signature = item
                 .get("encrypted_content")
                 .and_then(Value::as_str)
@@ -108,6 +98,37 @@ pub(crate) fn parse_output_item(item: &Value) -> Result<Option<CanonicalMessage>
         _ => return Ok(None),
     };
     Ok(Some(message))
+}
+
+fn reasoning_summary(item: &Value) -> String {
+    const SEPARATOR: &str = "\n\n";
+    let mut parts = item
+        .get("summary")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter(|summary| summary.get("type").and_then(Value::as_str) == Some("summary_text"))
+        .filter_map(|summary| summary.get("text").and_then(Value::as_str));
+    let Some(first) = parts.next() else {
+        return String::new();
+    };
+    let Some(second) = parts.next() else {
+        return first.to_owned();
+    };
+    let rest = std::iter::once(second).chain(parts);
+    let mut text = String::with_capacity(
+        first.len()
+            + rest
+                .clone()
+                .map(|part| SEPARATOR.len() + part.len())
+                .sum::<usize>(),
+    );
+    text.push_str(first);
+    for part in rest {
+        text.push_str(SEPARATOR);
+        text.push_str(part);
+    }
+    text
 }
 
 fn required_call_field(item: &Value, field: &str, kind: &str) -> Result<String> {

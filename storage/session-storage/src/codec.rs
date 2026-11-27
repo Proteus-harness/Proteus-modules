@@ -1,6 +1,6 @@
 //! Schema-21 JSONL encoding. Kept byte-format compatible with existing sessions.
 use crate::{
-    io::{MAX_PAYLOAD_BYTES, atomic_write, bounded_read},
+    io::{MAX_PAYLOAD_BYTES, atomic_write, bounded_read, bounded_read_with_size_hint},
     types::*,
 };
 use anyhow::{Context, Result, bail, ensure};
@@ -111,6 +111,35 @@ pub(crate) fn decode(
     session_id: SessionId,
     line: &[u8],
 ) -> Result<(JournalRecord, bool)> {
+    decode_with_witness(session, session_id, line, None)
+}
+
+/// A small exact journal line and the descriptor from its successful decode.
+/// Reuse still has to reopen and authenticate the external body.
+pub(crate) struct ExternalWitness {
+    line: Vec<u8>,
+    sha256: String,
+    bytes: u64,
+    relative_path: PathBuf,
+}
+
+impl ExternalWitness {
+    pub(crate) fn reauthenticate(&self, session: &Path, line: &[u8]) -> Result<bool> {
+        if line != self.line {
+            return Ok(false);
+        }
+        let stored = read_blob(session, &self.sha256, self.bytes, &self.relative_path)?;
+        crate::blob_codec::verify_expected(session, &stored, &self.sha256, self.bytes)?;
+        Ok(true)
+    }
+}
+
+pub(crate) fn decode_with_witness(
+    session: &Path,
+    session_id: SessionId,
+    line: &[u8],
+    witness: Option<&mut Option<ExternalWitness>>,
+) -> Result<(JournalRecord, bool)> {
     crate::diagnostics::decoded();
     let stored: StoredRecord = serde_json::from_slice(line).context("invalid journal record")?;
     ensure!(
@@ -131,8 +160,7 @@ pub(crate) fn decode(
             // and structural tokens cannot grow. The whole line also bounds
             // the payload source. Larger lines keep the exact size check.
             ensure!(
-                line.len() <= MAX_PAYLOAD_BYTES / 32
-                    || encoded_bytes(&value)? <= MAX_PAYLOAD_BYTES,
+                line.len() <= MAX_PAYLOAD_BYTES / 32 || encoded_bytes(&value)? <= MAX_PAYLOAD_BYTES,
                 "inline payload exceeds maximum"
             );
             JournalEntry::from_stored_kind_and_payload(stored.kind, value)?
@@ -142,15 +170,19 @@ pub(crate) fn decode(
             bytes,
             relative_path,
         } => {
-            validate_blob(&sha256, &relative_path)?;
-            ensure!(
-                bytes <= MAX_PAYLOAD_BYTES as u64,
-                "declared blob exceeds maximum"
-            );
-            let stored_content = bounded_read(&session.join(relative_path), MAX_PAYLOAD_BYTES)?;
+            let stored_content = read_blob(session, &sha256, bytes, &relative_path)?;
             let content =
                 crate::blob_codec::unpack_expected(session, &stored_content, &sha256, bytes)?;
-            JournalEntry::from_stored_kind_and_bytes(stored.kind, &content)?
+            let entry = JournalEntry::from_stored_kind_and_bytes(stored.kind, &content)?;
+            if let Some(witness) = witness.filter(|_| line.len() <= 1024) {
+                *witness = Some(ExternalWitness {
+                    line: line.to_vec(),
+                    sha256,
+                    bytes,
+                    relative_path,
+                });
+            }
+            entry
         }
     };
     Ok((
@@ -167,6 +199,15 @@ pub(crate) fn decode(
         },
         external,
     ))
+}
+
+fn read_blob(session: &Path, sha256: &str, bytes: u64, path: &Path) -> Result<Vec<u8>> {
+    validate_blob(sha256, path)?;
+    ensure!(
+        bytes <= MAX_PAYLOAD_BYTES as u64,
+        "declared blob exceeds maximum"
+    );
+    bounded_read_with_size_hint(&session.join(path), MAX_PAYLOAD_BYTES, 256 * 1024)
 }
 
 fn validate_blob(hash: &str, path: &Path) -> Result<()> {

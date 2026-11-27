@@ -3,7 +3,7 @@ use std::{
     collections::BTreeMap,
     fs::File,
     io::{BufRead, BufReader, Read},
-    path::{Path, PathBuf},
+    path::{Component, Path, PathBuf},
 };
 
 use anyhow::{Context, Result, ensure};
@@ -39,6 +39,15 @@ enum Payload {
         bytes: u64,
         relative_path: PathBuf,
     },
+}
+
+fn archive_blob_path_matches(path: &Path, hash: &str) -> bool {
+    let mut parts = path.components();
+    matches!(
+        (parts.next(), parts.next(), parts.next()),
+        (Some(Component::Normal(dir)), Some(Component::Normal(file)), None)
+            if dir == "blobs" && file.as_encoded_bytes().strip_suffix(b".json") == Some(hash.as_bytes())
+    )
 }
 
 fn read_envelope(reader: &mut impl BufRead, line: &mut Vec<u8>) -> Result<Option<Envelope>> {
@@ -96,7 +105,7 @@ pub fn compact_jsonl_archive(session: &Path) -> Result<ArchiveCompaction> {
                 "invalid archive payload hash"
             );
             ensure!(
-                relative_path == Path::new("blobs").join(format!("{sha256}.json")),
+                archive_blob_path_matches(&relative_path, &sha256),
                 "archive payload path differs from its hash"
             );
             ensure!(

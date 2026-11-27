@@ -260,6 +260,43 @@ fn jsonl_terminal_fold_reads_external_predecessors_even_on_retry() {
     assert!(read(&f, &warm, 1, 1).is_err());
 }
 
+#[test]
+fn jsonl_singleton_reuses_typed_terminal_and_reauthenticates_shared_chunks() {
+    use std::fs;
+
+    let mut f = Fixture::new(BackendKind::Jsonl);
+    f.append(vec![text(&"repeated packed history ".repeat(40_000))]);
+    let snapshot = f.snapshot();
+    let expected = read(&f, &snapshot, 0, 1).unwrap().records;
+    let warm = f.snapshot();
+    crate::diagnostics::reset();
+    assert_eq!(read(&f, &warm, 0, 1).unwrap().records, expected);
+    assert_eq!(crate::diagnostics::get().decoded, 1);
+
+    let journal = fs::read(f.descriptor.record_location.as_ref().unwrap()).unwrap();
+    let line = journal.strip_suffix(b"\n").unwrap();
+    let dir = f.descriptor.local_path.as_ref().unwrap();
+    let mut witness = None;
+    crate::codec::decode_with_witness(dir, warm.session.session_id, line, Some(&mut witness))
+        .unwrap();
+    let witness = witness.unwrap();
+    assert!(witness.reauthenticate(dir, line).unwrap());
+    assert!(!witness.reauthenticate(dir, b"changed header").unwrap());
+    let chunk = fs::read_dir(dir.join("blobs/shared"))
+        .unwrap()
+        .next()
+        .unwrap()
+        .unwrap()
+        .path();
+    let original = fs::read(&chunk).unwrap();
+    let mut corrupt = original.clone();
+    corrupt[0] ^= 1;
+    fs::write(&chunk, corrupt).unwrap();
+    assert!(witness.reauthenticate(dir, line).is_err());
+    fs::write(chunk, original).unwrap();
+    assert!(witness.reauthenticate(dir, line).unwrap());
+}
+
 // Change only the physical file after the LAST line was read, not merely before
 // the request. Wrapping the real fixed source makes this interleaving repeatable.
 #[test]

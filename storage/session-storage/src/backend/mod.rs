@@ -72,6 +72,21 @@ pub(crate) trait RecordSnapshot: Send {
     fn next_with_scratch(&mut self, _line: &mut Vec<u8>) -> Result<Option<JournalRecord>> {
         self.next()
     }
+    fn next_capturing_external(
+        &mut self,
+        line: &mut Vec<u8>,
+        _witness: &mut Option<crate::codec::ExternalWitness>,
+    ) -> Result<Option<JournalRecord>> {
+        self.next_with_scratch(line)
+    }
+    fn next_reauthenticating_external(
+        &mut self,
+        _witness: crate::codec::ExternalWitness,
+        record: JournalRecord,
+    ) -> Result<Option<JournalRecord>> {
+        drop(record);
+        self.next()
+    }
     /// Opt in to a backend-specific validation stream. False means that
     /// no rows or cursor state have been touched and the caller must replay.
     fn try_visit_display_rows(

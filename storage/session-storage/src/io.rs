@@ -16,7 +16,10 @@ pub(crate) fn sha256_hex(bytes: &[u8]) -> String {
 const HEX: &[u8; 16] = b"0123456789abcdef";
 
 pub(crate) fn sha256_matches(bytes: &[u8], expected: &str) -> bool {
-    let digest = digest(&SHA256, bytes);
+    digest_matches(digest(&SHA256, bytes), expected)
+}
+
+pub(crate) fn digest_matches(digest: ring::digest::Digest, expected: &str) -> bool {
     let expected = expected.as_bytes();
     expected.len() == digest.as_ref().len() * 2
         && digest
@@ -29,13 +32,16 @@ pub(crate) fn sha256_matches(bytes: &[u8], expected: &str) -> bool {
 }
 
 pub(crate) fn digest_hex(digest: ring::digest::Digest) -> String {
-    let bytes = digest.as_ref();
-    let mut encoded = String::with_capacity(bytes.len() * 2);
-    for &byte in bytes {
+    let mut encoded = String::with_capacity(digest.as_ref().len() * 2);
+    append_digest_hex(&mut encoded, digest);
+    encoded
+}
+
+pub(crate) fn append_digest_hex(encoded: &mut String, digest: ring::digest::Digest) {
+    for &byte in digest.as_ref() {
         encoded.push(char::from(HEX[(byte >> 4) as usize]));
         encoded.push(char::from(HEX[(byte & 0x0f) as usize]));
     }
-    encoded
 }
 
 pub(crate) fn sync_directory(path: &Path) -> Result<()> {

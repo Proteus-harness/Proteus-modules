@@ -52,13 +52,22 @@ pub(super) fn source_matches(dir: &Path, kind: BackendKind, stamps: &SourceStamp
 }
 
 fn source_stamp_items(dir: &Path, kind: BackendKind) -> Result<[Option<FileStamp>; 3]> {
-    let journal = kind.description_path(dir);
-    let wal = PathBuf::from(format!("{}-wal", journal.to_string_lossy()));
+    let mut journal = kind.description_path(dir);
+    let journal_stamp = stamp(&journal)?;
+    let wal = if journal.capacity() - journal.as_os_str().len() >= "-wal".len()
+        && journal.to_str().is_some()
+    {
+        journal.as_mut_os_string().push("-wal");
+        stamp(&journal)?
+    } else {
+        // Preserve the lossy sidecar name for non-UTF-8 paths.
+        stamp(Path::new(&format!("{}-wal", journal.to_string_lossy())))?
+    };
     Ok([
-        stamp(&journal)?,
+        journal_stamp,
         // Opening a read-only SQLite snapshot may create an empty WAL. It
         // carries no committed data and is equivalent to a missing WAL.
-        stamp(&wal)?.filter(|stamp| stamp.len != 0),
+        wal.filter(|stamp| stamp.len != 0),
         stamp(&dir.join("session.json"))?,
     ])
 }

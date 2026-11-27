@@ -114,12 +114,15 @@ impl OpenAiStreamState {
                 let Some(Value::String(text)) = parsed.get_mut(field).map(Value::take) else {
                     return Vec::new();
                 };
-                let key = parsed
-                    .get("item_id")
-                    .and_then(Value::as_str)
-                    .map(str::to_owned)
-                    .unwrap_or_else(|| format!("output:{index}"));
-                let message_id = *self.ids.entry(key.clone()).or_insert_with(new_message_id);
+                let key = match parsed.get_mut("item_id").map(Value::take) {
+                    Some(Value::String(key)) => key,
+                    _ => format!("output:{index}"),
+                };
+                let message_id = self.ids.get(key.as_str()).copied().unwrap_or_else(|| {
+                    let id = new_message_id();
+                    self.ids.insert(key.clone(), id);
+                    id
+                });
                 let phase = self.phases.get(&key).copied().flatten();
                 let part = parsed
                     .get("content_index")

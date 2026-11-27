@@ -17,10 +17,16 @@ struct Cache<S = StorageSnapshot, V = serde_json::Value> {
     value: V,
 }
 fn path(dir: &Path, key: &str) -> PathBuf {
-    dir.join(format!(
-        ".storage-cache-{}.json",
-        crate::io::sha256_hex(key.as_bytes())
-    ))
+    use ring::digest::{SHA256, digest};
+
+    const PREFIX: &str = ".storage-cache-";
+    const SUFFIX: &str = ".json";
+    let digest = digest(&SHA256, key.as_bytes());
+    let mut name = String::with_capacity(PREFIX.len() + digest.as_ref().len() * 2 + SUFFIX.len());
+    name.push_str(PREFIX);
+    crate::io::append_digest_hex(&mut name, digest);
+    name.push_str(SUFFIX);
+    dir.join(name)
 }
 fn same_prefix(a: &StorageSnapshot, b: &StorageSnapshot) -> bool {
     a.session == b.session && a.revision == b.revision && a.content_sha256 == b.content_sha256
@@ -79,7 +85,8 @@ impl State {
             Ok(dir) if dir.is_dir() => dir,
             _ => return Ok(SessionStorageResponse::CacheWritten { etag: None }),
         };
-        let current = self.prepare_snapshot(session.clone())?.identity;
+        let session_id = session.session_id;
+        let current = self.prepare_snapshot(session)?.identity;
         if !same_prefix(&current, &source) {
             return Ok(SessionStorageResponse::CacheWritten { etag: None });
         }
@@ -112,7 +119,7 @@ impl State {
             }
             file.sync_data()?;
             ensure!(
-                identity::resolve_session_identity(&dir)?.session_id == session.session_id,
+                identity::resolve_session_identity(&dir)?.session_id == session_id,
                 "cache target identity changed"
             );
             let destination = path(&dir, &key);

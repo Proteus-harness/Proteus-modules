@@ -1,4 +1,4 @@
-use crate::{backend::RecordSnapshot, types::*};
+use crate::{backend::RecordSnapshot, codec::ExternalWitness, types::*};
 use anyhow::{Result, ensure};
 use proteus_contracts::{domain::SessionId, model_standard::CanonicalMessage};
 use proteus_session_semantics::{JournalValidationState, ModelContextProjection, UsageProjection};
@@ -10,6 +10,11 @@ pub(crate) struct Fold {
     pub usage: UsageProjection,
     pub session_seq: u64,
 }
+struct Terminal {
+    record: JournalRecord,
+    external: Option<ExternalWitness>,
+}
+
 impl Fold {
     pub fn apply(&mut self, id: SessionId, record: &JournalRecord) -> Result<()> {
         self.apply_projected::<true, true>(id, record)
@@ -167,9 +172,13 @@ impl SnapshotState {
                 return Ok(*revision == prefix.revision && *hash == prefix.content_sha256);
             }
         }
-        if self.compared_boundary.as_ref().is_some_and(|(revision, hash)| {
-            *revision == prefix.revision && *hash == prefix.content_sha256
-        }) && matches!(self.source.confirm_verified_data(), Ok(true))
+        if self
+            .compared_boundary
+            .as_ref()
+            .is_some_and(|(revision, hash)| {
+                *revision == prefix.revision && *hash == prefix.content_sha256
+            })
+            && matches!(self.source.confirm_verified_data(), Ok(true))
         {
             return Ok(true);
         }
@@ -202,7 +211,10 @@ impl SnapshotState {
         Ok(matches)
     }
     pub fn fold_model_context(&mut self) -> Result<ModelContextProjection> {
-        Ok(self.fold_with_terminal::<true, false>(false)?.0.model_context)
+        Ok(self
+            .fold_with_terminal::<true, false>(false)?
+            .0
+            .model_context)
     }
 
     /// Usage has no dependency on the separate model-context projection.
@@ -214,7 +226,7 @@ impl SnapshotState {
     fn fold_with_terminal<const MODEL_CONTEXT: bool, const USAGE: bool>(
         &mut self,
         capture: bool,
-    ) -> Result<(Fold, Option<JournalRecord>)> {
+    ) -> Result<(Fold, Option<Terminal>)> {
         self.reset_page_cursor();
         self.verified = false;
         let version = self.source.source_version()?;
@@ -222,13 +234,22 @@ impl SnapshotState {
         let mut state = Fold::default();
         let mut terminal = None;
         let mut line = Vec::new();
-        while let Some(record) = self.source.next_with_scratch(&mut line)? {
+        let singleton = capture && self.identity.revision.session_seq == 1;
+        loop {
+            let mut external = None;
+            let next = if singleton {
+                self.source
+                    .next_capturing_external(&mut line, &mut external)?
+            } else {
+                self.source.next_with_scratch(&mut line)?
+            };
+            let Some(record) = next else { break };
             state.apply_projected::<MODEL_CONTEXT, USAGE>(
                 self.identity.session.session_id,
                 &record,
             )?;
             if capture && record.session_seq == self.identity.revision.session_seq {
-                terminal = Some(record);
+                terminal = Some(Terminal { record, external });
             }
         }
         drop(line);
@@ -271,17 +292,25 @@ impl SnapshotState {
         // one result and left the reader at EOF. Only hand it to the existing
         // page checks after the backend confirms the pinned data (by a
         // read transaction or by authenticating the complete prefix).
-        // Blob-bearing JSONL, changed or unknown sources keep the normal scan.
+        // External JSONL still goes through the second physical read below.
+        let mut reuse = None;
         if terminal.is_some() && before == page_version && self.source.confirm_verified_data()? {
-            self.pending = terminal.map(|record| PendingPageRecord::Buffered {
-                record,
+            self.pending = terminal.map(|terminal| PendingPageRecord::Buffered {
+                record: terminal.record,
                 encoded_bytes: None,
             });
         } else if !continuing {
             if terminal.is_some() && before != page_version {
                 self.source.verify_fixed_prefix()?;
             }
-            drop(terminal);
+            if let Some(Terminal {
+                record,
+                external: Some(external),
+            }) = terminal
+                && before == page_version
+            {
+                reuse = Some((external, record));
+            }
             self.pending = None;
             self.source.reset_for_page(after)?;
         }
@@ -302,10 +331,16 @@ impl SnapshotState {
                         .ok_or_else(|| anyhow::anyhow!("missing deferred journal record"))?;
                     (record, Some(encoded_bytes))
                 }
-                None => match self.source.next_with_scratch(&mut line)? {
-                    Some(record) => (record, None),
-                    None => break,
-                },
+                None => {
+                    let next = match reuse.take() {
+                        Some((external, record)) => self
+                            .source
+                            .next_reauthenticating_external(external, record)?,
+                        None => self.source.next_with_scratch(&mut line)?,
+                    };
+                    let Some(record) = next else { break };
+                    (record, None)
+                }
             };
             if record.session_seq <= after {
                 continue;
@@ -362,7 +397,11 @@ impl SnapshotState {
         .into_iter()
         .all(|text| text.capacity() == text.len());
         StorageRecordPage {
-            snapshot: if compact { snapshot } else { self.identity.clone() },
+            snapshot: if compact {
+                snapshot
+            } else {
+                self.identity.clone()
+            },
             records,
             next_after_seq,
         }

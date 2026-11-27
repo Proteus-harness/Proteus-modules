@@ -16,13 +16,13 @@ pub(in crate::service) type BlobStampDigest = [u8; 32];
 
 #[derive(Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-struct Index {
-    summary: StorageSessionSummary,
-    stamps: SourceStamp,
+struct Index<S = StorageSessionSummary, T = SourceStamp, F = String> {
+    summary: S,
+    stamps: T,
     blobs: BlobStamps,
     revision: StorageRevision,
     extent: u64,
-    fingerprint: String,
+    fingerprint: F,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -268,7 +268,7 @@ fn journal_kind(descriptor: &StorageSessionDescriptor) -> Option<BackendKind> {
 
 /// Write the compact v1 envelope in field order, leaving room to backfill
 /// the lowercase SHA-256 of exactly the serialized `data` value.
-fn encode(data: &Index) -> Result<Vec<u8>> {
+fn encode<S: Serialize, T: Serialize, F: Serialize>(data: &Index<S, T, F>) -> Result<Vec<u8>> {
     let mut bytes = Vec::with_capacity(128);
     bytes.extend_from_slice(br#"{"checksum":""#);
     let checksum = bytes.len()..bytes.len() + 64;
@@ -301,12 +301,12 @@ pub(super) fn save(
             "catalog blobs changed"
         );
         let bytes = encode(&Index {
-            summary: summary.clone(),
-            stamps: prefix.stamps.clone(),
+            summary,
+            stamps: &prefix.stamps,
             blobs,
             revision: prefix.revision,
             extent: prefix.hint.extent,
-            fingerprint: prefix.hint.fingerprint.clone(),
+            fingerprint: &prefix.hint.fingerprint,
         })?;
         let temporary = dir.join(format!(".storage-catalog-{}.tmp", Uuid::new_v4()));
         let write = (|| -> Result<()> {
@@ -379,7 +379,10 @@ mod tests {
             Some(expected.as_str())
         );
         let retained = Vec::with_capacity(STREAM_CHECKSUM_AT_CAPACITY);
-        assert_eq!(checksum(retained, &data).as_deref(), Some(expected.as_str()));
+        assert_eq!(
+            checksum(retained, &data).as_deref(),
+            Some(expected.as_str())
+        );
     }
 
     #[test]
@@ -409,7 +412,11 @@ mod tests {
             assert_eq!(std::fs::read(&path).unwrap(), spaced);
 
             let mut wrong: Envelope = serde_json::from_slice(&spaced).unwrap();
-            let replacement = if wrong.checksum.starts_with('0') { "1" } else { "0" };
+            let replacement = if wrong.checksum.starts_with('0') {
+                "1"
+            } else {
+                "0"
+            };
             wrong.checksum.replace_range(..1, replacement);
             let mut bytes = serde_json::to_vec(&wrong).unwrap();
             bytes.resize(STREAM_CHECKSUM_AT_CAPACITY + 1, b' ');

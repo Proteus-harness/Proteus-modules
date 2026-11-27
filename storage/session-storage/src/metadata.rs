@@ -6,7 +6,10 @@ use crate::{
 use anyhow::{Result, ensure};
 use ring::digest::{Context, SHA256};
 use serde::{Deserialize, Serialize};
-use std::{collections::BTreeMap, path::Path};
+use std::{
+    collections::BTreeMap,
+    path::{Path, PathBuf},
+};
 use uuid::Uuid;
 const FILE: &str = ".storage-metadata.json";
 const MAX_ENVELOPE: usize = 16 * 1024 * 1024;
@@ -42,6 +45,19 @@ fn load(dir: &Path) -> Result<Envelope> {
         Err(error) => Err(error),
     }
 }
+// Both callers supply a single ASCII hex component.
+fn metadata_object_path(dir: &Path, hash: &str) -> PathBuf {
+    const OBJECTS: &str = ".metadata-objects";
+    const EXTENSION: &str = ".json";
+    let mut path = PathBuf::with_capacity(
+        dir.as_os_str().len() + OBJECTS.len() + hash.len() + EXTENSION.len() + 2,
+    );
+    path.as_mut_os_string().push(dir.as_os_str());
+    path.push(OBJECTS);
+    path.push(hash);
+    path.as_mut_os_string().push(EXTENSION);
+    path
+}
 fn hydrate(dir: &Path, stored: Option<&StoredDocument>) -> Result<Option<StorageMetadataDocument>> {
     stored
         .map(|stored| {
@@ -51,8 +67,7 @@ fn hydrate(dir: &Path, stored: Option<&StoredDocument>) -> Result<Option<Storage
                 "invalid metadata object hash"
             );
             let bytes = bounded_read(
-                &dir.join(".metadata-objects")
-                    .join(format!("{}.json", stored.object_sha256)),
+                &metadata_object_path(dir, &stored.object_sha256),
                 SESSION_STORAGE_MAX_METADATA_BYTES,
             )?;
             ensure!(
@@ -77,9 +92,7 @@ fn store(
         "metadata document exceeds maximum"
     );
     let object_sha256 = sha256_hex(&bytes);
-    let path = dir
-        .join(".metadata-objects")
-        .join(format!("{object_sha256}.json"));
+    let path = metadata_object_path(dir, &object_sha256);
     if path.try_exists()? {
         ensure!(
             bounded_file_eq(&path, &bytes, SESSION_STORAGE_MAX_METADATA_BYTES)?,
